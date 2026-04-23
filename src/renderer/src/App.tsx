@@ -4205,13 +4205,25 @@ function App(): JSX.Element {
   const hasWorkspaceTabs = openWorkspaceTabs.length > 0
   const workspaceTitleFallback = workspace?.name?.trim() || 'WORKSPACES'
   const showTopWorkspacePickerTab = showWorkspacePickerTab || (!workspace && openWorkspaceTabs.length === 0)
+  const isFirstTopWorkspaceTabSelected = showTopWorkspacePickerTab
+    ? openWorkspaceTabs.length === 0
+    : (hasWorkspaceTabs ? openWorkspaceTabs[0]?.id === workspace?.id : true)
+  const mainPanelBorderRadius = !sidebarCollapsed && isFirstTopWorkspaceTabSelected
+    ? `0 ${mainPanelRadius}px ${mainPanelRadius}px ${mainPanelRadius}px`
+    : mainPanelRadius
   const workspaceTabLabelSize = Math.max(12, appFonts.size - 1)
   const workspaceTabBackground = theme.surface.selection
   const workspaceTabInactiveBackground = 'transparent'
   const workspaceTabInactiveHoverBackground = theme.surface.hover
-  const workspaceTabActiveOutline = `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
+  const workspaceTabActiveBorder = `color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
   const workspaceTabCloseHoverBackground = `color-mix(in srgb, ${theme.surface.selection} 70%, ${theme.surface.hover})`
   const workspaceTabMaxWidth = 'min(248px, 24vw)'
+  const workspaceTabActiveHeight = 31
+  const workspaceTabInactiveHeight = 24
+  const workspaceTabTextOffset = -1
+  const workspaceTabInactiveTextOffset = 0
+  const workspaceTabInactiveBottomGap = 3
+  const workspaceTabAttachedBottomGap = -1
   // Discovery connection colors — adapt to theme mode
   const dsc = theme.mode === 'light'
     ? { line: '53, 104, 255', dot: '53, 104, 255', bg: '255, 255, 255', text: theme.accent.base }
@@ -4458,7 +4470,7 @@ function App(): JSX.Element {
               gap: 8,
               minWidth: 0,
               height: '100%',
-              paddingLeft: 11,
+              paddingLeft: 8,
               // @ts-ignore
               WebkitAppRegion: 'no-drag',
             }}
@@ -4473,15 +4485,19 @@ function App(): JSX.Element {
                     alignItems: 'center',
                     maxWidth: workspaceTabMaxWidth,
                     minWidth: 0,
-                    height: 24,
+                    height: isActive ? workspaceTabActiveHeight : workspaceTabInactiveHeight,
                     padding: '0 8px 0 10px',
                     gap: 5,
-                    marginBottom: 7,
-                    borderRadius: 8,
+                    marginBottom: isActive ? workspaceTabAttachedBottomGap : workspaceTabInactiveBottomGap,
+                    borderRadius: isActive ? '8px 8px 0 0' : 8,
                     background: isActive ? workspaceTabBackground : workspaceTabInactiveBackground,
                     color: isActive ? theme.accent.base : theme.text.secondary,
-                    transition: 'color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease',
-                    boxShadow: isActive ? workspaceTabActiveOutline : 'none',
+                    transition: 'color 0.12s ease, background 0.12s ease, border-color 0.12s ease',
+                    border: isActive ? `1px solid ${workspaceTabActiveBorder}` : '1px solid transparent',
+                    //borderBottom: isActive ? 'none' : '1px solid transparent',
+                    boxSizing: 'border-box',
+                    position: 'relative',
+                    zIndex: isActive ? 1 : 0,
                   }}
                   onMouseEnter={e => {
                     if (!isActive) e.currentTarget.style.background = workspaceTabInactiveHoverBackground
@@ -4509,10 +4525,11 @@ function App(): JSX.Element {
                       background: 'transparent',
                       color: 'inherit',
                       fontSize: Math.max(11, workspaceTabLabelSize),
-                      fontWeight: 600,
+                      // just in case I want it back -- fontWeight: isActive ? 600 : 400,
                       lineHeight: 1,
                       letterSpacing: 0,
                       cursor: isActive ? 'default' : 'pointer',
+                      transform: `translateY(${isActive ? workspaceTabTextOffset : workspaceTabInactiveTextOffset}px)`,
                     }}
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 12, lineHeight: 0, color: 'currentColor', flexShrink: 0 }}>
@@ -4527,7 +4544,6 @@ function App(): JSX.Element {
                         whiteSpace: 'nowrap',
                         minWidth: 0,
                         lineHeight: 1,
-                        transform: 'translateY(-1px)',
                       }}
                     >
                       {ws.name}
@@ -4554,6 +4570,7 @@ function App(): JSX.Element {
                       cursor: 'pointer',
                       flexShrink: 0,
                       padding: 0,
+                      transform: `translateY(${isActive ? workspaceTabTextOffset : workspaceTabInactiveTextOffset}px)`,
                       transition: 'background 0.12s ease, color 0.12s ease',
                     }}
                     onMouseEnter={e => {
@@ -4564,7 +4581,7 @@ function App(): JSX.Element {
                       e.currentTarget.style.color = 'currentColor'
                     }}
                   >
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ display: 'block', transform: 'translateY(-0.5px)' }}>
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ display: 'block' }}>
                       <path d="M3 3l6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                     </svg>
                   </button>
@@ -4577,18 +4594,22 @@ function App(): JSX.Element {
                   alignItems: 'center',
                   maxWidth: workspaceTabMaxWidth,
                   minWidth: 0,
-                  height: 24,
+                  height: workspaceTabActiveHeight,
                   padding: '0 8px 0 10px',
                   gap: 5,
-                  marginBottom: 7,
-                  borderRadius: 8,
+                  marginBottom: workspaceTabAttachedBottomGap,
+                  borderRadius: '8px 8px 0 0',
                   background: workspaceTabBackground,
                   color: theme.accent.base,
                   fontSize: Math.max(11, workspaceTabLabelSize),
                   fontWeight: 600,
                   lineHeight: 1,
                   letterSpacing: 0,
-                  boxShadow: workspaceTabActiveOutline,
+                  border: `1px solid ${workspaceTabActiveBorder}`,
+                  borderBottom: 'none',
+                  boxSizing: 'border-box',
+                  position: 'relative',
+                  zIndex: 1,
                 }}
               >
                 <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 12, lineHeight: 0, color: 'currentColor', flexShrink: 0 }}>
@@ -4618,14 +4639,18 @@ function App(): JSX.Element {
                   alignItems: 'center',
                   maxWidth: workspaceTabMaxWidth,
                   minWidth: 0,
-                  height: 24,
+                  height: workspaceTabActiveHeight,
                   padding: '0 10px',
                   gap: 5,
-                  marginBottom: 7,
-                  borderRadius: 8,
+                  marginBottom: workspaceTabAttachedBottomGap,
+                  borderRadius: '8px 8px 0 0',
                   background: workspaceTabBackground,
                   color: theme.accent.base,
-                  boxShadow: workspaceTabActiveOutline,
+                  border: `1px solid ${workspaceTabActiveBorder}`,
+                  borderBottom: 'none',
+                  boxSizing: 'border-box',
+                  position: 'relative',
+                  zIndex: 1,
                 }}
               >
                 <button
@@ -4788,7 +4813,7 @@ function App(): JSX.Element {
             // Focus mode still needs a filled rounded surface so the outer
             // corners and split gutters don't reveal the app backdrop.
             background: panelLayout ? theme.surface.panelMuted : canvasLayerBackground,
-            borderRadius: mainPanelRadius,
+            borderRadius: mainPanelBorderRadius,
             // Panel mode draws per-leaf hairline edges. Keeping the shared
             // shell border underneath causes a second line to peek through at
             // rounded outer corners.

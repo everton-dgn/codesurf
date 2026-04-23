@@ -75,7 +75,7 @@ export function buildDreamingStatusSummary(
     const run = activeRun ?? lastRun
     const sessionCount = Number(run?.sessionsReviewed ?? 0)
     return {
-      chipLabel: 'DREAMING',
+      chipLabel: 'Dreaming',
       tone: 'active',
       summaryLine: ['Dreaming now', sessionCount > 0 ? pluralSessions(sessionCount) : null].filter(Boolean).join(' · '),
       detailLine: runDetail(dreaming, run),
@@ -85,7 +85,7 @@ export function buildDreamingStatusSummary(
 
   if (auto?.enabled === false) {
     return {
-      chipLabel: 'DREAM OFF',
+      chipLabel: 'Dream off',
       tone: 'disabled',
       summaryLine: 'Auto-dream disabled',
       detailLine: workspaceLabel(dreaming, lastRun),
@@ -96,7 +96,7 @@ export function buildDreamingStatusSummary(
   if (auto?.pending) {
     const threshold = thresholdText(auto)
     return {
-      chipLabel: 'DREAM PENDING',
+      chipLabel: 'Dream pending',
       tone: 'pending',
       summaryLine: ['Auto-dream pending', threshold].filter(Boolean).join(' · '),
       detailLine: workspaceLabel(dreaming, lastRun),
@@ -107,7 +107,7 @@ export function buildDreamingStatusSummary(
   if (lastRun?.status === 'failed') {
     const when = relativeTime(runTime(lastRun), nowMs)
     return {
-      chipLabel: 'DREAM FAILED',
+      chipLabel: 'Dream failed',
       tone: 'failed',
       summaryLine: ['Last dream failed', when, clean(lastRun.error)].filter(Boolean).join(' · '),
       detailLine: runDetail(dreaming, lastRun),
@@ -121,7 +121,7 @@ export function buildDreamingStatusSummary(
     const sessionCount = Number(lastRun.sessionsReviewed ?? 0)
     const status = clean(lastRun.status) || 'completed'
     return {
-      chipLabel: token ? `DREAM ${token}` : 'DREAM READY',
+      chipLabel: token ? `Dreamt (${token})` : 'Dream ready',
       tone: 'ready',
       summaryLine: [
         'Auto-dream ready',
@@ -135,7 +135,7 @@ export function buildDreamingStatusSummary(
 
   const threshold = thresholdText(auto)
   return {
-    chipLabel: 'DREAM READY',
+    chipLabel: 'Dream ready',
     tone: 'idle',
     summaryLine: ['Auto-dream ready', threshold].filter(Boolean).join(' · '),
     detailLine: workspaceLabel(dreaming, null),

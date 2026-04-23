@@ -296,12 +296,35 @@ function buildDreamSystemPrompt() {
   ].join('\n')
 }
 
+const MAX_CLAUDE_STDERR_CHARS = 6_000
+
+function sanitizeClaudeStderrText(raw) {
+  const text = String(raw ?? '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '') // strip ANSI escapes
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .join('\n')
+  if (text.length <= MAX_CLAUDE_STDERR_CHARS) return text
+  return `${text.slice(0, MAX_CLAUDE_STDERR_CHARS - 1)}…`
+}
+
+function formatClaudeSdkError(error, stderrText) {
+  const baseMessage = error instanceof Error ? error.message : String(error ?? '')
+  const cleaned = sanitizeClaudeStderrText(stderrText)
+  if (!cleaned) return baseMessage || 'Claude Code process failed'
+  if (!baseMessage) return cleaned
+  return `${baseMessage}\n\nstderr:\n${cleaned}`
+}
+
 async function runClaudeDream({ model, workspaceDir, systemPrompt, userPrompt, abortController, testExecute }) {
   if (typeof testExecute === 'function') {
     return { text: await testExecute({ model, workspaceDir, systemPrompt, userPrompt, abortController }) }
   }
   const streamed = []
   let finalText = ''
+  let stderrBuf = ''
   const q = query({
     prompt: userPrompt,
     options: {
@@ -309,6 +332,17 @@ async function runClaudeDream({ model, workspaceDir, systemPrompt, userPrompt, a
       cwd: workspaceDir || undefined,
       abortController,
       includePartialMessages: true,
+      // SDK 0.2.118+ requires allowDangerouslySkipPermissions alongside permissionMode for bypass.
+      // Dreaming is read-only and denies all tool calls via canUseTool below; bypass is safe.
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      stderr: (chunk) => {
+        if (stderrBuf.length >= MAX_CLAUDE_STDERR_CHARS) return
+        stderrBuf += String(chunk ?? '')
+        if (stderrBuf.length > MAX_CLAUDE_STDERR_CHARS) {
+          stderrBuf = stderrBuf.slice(0, MAX_CLAUDE_STDERR_CHARS)
+        }
+      },
       canUseTool: async (_toolName, _input, toolOptions) => ({
         behavior: 'deny',
         message: 'CodeSurf daemon dreaming is read-only and may not use tools.',
@@ -324,15 +358,19 @@ async function runClaudeDream({ model, workspaceDir, systemPrompt, userPrompt, a
       },
     },
   })
-  for await (const msg of q) {
-    if (msg?.type === 'stream_event') {
-      const evt = msg.event
-      if (evt?.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
-        streamed.push(evt.delta.text)
+  try {
+    for await (const msg of q) {
+      if (msg?.type === 'stream_event') {
+        const evt = msg.event
+        if (evt?.type === 'content_block_delta' && evt.delta?.type === 'text_delta' && evt.delta.text) {
+          streamed.push(evt.delta.text)
+        }
+      } else if (msg?.type === 'result' && typeof msg.result === 'string') {
+        finalText = msg.result
       }
-    } else if (msg?.type === 'result' && typeof msg.result === 'string') {
-      finalText = msg.result
     }
+  } catch (error) {
+    throw new Error(formatClaudeSdkError(error, stderrBuf))
   }
   return { text: normalizeText(finalText) || normalizeText(streamed.join('')) }
 }
@@ -445,9 +483,44 @@ export function createDreamingManager(options) {
     await writeJsonAtomic(dreamingRunJsonPath(homeDir, workspaceId, run.id), makeRunRecord(run))
   }
 
+  // Threshold beyond which a disk run still marked `running` is treated as orphaned
+  // from a daemon restart / crash and flipped to `failed`.
+  const ORPHAN_RUN_THRESHOLD_MS = 10 * 60 * 1000
+
+  async function reconcileOrphanRuns(workspaceId) {
+    // Only reconcile if we have no live in-memory run for this workspace.
+    if (activeRuns.has(workspaceId)) return
+    const runs = await listDreamRunsFromDisk(homeDir, workspaceId, 5)
+    const now = Date.now()
+    for (const record of runs) {
+      if (record.status !== 'running') continue
+      const startedMs = parseIso(record.startedAt ?? record.requestedAt)
+      if (!Number.isFinite(startedMs)) continue
+      if (now - startedMs < ORPHAN_RUN_THRESHOLD_MS) continue
+      const reconciledAt = new Date().toISOString()
+      const patched = {
+        ...record,
+        status: 'failed',
+        completedAt: reconciledAt,
+        error: record.error || 'Daemon restart orphaned this run',
+      }
+      await writeJsonAtomic(dreamingRunJsonPath(homeDir, workspaceId, record.id), makeRunRecord(patched))
+      const state = await readDreamState(homeDir, workspaceId)
+      // Only advance lastRunId pointers if this orphan was actually the newest.
+      if (!state.lastRunId || state.lastRunId === record.id || parseIso(state.lastCompletedAt) < startedMs) {
+        await writeDreamState(homeDir, workspaceId, {
+          ...state,
+          lastRunId: patched.id,
+          lastCompletedAt: patched.completedAt,
+        })
+      }
+    }
+  }
+
   async function latestRun(workspaceId) {
     const active = activeRuns.get(workspaceId)
     if (active) return makeRunRecord(active.metadata)
+    await reconcileOrphanRuns(workspaceId).catch(() => {})
     const runs = await listDreamRunsFromDisk(homeDir, workspaceId, 1)
     return runs[0] ?? null
   }
