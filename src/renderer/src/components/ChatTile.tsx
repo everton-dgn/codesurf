@@ -748,6 +748,17 @@ const FONT_MONO = '"JetBrains Mono", "Menlo", "Monaco", "SF Mono", "Fira Code", 
 const FONT_SIZE_DEFAULT = 13
 const MONO_SIZE_DEFAULT = 13
 const CHAT_MESSAGE_MAX_WIDTH = 800
+const CHAT_CHIP_ROW_STYLE: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  alignItems: 'flex-start',
+  alignContent: 'flex-start',
+  width: '100%',
+  minWidth: 0,
+  maxWidth: '100%',
+  overflow: 'visible',
+}
 const CHAT_RENDER_WINDOW = 80
 const LINKED_SESSION_LIVE_TAIL_LIMIT = 40
 const LINKED_SESSION_HISTORY_PAGE_SIZE = 20
@@ -1809,94 +1820,99 @@ const ChatMessageContent = React.memo(({
   const chipText = isLight ? '#1b2430' : theme.text.primary
   const chipMeta = isLight ? '#2d3748' : theme.text.secondary
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: bodyText && attachmentPaths.length > 0 ? 12 : 0, minWidth: 0, width: '100%' }}>
-      {bodyText ? (
-        <ChatMarkdown text={bodyText} isStreaming={isStreaming} className={className} />
-      ) : null}
-      {attachmentPaths.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: Math.max(10, fonts.secondarySize - 1),
-              color: chipMeta,
-              fontWeight: 600,
-              letterSpacing: 0.2,
-            }}
-          >
-            Attached file paths
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
-            {attachmentPaths.map(path => {
-              const wasRead = readAttachmentPaths?.has(path) === true
-              const isImage = isImagePath(path)
-              return (
-                <button
-                  key={path}
-                  type="button"
-                  title={wasRead ? `${path} — read by the model` : path}
-                  onClick={() => { void dispatchOpenLink(path) }}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    minWidth: 0,
-                    maxWidth: '100%',
-                    borderRadius: 6,
-                    border: `1px solid ${chipBorder}`,
-                    background: chipBackground,
-                    color: chipText,
-                    padding: isImage ? 3 : '3px 7px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {isImage ? (
-                    <img
-                      src={`contex-file://${encodeURI(path).replace(/#/g, '%23')}`}
-                      alt={basename(path)}
-                      style={{
-                        width: 28,
-                        height: 28,
-                        objectFit: 'cover',
-                        borderRadius: 4,
-                        flexShrink: 0,
-                        display: 'block',
-                        background: isLight ? '#f5f7fb' : 'rgba(255,255,255,0.04)',
-                      }}
-                    />
-                  ) : (
-                    <FileText size={10} color={chipText} style={{ flexShrink: 0, opacity: 0.85 }} />
-                  )}
-                  <span
-                    style={{
-                      minWidth: 0,
-                      maxWidth: 320,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      fontSize: Math.max(10, fonts.size - 2),
-                      lineHeight: 1.2,
-                      color: chipText,
-                      paddingRight: isImage ? 6 : 0,
-                    }}
-                  >
-                    {basename(path)}
-                  </span>
-                  {wasRead && (
-                    <Check
-                      size={10}
-                      color={theme.status.success}
-                      style={{ flexShrink: 0, marginRight: isImage ? 4 : 0 }}
-                      aria-label="Read by the model"
-                    />
-                  )}
-                </button>
-              )
-            })}
-          </div>
+  const attachments = attachmentPaths.length > 0 ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: bodyText ? 8 : 0, minWidth: 0 }}>
+      {bodyText && (
+        <div
+          style={{
+            fontSize: Math.max(10, fonts.secondarySize - 1),
+            color: chipMeta,
+            fontWeight: 600,
+            letterSpacing: 0.2,
+          }}
+        >
+          Attached file paths
         </div>
-      ) : null}
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
+        {attachmentPaths.map(path => {
+          const wasRead = readAttachmentPaths?.has(path) === true
+          const isImage = isImagePath(path)
+          return (
+            <button
+              key={path}
+              type="button"
+              title={wasRead ? `${path} — read by the model` : path}
+              onClick={() => { void dispatchOpenLink(path) }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                minWidth: 0,
+                maxWidth: '100%',
+                borderRadius: 6,
+                border: `1px solid ${chipBorder}`,
+                background: chipBackground,
+                color: chipText,
+                padding: isImage ? 3 : '3px 7px',
+                cursor: 'pointer',
+              }}
+            >
+              {isImage ? (
+                <img
+                  src={`contex-file://${encodeURI(path).replace(/#/g, '%23')}`}
+                  alt={basename(path)}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    objectFit: 'cover',
+                    borderRadius: 4,
+                    flexShrink: 0,
+                    display: 'block',
+                    background: isLight ? '#f5f7fb' : 'rgba(255,255,255,0.04)',
+                  }}
+                />
+              ) : (
+                <FileText size={10} color={chipText} style={{ flexShrink: 0, opacity: 0.85 }} />
+              )}
+              <span
+                style={{
+                  minWidth: 0,
+                  maxWidth: 320,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: Math.max(10, fonts.size - 2),
+                  lineHeight: 1.2,
+                  color: chipText,
+                  paddingRight: isImage ? 6 : 0,
+                }}
+              >
+                {basename(path)}
+              </span>
+              {wasRead && (
+                <Check
+                  size={10}
+                  color={theme.status.success}
+                  style={{ flexShrink: 0, marginRight: isImage ? 4 : 0 }}
+                  aria-label="Read by the model"
+                />
+              )}
+            </button>
+          )
+        })}
+      </div>
     </div>
+  ) : null
+
+  if (!bodyText) return attachments ?? null
+  if (!attachments) return <ChatMarkdown text={bodyText} isStreaming={isStreaming} className={className} />
+
+  return (
+    <>
+      <ChatMarkdown text={bodyText} isStreaming={isStreaming} className={className} />
+      {attachments}
+    </>
   )
 })
 
@@ -2715,6 +2731,33 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       changeBlockCount,
     }
   }, [messages, mergeDrawerFileChanges])
+  const liveComposerActivityChip = useMemo(() => {
+    if (!isStreaming) return null
+    const liveMsg = renderedMessages[renderedMessages.length - 1]
+    if (!liveMsg || liveMsg.role !== 'assistant' || !liveMsg.isStreaming) return null
+
+    const activeThinking = liveMsg.thinkingBlocks?.find(tb => !tb.done)
+      ?? (!(liveMsg.contentBlocks ?? []).some(b => b.type === 'thinking') && liveMsg.thinking && !liveMsg.thinking.done
+        ? liveMsg.thinking
+        : null)
+
+    return (
+      <div style={{
+        width: CHAT_COMPOSER_WIDTH,
+        minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
+        margin: '0 auto',
+        paddingTop: 4,
+        paddingBottom: 4,
+        position: 'relative',
+        zIndex: 2,
+      }}>
+        {activeThinking
+          ? <ThinkingBlockView thinking={activeThinking} />
+          : <WorkingChipView message={liveMsg} />
+        }
+      </div>
+    )
+  }, [isStreaming, renderedMessages])
   const [latestChangeDrawerExpanded, setLatestChangeDrawerExpanded] = useState(false)
   const [latestChangeDrawerExpandedFiles, setLatestChangeDrawerExpandedFiles] = useState<Record<string, boolean>>({})
   const [latestCheckpointId, setLatestCheckpointId] = useState<string | null>(null)
@@ -3572,15 +3615,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     () => new Set(readPathsSnapshot ? readPathsSnapshot.split('\u0000') : []),
     [readPathsSnapshot],
   )
+  const conversationTokenEstimate = useMemo(() => {
+    const totalChars = messages.reduce((sum, message) => sum + estimateMessageChars(message), 0)
+    return Math.max(0, Math.round(totalChars / 4))
+  }, [messages])
   const estimatedContextTokens = useMemo(() => {
-    const totalChars = messages.reduce((sum, message) => sum + estimateMessageChars(message), 0) + input.length
-    const conversationTokens = Math.max(0, Math.round(totalChars / 4))
+    const inputTokens = Math.max(0, Math.round(input.length / 4))
     // Include the provider's baseline overhead (system prompt + tool schemas
     // + injected reminders) so the indicator doesn't misleadingly report
     // near-empty usage when the harness has already loaded tens of thousands
     // of tokens before the first user turn.
-    return conversationTokens + systemOverheadTokens
-  }, [messages, input, systemOverheadTokens])
+    return conversationTokenEstimate + inputTokens + systemOverheadTokens
+  }, [conversationTokenEstimate, input, systemOverheadTokens])
   const contextUsageRatio = contextWindowLimit > 0 ? Math.min(1, estimatedContextTokens / contextWindowLimit) : 0
   const contextUsagePercent = Math.max(1, Math.round(contextUsageRatio * 100))
 
@@ -5321,7 +5367,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                color: theme.chat.subtle, fontSize: 12,
              }}>
                <MessageSquare size={24} color={theme.chat.subtle} strokeWidth={1.5} style={{ opacity: 0.4 }} />
-               <span>Start a conversation</span>
+               Start a conversation
              </div>
            )}
 
@@ -5344,23 +5390,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           {pagedLinkedHistoryEnabled && (loadingEarlier || earlierLoadError) && (
             <div style={{
               alignSelf: 'center',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 4,
-              padding: '6px 0 2px',
+              padding: '6px 12px 2px',
+              borderRadius: 999,
+              border: `1px solid ${theme.chat.divider}`,
+              background: theme.chat.userBubble,
+              color: theme.chat.muted,
+              fontSize: 11,
+              textAlign: 'center',
             }}>
-              <div style={{
-                padding: '6px 12px',
-                borderRadius: 999,
-                border: `1px solid ${theme.chat.divider}`,
-                background: theme.chat.userBubble,
-                color: theme.chat.muted,
-                fontSize: 11,
-                textAlign: 'center',
-              }}>
-                {loadingEarlier ? 'Loading older messages…' : earlierLoadError}
-              </div>
+              {loadingEarlier ? 'Loading older messages…' : earlierLoadError}
             </div>
           )}
 
@@ -5401,17 +5439,23 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             let clusterStartKey: string | null = null
             let clusterMsgIds: string[] = []
 
+            const buildMessageBlockLookup = (msg: ChatMessage) => ({
+              thinkingById: new Map((msg.thinkingBlocks ?? []).map(block => [block.id, block])),
+              toolById: new Map((msg.toolBlocks ?? []).map(block => [block.id, block])),
+            })
+
             // Extract chip items (thinking + tool groups) from a single
             // message's contentBlocks. Text blocks are ignored — callers
             // only invoke this on chip-only messages.
             const extractChipsFromMessage = (msg: ChatMessage, isLiveMessage: boolean): ChipItem[] => {
               const items: ChipItem[] = []
               const blocks = msg.contentBlocks ?? []
+              const { thinkingById, toolById } = buildMessageBlockLookup(msg)
               let i = 0
               while (i < blocks.length) {
                 const block = blocks[i]
                 if (block.type === 'thinking') {
-                  const tb = msg.thinkingBlocks?.find(t => t.id === block.thinkingId)
+                  const tb = thinkingById.get(block.thinkingId)
                   // Active thinking for the live message renders above the input bar — skip here
                   if (tb && (!isLiveMessage || tb.done)) items.push({
                     kind: 'thinking',
@@ -5425,7 +5469,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                   while (i < blocks.length) {
                     const cb = blocks[i]
                     if (cb.type !== 'tool') break
-                    const tb = msg.toolBlocks?.find(t => t.id === cb.toolId)
+                    const tb = toolById.get(cb.toolId)
                     if (tb && shouldRenderToolBlock(tb)) rawTools.push(tb)
                     i++
                   }
@@ -5477,6 +5521,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 return <CollapsedToolGroup key={item.key} name={item.blocks[0]?.name ?? ''} blocks={item.blocks} />
               }
               return <MixedToolGroup key={item.key} blocks={item.blocks} />
+            }
+
+            const renderChipRow = (items: JSX.Element[], key: string): JSX.Element => {
+              if (items.length === 1) return items[0]
+              return (
+                <div key={key} style={CHAT_CHIP_ROW_STYLE}>
+                  {items}
+                </div>
+              )
             }
 
             // Progressive collapse: walk the cluster's item list, figure out
@@ -5551,19 +5604,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                   onComposerActiveChange={setAnnotationComposerActive}
                   onUpdateNote={(text) => updateBlockNote({ kind: 'message', messageId: lastId }, text)}
                 >
-                  <div style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 10,
-                    alignItems: 'flex-start',
-                    alignContent: 'flex-start',
-                    width: '100%',
-                    minWidth: 0,
-                    maxWidth: '100%',
-                    overflow: 'visible',
-                  }}>
-                    {finalItems.map(renderChipItem)}
-                  </div>
+                  {renderChipRow(finalItems.map(renderChipItem), `cluster-row-${clusterId}`)}
                 </BlockNoteAffordance>
               )
               clusterItems = []
@@ -5586,6 +5627,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 continue
               }
               flushCluster()
+              const { thinkingById, toolById } = buildMessageBlockLookup(msg)
               const visibleToolBlocks = msg.toolBlocks?.filter(shouldRenderToolBlock) ?? []
               const hasVisibleToolBlocks = visibleToolBlocks.length > 0
               // Smart-side: user bubbles are right-aligned, so the annotation
@@ -5643,28 +5685,14 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                       let chipRowStartIdx = i
                       const flushChipRow = () => {
                         if (chipRow.length === 0) return
-                        elements.push(
-                          <div key={`chiprow-${chipRowStartIdx}`} style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            gap: 10,
-                            alignItems: 'flex-start',
-                            alignContent: 'flex-start',
-                            width: '100%',
-                            minWidth: 0,
-                            maxWidth: '100%',
-                            overflow: 'visible',
-                          }}>
-                            {chipRow}
-                          </div>
-                        )
+                        elements.push(renderChipRow(chipRow, `chiprow-${chipRowStartIdx}`))
                         chipRow = []
                       }
                       while (i < blocks.length) {
                         const block = blocks[i]
                         if (block.type === 'thinking') {
                           if (chipRow.length === 0) chipRowStartIdx = i
-                          const tb = msg.thinkingBlocks?.find(t => t.id === block.thinkingId)
+                          const tb = thinkingById.get(block.thinkingId)
                           // Active (not-done) thinking blocks for the live message render
                           // in the fixed zone above the input bar — skip them here so they
                           // don't also appear inside the message scroll area. Once done they
@@ -5687,7 +5715,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           while (i < blocks.length) {
                             const cb = blocks[i]
                             if (cb.type !== 'tool') break
-                            const tb = msg.toolBlocks?.find(t => t.id === cb.toolId)
+                            const tb = toolById.get(cb.toolId)
                             if (tb && shouldRenderToolBlock(tb)) rawTools.push(tb)
                             i++
                           }
@@ -5751,42 +5779,30 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                   <>
                     {/* Fallback: legacy layout for messages without contentBlocks */}
                     {hasVisibleToolBlocks && (
-                      <div style={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        gap: 10,
-                        alignItems: 'flex-start',
-                        alignContent: 'flex-start',
-                        width: '100%',
-                        minWidth: 0,
-                        maxWidth: '100%',
-                        overflow: 'visible',
-                      }}>
-                        {(() => {
-                          const out: JSX.Element[] = []
-                          const collapsibleTools = visibleToolBlocks.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length))
-                          const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
-                          const uniqueNames = new Set(collapsibleTools.map(t => t.name))
-                          const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
-                          const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
-                          let groupEmitted = false
-                          for (const tb of visibleToolBlocks) {
-                            if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
-                              if (!groupEmitted) {
-                                groupEmitted = true
-                                if (useSameNameGroup) {
-                                  out.push(<CollapsedToolGroup key={`grp-${tb.id}`} name={tb.name} blocks={collapsibleTools} />)
-                                } else {
-                                  out.push(<MixedToolGroup key={`mgrp-${tb.id}`} blocks={collapsibleTools} />)
-                                }
+                      (() => {
+                        const out: JSX.Element[] = []
+                        const collapsibleTools = visibleToolBlocks.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length))
+                        const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
+                        const uniqueNames = new Set(collapsibleTools.map(t => t.name))
+                        const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
+                        const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
+                        let groupEmitted = false
+                        for (const tb of visibleToolBlocks) {
+                          if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
+                            if (!groupEmitted) {
+                              groupEmitted = true
+                              if (useSameNameGroup) {
+                                out.push(<CollapsedToolGroup key={`grp-${tb.id}`} name={tb.name} blocks={collapsibleTools} />)
+                              } else {
+                                out.push(<MixedToolGroup key={`mgrp-${tb.id}`} blocks={collapsibleTools} />)
                               }
-                              continue
                             }
-                            out.push(<ToolBlockView key={tb.id} block={tb} isLive={isLiveMessage} />)
+                            continue
                           }
-                          return out
-                        })()}
-                      </div>
+                          out.push(<ToolBlockView key={tb.id} block={tb} isLive={isLiveMessage} />)
+                        }
+                        return renderChipRow(out, `legacy-tools-${msg.id}`)
+                      })()
                     )}
                     {msg.content && (
                       <div style={{
@@ -5883,6 +5899,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             </button>
           </div>
         )}
+
+        {liveComposerActivityChip}
 
         {latestChangeDrawer && (
           <div style={{
@@ -6433,31 +6451,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               )
             })}
           </div>
-          )
-        })()}
-
-        {/* Live thinking / working chip — pinned above input bar while streaming.
-            position:relative + z-index keeps it above the queued-drawer's -12px
-            bottom-tuck (which has zIndex: 0 and overlaps this zone by 12px). */}
-        {(() => {
-          if (!isStreaming) return null
-          const liveMsg = renderedMessages[renderedMessages.length - 1]
-          if (!liveMsg || liveMsg.role !== 'assistant' || !liveMsg.isStreaming) return null
-          // Active inline thinking block takes priority
-          const activeThinking = liveMsg.thinkingBlocks?.find(tb => !tb.done)
-            ?? (!(liveMsg.contentBlocks ?? []).some(b => b.type === 'thinking') && liveMsg.thinking && !liveMsg.thinking.done
-              ? liveMsg.thinking : null)
-          return (
-            <div style={{
-              width: CHAT_COMPOSER_WIDTH, minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
-              margin: '0 auto', paddingTop: 4, paddingBottom: 4,
-              position: 'relative', zIndex: 2,
-            }}>
-              {activeThinking
-                ? <ThinkingBlockView thinking={activeThinking} />
-                : <WorkingChipView message={liveMsg} />
-              }
-            </div>
           )
         })()}
 
@@ -7880,26 +7873,18 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
 
         {/* Collapsed chip header shows only the tool name. Detailed summaries stay in the expanded body. */}
         {isRunning ? (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
+          <ShimmerText baseColor={theme.chat.textSecondary} style={{
+            fontSize: 10.5,
+            fontFamily: fonts.sans,
+            fontWeight: 500,
             minWidth: 0,
             flex: expanded || isFileChangeBlock ? 1 : '0 1 auto',
             overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
           }}>
-            <ShimmerText baseColor={theme.chat.textSecondary} style={{
-              fontSize: 10.5,
-              fontFamily: fonts.sans,
-              fontWeight: 500,
-              flex: '0 1 auto',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}>
-              {block.name}
-            </ShimmerText>
-          </div>
+            {block.name}
+          </ShimmerText>
         ) : (
           <div style={{
             display: 'flex',
@@ -7939,7 +7924,6 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
               </div>
             ) : (
               <span style={{
-                display: 'block',
                 fontWeight: 500,
                 fontSize: 10.5,
                 flex: '1 1 auto',

@@ -6,89 +6,69 @@
 
 ## Overview
 
-CodeSurf is an Electron infinite-canvas workspace where AI agents and developers collaborate through canvas tiles. Repo: `~/clawd/collaborator-clone`. Active branch: `feature/event-bus-mcp`.
-
-Static CLAUDE.md/AGENTS.md use the legacy name "contex" — not authoritative. The live product name is CodeSurf (`package.json` name: `codesurf`, productName: `CodeSurf`).
+Electron infinite-canvas workspace where AI agents and developers collaborate through canvas tiles (terminal, code editor, browser, kanban, chat). `package.json` is authoritative: `name: codesurf`, `productName: CodeSurf`. CLAUDE.md/AGENTS.md use legacy name "contex" — both refer to the same project.
 
 ---
 
 ## Durable Facts
 
-**Identity**
-- `package.json`: `name: codesurf`, `productName: CodeSurf`, `version: 0.1.0`
-- CLAUDE.md/AGENTS.md retain "contex" naming — legacy, not product truth
-- Workspace display label at creation (`App.tsx` ~line 2830): `basename(normalizedProjectPath) || 'Project'` — no `productName` inference in committed code
-
-**SDK / CLI versions (as of 2026-04-23)**
-- `@anthropic-ai/claude-agent-sdk`: `0.2.118` in running env (static docs say `0.2.79` — outdated)
-- `claude` CLI: `/Users/jkneen/.local/bin/claude`, version `2.1.118`
-- `claude-sonnet-4-6` confirmed valid in this environment
-- SDK 0.2.118 requires both `permissionMode: 'bypassPermissions'` AND `allowDangerouslySkipPermissions: true`; the latter alone is insufficient
-
-**Persistence layout**
-- Canvas state: `~/.contex/workspaces/{id}/canvas.json` (auto-save, 500 ms debounce)
-- Kanban tile state: `~/.contex/workspaces/{id}/tiles/{tileId}.json`
-- MCP server config: `~/.contex/mcp-server.json` (random port — never hardcode)
-- Generated workspace memory: `<workspace>/.codesurf/DREAMING.md` (this file)
-
-**Memory loader**
-- `bin/memory-loader.mjs` injects `.codesurf/DREAMING.md` as local-only context into every chat run
-- Also injected into Codex sessions via "Workspace Local Instructions" header — confirmed working
-
-**Critical file warnings**
-- `src/renderer/src/App.tsx` is ~1700 LOC, owns all canvas 2D physics — edit surgically
-- `node-pty` requires `npm run rebuild` after any native dependency change
-- MCP server port is random — always read from `~/.contex/mcp-server.json`, never hardcode
-
-**Known non-blocking build warnings**
-- `npm run build:renderer` emits Vite chunking warnings for `PanelLayout.tsx` and `MediaTile.tsx` — pre-existing, not failures
+- **SDK**: `@anthropic-ai/claude-agent-sdk` `0.2.118`. Requires both `permissionMode: 'bypassPermissions'` AND `allowDangerouslySkipPermissions: true`. Static docs showing `0.2.79` are outdated.
+- **Persistence**: All runtime state under `~/.contex/` — canvas JSON, kanban tile JSON, MCP config. MCP port is random; always read from `~/.contex/mcp-server.json`, never hardcode.
+- **Memory loader**: `bin/memory-loader.mjs` injects `.codesurf/DREAMING.md` into every chat and Codex session — confirmed working.
+- **Build**: `npm run build:renderer` Vite chunking warnings for `PanelLayout.tsx` and `MediaTile.tsx` are pre-existing, not regressions.
+- **App.tsx**: ~1700 LOC, contains the entire canvas engine. Be surgical — changes ripple widely.
+- **node-pty**: Requires `npm run rebuild` after any dependency change touching native modules.
 
 ---
 
-## Active Subsystems
+## Settled Subsystems
 
-### Canvas Engine
-- All 2D physics in `App.tsx`: pan/zoom, drag, resize, snapping, groups, undo/redo
-- Undo snapshots full state (max 50) — do not push to undo stack in hot paths
-- Tiles lazy-loaded via `React.lazy` + `Suspense`
+**Workspace Tab Geometry** — settled, committed `fdd1999`. Active tab height 31, inactive 24; active text offset -1, inactive 0 (corrected from -2 over multiple sessions).
 
-### Workspace Tab Geometry (settled — committed in `fdd1999`)
-- `workspaceTabActiveHeight = 31`, `workspaceTabInactiveHeight = 24`
-- `workspaceTabTextOffset = -1` (active), `workspaceTabInactiveTextOffset = 0` (inactive — was `-2`, corrected over seven+ sessions)
-- `workspaceTabInactiveBottomGap = 3`, `workspaceTabAttachedBottomGap = -1`
-- Main panel corner radius conditional on first workspace tab being selected
+**Commit `cd281cc` — "Improve session title parsing and chat UI"** — 11 files, 578 insertions / 165 deletions. Key changes:
+- Session title boilerplate filter: `firstMeaningfulTitleLine` / `isSessionTitleBoilerplateLine` helpers skip AGENTS.md/CLAUDE.md/`<INSTRUCTIONS>` preamble in auto-generated titles
+- ChatTile: hide scrollbar, direction-aware scroll handlers, deduped historical vs live messages, live Working/Thinking chip moved to fixed zone above composer
+- ChatTile chip/tool styles: nowrap + ellipsis on *individual chip text* (NOT chip container rows — see regression note below)
+- Streamdown: paragraph nodes as `<div>` to avoid nested `<p>` hydration errors
+- Monaco: language-service workers routed to Vite-bundled modules (off renderer thread)
+- Tests: session-openability uses temp files; new session-title-generation tests
 
-### ChatTile — Chip Row Judder Fix (uncommitted, working tree modified)
-- Root cause: chip text wrapping to 2 lines changed row height on every 500 ms collapse event
-- Fix: chip row `flexWrap: 'nowrap'` + `overflow: hidden`; all chip text spans (`ThinkingBlockView`, `WorkingChipView`, `MixedToolGroup`, `CollapsedToolGroup`, `ToolBlockView`) now have `whiteSpace: 'nowrap'` + ellipsis
-- Design constraint: chips are single-line always — never two-line chips at any width
-- Also fixed: collapsed-messages drawer `paddingBottom` always `12` (was `0` when collapsed, clipping "N queued" text)
+**Session Tools** — committed `1ff343d`. Title generation, session open intent detection, tests in `test/`.
 
-### Session Tools (committed `1ff343d`)
-- `src/main/ipc/session-title-generation.ts`, `src/renderer/src/components/sidebar/session-title-generation.ts`
-- `src/renderer/src/components/sidebar/session-open.ts` — session open intent detection
-- Tests: `test/session-openability.test.ts`, `test/session-title-generation.test.ts`
+**Dreaming Subsystem** — `packages/codesurf-dreaming/`, `src/main/ipc/dreaming.ts`. Orphan-run reconciliation and stderr sanitization landed.
 
-### Dreaming Subsystem
-- `packages/codesurf-dreaming/src/index.mjs`, `src/main/ipc/dreaming.ts`
-- Orphan-run reconciliation: runs stuck "running" > 10 min flipped to failed on daemon restart
-- Stderr sanitization: cleaned Claude CLI stderr surfaced as formatted error on job failure
+---
 
-### Event Bus / MCP Server
-- `src/main/event-bus.ts`: wildcard pub/sub, ring-buffer 500 events/channel, no persistence
-- `src/main/mcp-server.ts`: HTTP MCP 2.0, 17 tools, random port, config at `~/.contex/mcp-server.json`
+## Working Tree — Uncommitted
+
+`src/renderer/src/components/ChatTile.tsx` — ~330 changed lines vs HEAD. Builds pass. Needs commit. Two coordinated changes applied post-`cd281cc`:
+
+**1. `CHAT_CHIP_ROW_STYLE` const** (line ~748) — `flexWrap: 'wrap'`, `overflow: 'visible'`, replaces inline chip-row style objects across the file. Fixes chip clipping introduced by `cd281cc`.
+
+**2. `ChatMessageContent` hot-path** — attachments hoisted to a const; text-only messages return `<ChatMarkdown>` directly with no outer flex wrapper; "Attached file paths" label only rendered when `bodyText` is also present. Net DOM reduction for the common text-only case.
+
+---
+
+## Critical Regression History — Chip Row Layout
+
+`cd281cc` applied `flexWrap: 'nowrap'` to chip container rows as part of the judder fix. Post-commit sessions confirmed chips were clipped at the right edge. Working tree restores `flexWrap: 'wrap'` via `CHAT_CHIP_ROW_STYLE`.
+
+**Do not re-apply `nowrap` to chip container rows.** `nowrap` is valid only on text content inside individual chips (ellipsis truncation), not on the row that holds chips.
 
 ---
 
 ## Open Threads
 
-### Codex Investigation — Blank/Large Chat List Entries (2026-04-23, unresolved)
-Some session list entries show blank content; one is 1.2 MB but displays ~50 lines. Hypothesis: different agent log formats not fully parsed by `src/main/db/thread-indexer.ts` / `src/main/session-sources.ts`. Investigation ongoing.
+- **ChatTile uncommitted** — `CHAT_CHIP_ROW_STYLE` const + `ChatMessageContent` simplification, ~330 changed lines, needs commit
+- **Blank/large Codex session list entries** — 1.2 MB entries display as ~50 lines; parse gap hypothesis in `thread-indexer.ts` / `session-sources.ts`; unresolved
+- **Nyx PTY agent-shell** — plan at `docs/plans/2026-04-22-nyx-pty-hooks-lift-plan.md`; recommendation: new `agent-pty` IPC namespace beside existing terminal, not a replacement
+- **Untracked docs** — `docs/command-cli-harvest-status.md`, `docs/plans/2026-04-21-command-code-harvest-next-bursts.md`, `docs/plans/2026-04-22-codesurf-solo-harvest-plan.md`, `docs/research/` — not committed
 
-### Uncommitted Working Tree
-- `src/renderer/src/components/ChatTile.tsx` — chip judder fix, needs commit
-- `.mcp.json` — contex server port updated, needs review and commit
-- `docs/` — several untracked plans/research files, intent unclear
+---
 
-### `cluso-widget` Optional Dependency
-`file:../agentation-real` in `package.json` — may not exist in all environments, not a build error.
+## Known Dead Ends
+
+| What was tried | Why it failed | Do not retry |
+|---|---|---|
+| `flexWrap: 'nowrap'` on chip *container* rows | Stops width-shift judder but clips chips at right edge | Yes — use `CHAT_CHIP_ROW_STYLE` (wrap) + scroll-container stabilization |
+| Describing `cd281cc` as "~180 lines removed" | Actual: 578 ins / 165 del across 11 files; ChatTile.tsx alone: 266 changed lines | Reference commit stats directly |
