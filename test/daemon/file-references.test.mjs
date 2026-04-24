@@ -140,6 +140,31 @@ test('expandFileReferences expands workspace-relative @path tokens and strips ab
   assert.doesNotMatch(result.message, new RegExp(fixture.workspaceDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 })
 
+test('expandFileReferences ignores stale attachment paths without failing the turn', async t => {
+  const fixture = await makeWorkspaceFixture()
+  t.after(async () => {
+    await rm(fixture.root, { recursive: true, force: true })
+  })
+
+  const missingAttachment = join(fixture.root, 'TemporaryItems', 'missing-screenshot.png')
+  const result = await expandFileReferences({
+    workspaceDir: fixture.workspaceDir,
+    executionTarget: 'local',
+    message: [
+      'Please answer normally.',
+      '',
+      'Attached file paths:',
+      missingAttachment,
+    ].join('\n'),
+  })
+
+  assert.equal(result.changed, true)
+  assert.deepEqual(result.references, [])
+  assert.equal(result.message, 'Please answer normally.')
+  assert.doesNotMatch(result.message, /Attached file paths:/)
+  assert.doesNotMatch(result.message, /missing-screenshot\.png/)
+})
+
 test('expandFileReferences rejects symlink escapes outside the workspace root', async t => {
   const fixture = await makeWorkspaceFixture()
   t.after(async () => {

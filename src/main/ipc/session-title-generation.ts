@@ -236,6 +236,7 @@ function isSessionTitleBoilerplateLine(line: string): boolean {
   if (!normalized) return true
   return /^(?:#\s*)?AGENTS\.md instructions for\b/i.test(normalized)
     || /^(?:#\s*)?CLAUDE\.md instructions for\b/i.test(normalized)
+    || /^<\/?environment_context>$/i.test(normalized)
     || /^<INSTRUCTIONS>$/i.test(normalized)
     || /^<\/INSTRUCTIONS>$/i.test(normalized)
     || /^---\s*project-doc\s*---$/i.test(normalized)
@@ -253,9 +254,20 @@ function firstMeaningfulTitleLine(text: string): string | null {
   if (explicitRequest?.[1]?.trim()) return firstMeaningfulTitleLine(explicitRequest[1])
 
   let insideInstructions = false
+  let insideEnvironmentContext = false
   for (const rawLine of source.split(/\r?\n/)) {
     const line = rawLine.trim()
     if (!line) continue
+    if (/^<environment_context>$/i.test(line)) {
+      insideEnvironmentContext = true
+      continue
+    }
+    if (/^<\/environment_context>$/i.test(line)) {
+      insideEnvironmentContext = false
+      continue
+    }
+    if (insideEnvironmentContext) continue
+
     if (/<INSTRUCTIONS>/i.test(line)) {
       insideInstructions = true
       continue

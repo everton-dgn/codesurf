@@ -216,6 +216,11 @@ button:focus-visible,
   box-shadow: none !important;
 }
 
+#root *:focus,
+#root *:focus-visible {
+  outline: none !important;
+}
+
 /* xterm overrides — eliminate bottom gap from fractional row heights.
    xterm.css hardcodes .xterm-viewport { background-color: #000 }.
    xterm JS sets an inline bg from the theme, but only within the viewport's

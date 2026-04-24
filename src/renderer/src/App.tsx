@@ -4604,7 +4604,39 @@ function App(): JSX.Element {
     root.style.setProperty('--color-popover', theme.surface.panel)
     root.style.setProperty('--color-popover-foreground', theme.text.primary)
     root.style.setProperty('--color-sidebar', theme.surface.panelMuted)
+    root.style.setProperty('--ct-font-primary', appFonts.primary)
+    root.style.setProperty('--ct-font-primary-size', `${appFonts.size}px`)
+    root.style.setProperty('--ct-font-primary-line', String(appFonts.lineHeight))
+    root.style.setProperty('--ct-font-primary-weight', String(appFonts.weight))
+    root.style.setProperty('--ct-font-secondary', appFonts.secondary)
+    root.style.setProperty('--ct-font-secondary-size', `${appFonts.secondarySize}px`)
+    root.style.setProperty('--ct-font-secondary-line', String(appFonts.secondaryLineHeight))
+    root.style.setProperty('--ct-font-secondary-weight', String(appFonts.secondaryWeight))
+    root.style.setProperty('--ct-font-mono', appFonts.mono)
+    root.style.setProperty('--ct-font-mono-size', `${appFonts.monoSize}px`)
+    root.style.setProperty('--ct-font-mono-line', String(appFonts.monoLineHeight))
+    root.style.setProperty('--ct-font-mono-weight', String(appFonts.monoWeight))
+    root.style.setProperty('--ct-font-sans', appFonts.primary)
+    root.style.setProperty('--ct-font-size', `${appFonts.size}px`)
+    root.style.setProperty('--ct-font-line', String(appFonts.lineHeight))
+    root.style.setProperty('--ct-font-weight', String(appFonts.weight))
+    root.style.setProperty('--ct-font-subtle', appFonts.secondary)
+    root.style.setProperty('--ct-font-subtle-size', `${appFonts.secondarySize}px`)
+    root.style.setProperty('--ct-font-subtle-line', String(appFonts.secondaryLineHeight))
+    root.style.setProperty('--ct-font-subtle-weight', String(appFonts.secondaryWeight))
   }, [
+    appFonts.lineHeight,
+    appFonts.mono,
+    appFonts.monoLineHeight,
+    appFonts.monoSize,
+    appFonts.monoWeight,
+    appFonts.primary,
+    appFonts.secondary,
+    appFonts.secondaryLineHeight,
+    appFonts.secondarySize,
+    appFonts.secondaryWeight,
+    appFonts.size,
+    appFonts.weight,
     theme.accent.base,
     theme.border.default,
     theme.chat.background,

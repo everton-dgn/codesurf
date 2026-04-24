@@ -43,12 +43,22 @@ export async function expandFileReferences({
   for (const reference of parsed.references) {
     if (collected.length >= maxReferences) break
     const loaded = await loadWorkspaceReference(reference, resolvedWorkspaceDir, maxBytesPerFile)
+    if (!loaded) continue
     if (seenPaths.has(loaded.resolvedPath)) continue
     seenPaths.add(loaded.resolvedPath)
     collected.push(loaded)
   }
 
   if (collected.length === 0) {
+    if (parsed.hadAttachmentPaths && parsed.bodyText !== normalizedMessage) {
+      return {
+        changed: true,
+        message: parsed.bodyText,
+        references: [],
+        summaryText: undefined,
+        inputText: undefined,
+      }
+    }
     return {
       changed: false,
       message: normalizedMessage,
@@ -120,6 +130,7 @@ function parseReferenceMentions(message) {
   return {
     bodyText,
     references: parsedReferences,
+    hadAttachmentPaths: attachmentPaths.length > 0,
   }
 }
 
@@ -285,6 +296,7 @@ async function loadWorkspaceReference(reference, workspaceRoot, maxBytesPerFile)
     }
   } catch (error) {
     if (error?.code === 'ENOENT' && handle == null) {
+      if (isAttachment) return null
       throw new Error(`File reference ${reference.source} was not found in the workspace`)
     }
     if (error?.code === 'EISDIR') {

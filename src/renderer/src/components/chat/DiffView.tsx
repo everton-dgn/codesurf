@@ -35,6 +35,8 @@ interface DiffRow {
 const DEFAULT_MAX_LINES = 300
 
 function parseDiff(diff: string): DiffRow[] {
+  if (diff.trim().length === 0) return []
+
   const lines = diff.replace(/\r\n/g, '\n').split('\n')
   const rows: DiffRow[] = []
   let oldNo = 0

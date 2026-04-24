@@ -261,7 +261,6 @@ function TabBar({ tabs, activeTab, previewTabId = null, panelId, onActivate, onP
   const compactTabBackground = theme.surface.selection
   const compactTabInactiveBackground = 'transparent'
   const compactTabHoverBackground = theme.surface.hover
-  const compactTabActiveOutline = `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 18%, transparent)`
   const compactTabMaxWidth = 'min(180px, 18vw)'
 
   useEffect(() => {
@@ -333,11 +332,11 @@ function TabBar({ tabs, activeTab, previewTabId = null, panelId, onActivate, onP
                 background: isActive ? compactTabBackground : compactTabInactiveBackground,
                 marginBottom: 3,
                 borderRadius: 8,
-                transition: 'color 0.15s, background 0.15s, box-shadow 0.15s, border-color 0.15s',
+                transition: 'color 0.15s, background 0.15s, border-color 0.15s',
                 flexShrink: 0, maxWidth: compactTabMaxWidth,
                 fontWeight: isActive ? 650 : 550,
                 letterSpacing: 0,
-                boxShadow: isActive ? compactTabActiveOutline : 'none',
+                boxShadow: 'none',
                 border: isPreview
                   ? `1px dashed ${isActive ? theme.border.accent : theme.border.subtle}`
                   : '1px solid transparent',

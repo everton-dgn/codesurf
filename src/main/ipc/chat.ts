@@ -152,6 +152,7 @@ interface ChatContextBucketBundle {
 type LoadedMemoryContext = Awaited<ReturnType<typeof daemonClient.loadMemoryContext>>
 
 function log(...args: unknown[]): void {
+  if (process.env.CODESURF_CHAT_DEBUG !== '1') return
   console.log('[Chat]', ...args)
 }
 

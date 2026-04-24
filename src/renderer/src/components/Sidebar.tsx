@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
+import { Pencil, Search } from 'lucide-react'
 import { getChatStreamingSnapshot, subscribeChatStreaming } from './chatStreamingStore'
 import { getChatMessageSentSnapshot, subscribeChatMessageSent } from './chatMessageSentStore'
 import type { ProjectRecord, Workspace, TileState } from '../../../shared/types'
@@ -40,6 +41,8 @@ interface SidebarTextDialogState {
 }
 const GENERIC_SESSION_SOURCE_DETAILS = new Set(['transcript', 'conversation', 'project session', 'user session'])
 const SESSION_READ_WATERMARKS_STORAGE_KEY = 'codesurf.sidebar.sessionReadWatermarks.v1'
+const PROJECT_SESSION_PREVIEW_COUNT = 5
+const PROJECT_SESSION_SHOW_MORE_COUNT = 10
 type SessionReadWatermarks = Record<string, number>
 
 function getSessionSidebarIndicatorColor(session: SessionEntry, theme: ReturnType<typeof useTheme>): string {
@@ -526,6 +529,148 @@ interface Props {
 
 const SESSION_FOCUS_REFRESH_STALE_MS = 15_000
 
+function SidebarSearchPalette({
+  query,
+  sessions,
+  onQueryChange,
+  onOpenSession,
+  onClose,
+}: {
+  query: string
+  sessions: SessionEntry[]
+  onQueryChange: (value: string) => void
+  onOpenSession: (session: SessionEntry) => void
+  onClose: () => void
+}): React.JSX.Element {
+  const theme = useTheme()
+  const fonts = useAppFonts()
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => inputRef.current?.focus())
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onClose])
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-label="Search chats"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100000,
+        background: 'rgba(0, 0, 0, 0.28)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        paddingTop: '8vh',
+      }}
+    >
+      <div
+        style={{
+          width: 'min(760px, calc(100vw - 72px))',
+          maxHeight: 'min(680px, calc(100vh - 96px))',
+          borderRadius: 28,
+          background: theme.surface.panelElevated,
+          border: `1px solid ${theme.border.default}`,
+          boxShadow: theme.shadow.panel,
+          padding: 10,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={event => onQueryChange(event.target.value)}
+          placeholder="Search chats"
+          style={{
+            width: '100%',
+            border: 'none',
+            outline: 'none',
+            background: 'transparent',
+            color: theme.text.primary,
+            fontSize: 20,
+            fontFamily: fonts.primary,
+            fontWeight: 600,
+            padding: '16px 20px 14px',
+            boxSizing: 'border-box',
+          }}
+        />
+        <div style={{ padding: '12px 16px 8px', color: theme.text.disabled, fontSize: fonts.size, fontWeight: 700 }}>
+          Recent chats
+        </div>
+        <div style={{ overflowY: 'auto', paddingBottom: 6 }}>
+          {sessions.map((session, index) => (
+            <button
+              key={`${session.workspaceId}:${session.id}`}
+              type="button"
+              onClick={() => {
+                onOpenSession(session)
+                onClose()
+              }}
+              style={{
+                width: '100%',
+                border: 'none',
+                borderRadius: 18,
+                background: index === 0 ? theme.surface.hover : 'transparent',
+                color: index === 0 ? theme.text.primary : theme.text.secondary,
+                cursor: 'pointer',
+                display: 'grid',
+                gridTemplateColumns: '24px minmax(0, 1fr) auto auto',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 16px',
+                fontFamily: fonts.primary,
+                textAlign: 'left',
+              }}
+              onMouseEnter={event => {
+                event.currentTarget.style.background = theme.surface.hover
+                event.currentTarget.style.color = theme.text.primary
+              }}
+              onMouseLeave={event => {
+                event.currentTarget.style.background = index === 0 ? theme.surface.hover : 'transparent'
+                event.currentTarget.style.color = index === 0 ? theme.text.primary : theme.text.secondary
+              }}
+            >
+              <span style={{ display: 'flex', color: 'currentColor', opacity: 0.75 }}>{getSessionAgentIcon(session)}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 16, fontWeight: 650 }}>
+                {formatSessionTitleForSidebar(session.title, 90)}
+              </span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: theme.text.disabled, fontSize: 14, maxWidth: 170 }}>
+                {session.workspaceName ?? session.sourceLabel}
+              </span>
+              <span style={{ borderRadius: 12, background: theme.surface.panelMuted, color: theme.text.secondary, padding: '2px 8px', fontSize: 13 }}>
+                {index < 9 ? `⌘${index + 1}` : ''}
+              </span>
+            </button>
+          ))}
+          {sessions.length === 0 && (
+            <div style={{ padding: '20px 18px 28px', color: theme.text.disabled, fontSize: fonts.size }}>
+              No matching chats
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 export function Sidebar({
@@ -545,6 +690,8 @@ export function Sidebar({
   void pinnedExtensionIds
   useEffect(() => { widthRef.current = width }, [width])
   const [projectSearch, setProjectSearch] = useState('')
+  const [searchPaletteOpen, setSearchPaletteOpen] = useState(false)
+  const [searchPaletteQuery, setSearchPaletteQuery] = useState('')
   const [sessionCtx, setSessionCtx] = useState<{ x: number; y: number; session: SessionEntry } | null>(null)
   const [projectCtx, setProjectCtx] = useState<{ x: number; y: number; group: SessionProjectGroup } | null>(null)
   const [sessions, setSessions] = useState<SessionEntry[]>([])
@@ -557,6 +704,7 @@ export function Sidebar({
   const [showSubagentSessions, setShowSubagentSessions] = useState(true)
   const [hiddenSessionAgents, setHiddenSessionAgents] = useState<Record<string, boolean>>({})
   const [collapsedThreadGroups, setCollapsedThreadGroups] = useState<Record<string, boolean>>({})
+  const [projectSessionVisibleCounts, setProjectSessionVisibleCounts] = useState<Record<string, number>>({})
   const [loadedSessionWorkspaceIds, setLoadedSessionWorkspaceIds] = useState<string[]>([])
   const [hoveredProjectRow, setHoveredProjectRow] = useState<string | null>(null)
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null)
@@ -932,7 +1080,16 @@ export function Sidebar({
       return
     }
 
-    setCollapsedThreadGroups(prev => ({ ...prev, [key]: !isCollapsed }))
+    const shouldCollapse = !isCollapsed
+    if (shouldCollapse) {
+      setProjectSessionVisibleCounts(prev => {
+        if (!(key in prev)) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    }
+    setCollapsedThreadGroups(prev => ({ ...prev, [key]: shouldCollapse }))
   }, [activeProjectId, collapsedThreadGroups, loadWorkspaceSessions, projectEntries, workspaceById, workspace?.id, _onSwitchWorkspace])
 
   useEffect(() => {
@@ -1025,7 +1182,24 @@ export function Sidebar({
   // sidebar scroller instead of a second per-project paging layer.
   useEffect(() => {
     setVisibleSessionCount(SESSION_PAGE_SIZE)
-  }, [workspace?.id, showArchivedSessions, showCronSessions, showSubagentSessions, threadOrganizeMode, threadSortMode])
+    setProjectSessionVisibleCounts({})
+  }, [showArchivedSessions, showCronSessions, showSubagentSessions, threadOrganizeMode, threadSortMode])
+
+  useEffect(() => {
+    if (threadOrganizeMode !== 'project') return
+    setProjectSessionVisibleCounts(prev => {
+      const next: Record<string, number> = {}
+      let changed = false
+      for (const [key, count] of Object.entries(prev)) {
+        if (key === activeProjectId) {
+          next[key] = count
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [activeProjectId, threadOrganizeMode])
 
   const displayedSessions = useMemo(() => {
     if (threadOrganizeMode !== 'chronological') return visibleSessions
@@ -1120,6 +1294,20 @@ export function Sidebar({
   const hasMoreSessions = threadOrganizeMode === 'chronological' && !projectSearch.trim()
     ? displayedSessions.length < visibleSessions.length
     : false
+
+  const searchPaletteSessions = useMemo(() => {
+    const q = searchPaletteQuery.trim().toLowerCase()
+    const base = visibleSessions
+    const filtered = q
+      ? base.filter(session =>
+        session.title?.toLowerCase().includes(q)
+        || session.lastMessage?.toLowerCase().includes(q)
+        || session.sourceLabel?.toLowerCase().includes(q)
+        || session.workspaceName?.toLowerCase().includes(q)
+      )
+      : base
+    return filtered.slice(0, 9)
+  }, [searchPaletteQuery, visibleSessions])
 
   const setSessionArchived = useCallback(async (session: SessionEntry, archived: boolean) => {
     if (!session.workspaceId || archivingSessionId) return
@@ -1422,6 +1610,30 @@ export function Sidebar({
         <div style={{ userSelect: 'none', WebkitUserSelect: 'none' }}>
 
         <div style={{ padding: '8px 8px 10px', fontSize: fonts.secondarySize, fontWeight: fonts.secondaryWeight, lineHeight: fonts.secondaryLineHeight }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingBottom: 10, marginBottom: 8, borderBottom: `1px solid ${theme.border.subtle}` }}>
+            <SidebarItem
+              label="New Chat"
+              icon={<Pencil size={16} />}
+              onClick={onNewChat}
+            />
+            <SidebarItem
+              label="Search"
+              icon={<Search size={16} />}
+              onClick={() => {
+                setSearchPaletteQuery('')
+                setSearchPaletteOpen(true)
+              }}
+            />
+            {RESOURCE_ITEMS.map(item => (
+              <SidebarItem
+                key={item.id}
+                label={item.label}
+                icon={item.icon}
+                onClick={() => onOpenSettings(item.id)}
+              />
+            ))}
+          </div>
+
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
             <span style={{
               fontSize: fonts.secondarySize - 2,
@@ -1660,7 +1872,17 @@ export function Sidebar({
             <div style={{ padding: '4px 0', fontSize: fonts.secondarySize, color: theme.text.disabled }}>No threads yet</div>
           ) : (
             <>
-              {filteredSessionGroups.map(group => (
+              {filteredSessionGroups.map(group => {
+                const projectSessionVisibleCount = projectSessionVisibleCounts[group.key] ?? PROJECT_SESSION_PREVIEW_COUNT
+                const displayedGroupSessions = threadOrganizeMode === 'project'
+                  ? group.sessions.slice(0, projectSessionVisibleCount)
+                  : group.sessions
+                const hiddenProjectSessionCount = threadOrganizeMode === 'project'
+                  ? Math.max(0, group.sessions.length - displayedGroupSessions.length)
+                  : 0
+                const canShowLessProjectSessions = threadOrganizeMode === 'project' && displayedGroupSessions.length > PROJECT_SESSION_PREVIEW_COUNT
+
+                return (
                 <div key={group.key} style={{ paddingBottom: 8 }}>
                   {threadOrganizeMode === 'project' && (
                     <div
@@ -1807,7 +2029,7 @@ export function Sidebar({
                     </div>
                   )}
 
-                  {(threadOrganizeMode !== 'project' || !isThreadGroupCollapsed(group)) && group.sessions.map(session => {
+                  {(threadOrganizeMode !== 'project' || !isThreadGroupCollapsed(group)) && displayedGroupSessions.map(session => {
                     const isSelected = isSessionActive(session, {
                       activeChatTileId,
                       activeChatSessionId,
@@ -1951,6 +2173,68 @@ export function Sidebar({
                     )
                   })}
 
+                  {threadOrganizeMode === 'project' && !isThreadGroupCollapsed(group) && (hiddenProjectSessionCount > 0 || canShowLessProjectSessions) && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        padding: '4px 0 4px 24px',
+                      }}
+                    >
+                      {hiddenProjectSessionCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setProjectSessionVisibleCounts(prev => ({
+                            ...prev,
+                            [group.key]: Math.min(
+                              group.sessions.length,
+                              (prev[group.key] ?? PROJECT_SESSION_PREVIEW_COUNT) + PROJECT_SESSION_SHOW_MORE_COUNT,
+                            ),
+                          }))}
+                          style={{
+                            padding: 0,
+                            border: 'none',
+                            background: 'transparent',
+                            color: theme.text.disabled,
+                            cursor: 'pointer',
+                            fontSize: fonts.secondarySize,
+                            fontFamily: 'inherit',
+                            textAlign: 'left',
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.color = theme.text.secondary }}
+                          onMouseLeave={e => { e.currentTarget.style.color = theme.text.disabled }}
+                        >
+                          Show more
+                        </button>
+                      )}
+                      {canShowLessProjectSessions && (
+                        <button
+                          type="button"
+                          onClick={() => setProjectSessionVisibleCounts(prev => {
+                            const next = { ...prev }
+                            delete next[group.key]
+                            return next
+                          })}
+                          style={{
+                            padding: 0,
+                            border: 'none',
+                            background: 'transparent',
+                            color: theme.text.disabled,
+                            cursor: 'pointer',
+                            fontSize: fonts.secondarySize,
+                            fontFamily: 'inherit',
+                            textAlign: 'left',
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.color = theme.text.secondary }}
+                          onMouseLeave={e => { e.currentTarget.style.color = theme.text.disabled }}
+                        >
+                          Show less
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   {threadOrganizeMode === 'project' && !isThreadGroupCollapsed(group) && group.sessions.length === 0 && (
                     <div
                       style={{
@@ -1964,7 +2248,8 @@ export function Sidebar({
                   )}
 
                 </div>
-              ))}
+                )
+              })}
 
               {filteredSessionGroups.length === 0 && projectSearch && (
                 <div style={{ padding: '4px 0', fontSize: fonts.secondarySize, color: theme.text.disabled }}>No matching projects or threads</div>
@@ -1997,25 +2282,6 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* Static footer list — resources (Prompts / Skills / Tools / Agents)
-          live between the scrollable projects panel and the icon toolbar. */}
-      <div
-        style={{
-          padding: '6px 0 4px',
-          borderTop: `1px solid ${theme.border.subtle}`,
-          flexShrink: 0,
-        }}
-      >
-        {RESOURCE_ITEMS.map(item => (
-          <SidebarItem
-            key={item.id}
-            label={item.label}
-            icon={item.icon}
-            onClick={() => onOpenSettings(item.id)}
-          />
-        ))}
-      </div>
-
       {showFooter && (
         <SidebarFooter
           onNewTerminal={onNewTerminal} onNewKanban={onNewKanban} onNewBrowser={onNewBrowser}
@@ -2039,6 +2305,16 @@ export function Sidebar({
         <SidebarTextDialog
           state={textDialog}
           onClose={() => setTextDialog(null)}
+        />
+      )}
+
+      {searchPaletteOpen && (
+        <SidebarSearchPalette
+          query={searchPaletteQuery}
+          sessions={searchPaletteSessions}
+          onQueryChange={setSearchPaletteQuery}
+          onOpenSession={openSessionFromSidebar}
+          onClose={() => setSearchPaletteOpen(false)}
         />
       )}
 

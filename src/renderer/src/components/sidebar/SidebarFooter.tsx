@@ -146,7 +146,6 @@ export function SidebarFooter({
           { label: 'New Terminal', icon: TILE_ICONS.terminal, action: onNewTerminal },
           { label: 'Agent Board', icon: TILE_ICONS.kanban, action: onNewKanban, disabled: true },
           { label: 'Browser', icon: TILE_ICONS.browser, action: onNewBrowser },
-          { label: 'Chat', icon: TILE_ICONS.chat, action: onNewChat },
           { label: 'Files', icon: (
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
               <path d="M1 3C1 2.17 1.67 1.5 2.5 1.5H5L6.5 3H11.5C12.33 3 13 3.67 13 4.5V11C13 11.83 12.33 12.5 11.5 12.5H2.5C1.67 12.5 1 11.83 1 11V3Z" stroke="currentColor" strokeWidth="1.2" />

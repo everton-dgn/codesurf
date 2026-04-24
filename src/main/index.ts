@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell, ipcMain, Menu, nativeTheme, nativeImage, session, systemPreferences, desktopCapturer } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { fileURLToPath } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { initWorkspaces, registerWorkspaceIPC } from './ipc/workspace'
@@ -331,6 +332,21 @@ function createWindow(opts?: { fresh?: boolean }): BrowserWindow {
 }
 
 async function openExternalIfSafe(rawUrl: string, source: 'window' | 'ipc'): Promise<boolean> {
+  const trimmed = String(rawUrl ?? '').trim()
+  if (trimmed.startsWith('file://')) {
+    try {
+      const errorMessage = await shell.openPath(fileURLToPath(trimmed))
+      if (errorMessage) {
+        console.warn(`[shell] Failed to open local file from ${source}: ${errorMessage}`)
+        return false
+      }
+      return true
+    } catch (error) {
+      console.warn(`[shell] Failed to open local file from ${source}:`, error)
+      return false
+    }
+  }
+
   const safeUrl = normalizeSafeExternalUrl(rawUrl)
   if (!safeUrl) {
     console.warn(`[shell] Blocked unsafe external URL from ${source}: ${rawUrl}`)

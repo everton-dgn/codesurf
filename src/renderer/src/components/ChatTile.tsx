@@ -289,6 +289,14 @@ type LatestChangeDrawerState = {
   changeBlockCount: number
 }
 
+function hasVisibleFileChangeStats(change: Pick<FileChange, 'additions' | 'deletions'>): boolean {
+  return change.additions > 0 || change.deletions > 0
+}
+
+function hasRenderableFileChangeDiff(change: Pick<FileChange, 'diff'>): boolean {
+  return change.diff.trim().length > 0
+}
+
 interface ChatTilePersistedState {
   messages: ChatMessage[]
   input: string
@@ -2159,16 +2167,27 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     '--ct-warning': theme.status.warning,
     '--ct-danger': theme.status.danger,
     '--ct-radius': '8px',
+    '--ct-font-primary': fontSans,
+    '--ct-font-primary-size': `${fontSize}px`,
+    '--ct-font-primary-line': String(fontLineHeight),
+    '--ct-font-primary-weight': String(fontWeight),
+    '--ct-font-secondary': fontSecondary,
+    '--ct-font-secondary-size': `${secondarySize}px`,
+    '--ct-font-secondary-line': String(secondaryLineHeight),
+    '--ct-font-secondary-weight': String(secondaryWeight),
     '--ct-font-sans': fontSans,
     '--ct-font-mono': fontMono,
     '--ct-font-size': `${fontSize}px`,
     '--ct-font-line': String(fontLineHeight),
     '--ct-font-weight': String(fontWeight),
+    '--ct-font-subtle': fontSecondary,
     '--ct-font-subtle-size': `${secondarySize}px`,
+    '--ct-font-subtle-line': String(secondaryLineHeight),
+    '--ct-font-subtle-weight': String(secondaryWeight),
     '--ct-font-title': fontSans,
     '--ct-font-title-size': `${fontSize}px`,
     '--ct-font-title-weight': String(Math.max(fontWeight, 600)),
-  }), [fontLineHeight, fontMono, fontSans, fontSize, fontWeight, secondarySize, theme])
+  }), [fontLineHeight, fontMono, fontSans, fontSecondary, fontSize, fontWeight, secondaryLineHeight, secondarySize, secondaryWeight, theme])
   const initialRuntimeStateRef = useRef<ChatTilePersistedState | null>(getChatTileRuntimeState<ChatTilePersistedState>(tileId))
   const initialProvider = initialRuntimeStateRef.current?.provider ?? DEFAULT_PROVIDER_ID
   const initialModel = initialRuntimeStateRef.current?.model
@@ -2767,6 +2786,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       changeBlockCount,
     }
   }, [messages, mergeDrawerFileChanges])
+  const latestChangeDrawerHasStats = latestChangeDrawer ? hasVisibleFileChangeStats(latestChangeDrawer) : false
   const liveComposerActivityChip = useMemo(() => {
     if (!isStreaming) return null
     const liveMsg = renderedMessages[renderedMessages.length - 1]
@@ -5473,6 +5493,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setAcQuery('')
   }, [syncComposerHeight])
 
+  const isStartScreen = messages.length === 0 && !isStreaming
+
   const fontCtxValue = useMemo(() => ({ sans: fontSans, secondary: fontSecondary, mono: fontMono, size: fontSize, monoSize, lineHeight: fontLineHeight, weight: fontWeight, monoLineHeight, monoWeight, secondarySize, secondaryLineHeight, secondaryWeight }), [fontSans, fontSecondary, fontMono, fontSize, monoSize, fontLineHeight, fontWeight, monoLineHeight, monoWeight, secondarySize, secondaryLineHeight, secondaryWeight])
 
   const chatDispatchValue = useMemo<ChatDispatchValue>(() => ({
@@ -5519,6 +5541,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         flexDirection: 'column',
         minHeight: 0,
         minWidth: 0,
+        position: 'relative',
+        justifyContent: isStartScreen ? 'center' : undefined,
       }}>
 
       {/* Messages */}
@@ -5530,7 +5554,9 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         onKeyDown={handleMessagesKeyDown}
         tabIndex={-1}
         style={{
-          flex: 1, overflowY: 'auto', padding: '12px 14px',
+          flex: isStartScreen ? '0 0 auto' : 1,
+          overflowY: isStartScreen ? 'visible' : 'auto',
+          padding: isStartScreen ? '12px 14px 4px' : '12px 14px',
           overflowX: 'hidden',
           minHeight: 0,
           // Scrollbar hidden for testing — no gutter reservation needed while hidden.
@@ -5552,14 +5578,21 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           gap: 10,
           minHeight: '100%',
         }}>
-          {messages.length === 0 && (
+          {isStartScreen && (
              <div style={{
-               flex: 1, display: 'flex', flexDirection: 'column',
-               alignItems: 'center', justifyContent: 'center', gap: 8,
-               color: theme.chat.subtle, fontSize: 12,
+               display: 'flex', flexDirection: 'column',
+               alignItems: 'center', justifyContent: 'center',
+               color: theme.chat.text, textAlign: 'center',
              }}>
-               <MessageSquare size={24} color={theme.chat.subtle} strokeWidth={1.5} style={{ opacity: 0.4 }} />
-               Start a conversation
+               <div style={{
+                 fontSize: 'clamp(24px, 3vw, 34px)',
+                 lineHeight: 1.15,
+                 fontWeight: 650,
+                 color: theme.chat.text,
+                 letterSpacing: 0,
+               }}>
+                 What do you want to build today with CodeSurf?
+               </div>
              </div>
            )}
 
@@ -6146,12 +6179,16 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 <span style={{ fontSize: 13, fontWeight: 600, color: theme.chat.text }}>
                   {latestChangeDrawer.fileCount} file{latestChangeDrawer.fileCount === 1 ? '' : 's'} changed
                 </span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.success }}>
-                  +{latestChangeDrawer.additions}
-                </span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.danger }}>
-                  -{latestChangeDrawer.deletions}
-                </span>
+                {latestChangeDrawerHasStats && (
+                  <>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.success }}>
+                      +{latestChangeDrawer.additions}
+                    </span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.danger }}>
+                      -{latestChangeDrawer.deletions}
+                    </span>
+                  </>
+                )}
               </button>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                 {latestCheckpointId && (
@@ -6215,7 +6252,9 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               }}>
                 {latestChangeDrawer.fileChanges.map((change, index) => {
                   const fileKey = `${latestChangeDrawer.key}:${change.path}:${index}`
+                  const fileHasDiff = hasRenderableFileChangeDiff(change)
                   const isExpanded = latestChangeDrawerExpandedFiles[fileKey] ?? false
+                  const fileHasStats = hasVisibleFileChangeStats(change)
                   return (
                     <div
                       key={fileKey}
@@ -6226,7 +6265,9 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                     >
                       <button
                         type="button"
-                        onClick={() => toggleLatestChangeDrawerFile(fileKey)}
+                        onClick={() => {
+                          if (fileHasDiff) toggleLatestChangeDrawerFile(fileKey)
+                        }}
                         style={{
                           width: '100%',
                           display: 'flex',
@@ -6235,7 +6276,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           padding: '12px 14px',
                           border: 'none',
                           background: 'transparent',
-                          cursor: 'pointer',
+                          cursor: fileHasDiff ? 'pointer' : 'default',
                           textAlign: 'left',
                           color: theme.chat.text,
                           fontFamily: fontSans,
@@ -6252,20 +6293,24 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                         }}>
                           {change.path}
                         </span>
-                        <span style={{ color: theme.status.success, fontWeight: 600, flexShrink: 0 }}>
-                          +{change.additions}
-                        </span>
-                        <span style={{ color: theme.status.danger, fontWeight: 600, flexShrink: 0 }}>
-                          -{change.deletions}
-                        </span>
+                        {fileHasStats && (
+                          <>
+                            <span style={{ color: theme.status.success, fontWeight: 600, flexShrink: 0 }}>
+                              +{change.additions}
+                            </span>
+                            <span style={{ color: theme.status.danger, fontWeight: 600, flexShrink: 0 }}>
+                              -{change.deletions}
+                            </span>
+                          </>
+                        )}
                         <ChevronRight size={14} style={{
                           transform: isExpanded ? 'rotate(90deg)' : 'none',
                           transition: 'transform 0.15s',
-                          opacity: 0.55,
+                          opacity: fileHasDiff ? 0.55 : 0,
                           flexShrink: 0,
                         }} />
                       </button>
-                      {isExpanded && (
+                      {isExpanded && fileHasDiff && (
                         <div style={{ borderTop: `1px solid ${theme.chat.divider}` }}>
                           <DiffView
                             diff={change.diff}
@@ -6646,7 +6691,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           flexShrink: 0,
           width: CHAT_COMPOSER_WIDTH,
           minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
-          margin: '0 auto 6px auto',
+          margin: isStartScreen ? '12px auto 6px auto' : '0 auto 6px auto',
           display: 'flex',
           flexDirection: 'column',
           gap: 6,
@@ -8009,7 +8054,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
     if (!isFileChangeBlock) return {}
     const map: Record<string, boolean> = {}
     block.fileChanges?.forEach((change, index) => {
-      map[`${change.path}:${index}`] = true
+      map[`${change.path}:${index}`] = hasRenderableFileChangeDiff(change)
     })
     return map
   })
@@ -8111,12 +8156,16 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
                 }}>
                   {fileChangeSummary.fileCount} file{fileChangeSummary.fileCount === 1 ? '' : 's'} changed
                 </span>
-                <span style={{ color: theme.status.success, fontSize: 10.5, fontWeight: 600, flexShrink: 0 }}>
-                  +{fileChangeSummary.additions}
-                </span>
-                <span style={{ color: theme.status.danger, fontSize: 10.5, fontWeight: 600, flexShrink: 0 }}>
-                  -{fileChangeSummary.deletions}
-                </span>
+                {hasVisibleFileChangeStats(fileChangeSummary) && (
+                  <>
+                    <span style={{ color: theme.status.success, fontSize: 10.5, fontWeight: 600, flexShrink: 0 }}>
+                      +{fileChangeSummary.additions}
+                    </span>
+                    <span style={{ color: theme.status.danger, fontSize: 10.5, fontWeight: 600, flexShrink: 0 }}>
+                      -{fileChangeSummary.deletions}
+                    </span>
+                  </>
+                )}
               </div>
             ) : (
               <span style={{
@@ -8165,6 +8214,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
             <div style={{ display: 'flex', flexDirection: 'column', gap: isFileChangeBlock ? 0 : 6 }}>
               {block.fileChanges?.map((change, index) => {
                 const fileKey = `${change.path}:${index}`
+                const fileHasDiff = hasRenderableFileChangeDiff(change)
                 const isExpanded = expandedFiles[fileKey] ?? false
                 return (
                   <div key={fileKey} style={{
@@ -8178,7 +8228,9 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
                   }}>
                     <button
                       type="button"
-                      onClick={() => toggleFile(fileKey)}
+                      onClick={() => {
+                        if (fileHasDiff) toggleFile(fileKey)
+                      }}
                       style={{
                         width: '100%',
                         display: 'flex',
@@ -8187,7 +8239,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
                         background: 'transparent',
                         border: 'none',
                         padding: isFileChangeBlock ? '14px 16px' : '8px 10px',
-                        cursor: 'pointer',
+                        cursor: fileHasDiff ? 'pointer' : 'default',
                         color: theme.chat.text,
                         fontFamily: isFileChangeBlock ? fonts.sans : fonts.mono,
                         fontSize: isFileChangeBlock ? fonts.size : 11,
@@ -8198,16 +8250,20 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
                       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {change.path}
                       </span>
-                      <span style={{ color: theme.status.success, flexShrink: 0 }}>+{change.additions}</span>
-                      <span style={{ color: theme.status.danger, flexShrink: 0 }}>-{change.deletions}</span>
+                      {hasVisibleFileChangeStats(change) && (
+                        <>
+                          <span style={{ color: theme.status.success, flexShrink: 0 }}>+{change.additions}</span>
+                          <span style={{ color: theme.status.danger, flexShrink: 0 }}>-{change.deletions}</span>
+                        </>
+                      )}
                       <ChevronRight size={12} style={{
                         transform: isExpanded ? 'rotate(90deg)' : 'none',
                         transition: 'transform 0.15s',
-                        opacity: 0.5,
+                        opacity: fileHasDiff ? 0.5 : 0,
                         flexShrink: 0,
                       }} />
                     </button>
-                    {isExpanded && (
+                    {isExpanded && fileHasDiff && (
                       <div style={{ borderTop: `1px solid ${theme.chat.assistantBubbleBorder}` }}>
                         <DiffView
                           diff={change.diff}
