@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
-import { Ungroup, Grid2x2X, Scissors, ClipboardPaste, Maximize2, LayoutGrid, Plus, Package } from 'lucide-react'
+import { Ungroup, Grid2x2X, Scissors, ClipboardPaste, Maximize2, LayoutGrid, Plus, Package, Link2 } from 'lucide-react'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
 import { TileColorProvider } from './TileColorContext'
@@ -8,6 +8,7 @@ import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
+import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
 import { DEFAULT_THEME_ID, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
@@ -26,7 +27,7 @@ type PendingSessionOpen =
   | { kind: 'app'; session: SessionTargetEntry; workspaceId: string }
 
 type SessionTargetEntry = AggregatedSessionEntry | WorkspaceSessionEntry
-type FocusOpenOptions = { persist?: boolean }
+type FocusOpenOptions = { persist?: boolean; sourceTileId?: string }
 
 const INITIAL_EXTERNAL_SESSION_TAIL_LOAD = 20
 
@@ -88,6 +89,7 @@ type DragState =
   | { type: 'select'; startWx: number; startWy: number; curWx: number; curWy: number }
   | { type: 'group'; groupId: string; startX: number; startY: number; snapshots: { id: string; x: number; y: number }[]; initLayoutBounds?: { x: number; y: number; w: number; h: number } }
   | { type: 'group-resize'; groupId: string; dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw'; startX: number; startY: number; initBounds: { x: number; y: number; w: number; h: number }; snapshots: { id: string; x: number; y: number; width: number; height: number }[] }
+  | { type: 'connection'; sourceTileId: string; startX: number; startY: number; side: AnchorPoint['side']; anchor: AnchorPoint; current: { x: number; y: number }; targetTileId: string | null }
 
 const GRID = 20 // default, overridden by settings at runtime
 const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
@@ -126,6 +128,11 @@ function findLeafIdContainingTile(root: PanelNode, tileId: string): string | nul
     if (found) return found
   }
   return null
+}
+
+function collectPanelLeaves(root: PanelNode): PanelLeaf[] {
+  if (root.type === 'leaf') return [root]
+  return root.children.flatMap(collectPanelLeaves)
 }
 
 function replaceLeafInPanelTree(root: PanelNode, targetPanelId: string, replacement: PanelNode): PanelNode {
@@ -616,6 +623,53 @@ function findDiscoveryConnections(
   return { connectedTileIds, byTile }
 }
 
+function cascadeDiscoveryConnections(
+  graph: DiscoveryState,
+  tileList: TileState[],
+  gridStep: number,
+): DiscoveryState {
+  const capabilitiesByTile = new Map(tileList.map(tile => [tile.id, getTileCapabilities(tile)]))
+  const refs = new Map(tileList.map(tile => [tile.id, getTileSpatialReference(tile, gridStep)]))
+  return cascadeConnectionGraph(graph, tileList, {
+    resolveCapabilities: (sourceTileId, targetTileId) => {
+      const sourceCaps = capabilitiesByTile.get(sourceTileId)
+      const targetCaps = capabilitiesByTile.get(targetTileId)
+      if (!sourceCaps || !targetCaps) return []
+      return uniq([...(targetCaps.tools ?? []), ...getCapabilityMatches(sourceCaps, targetCaps)])
+    },
+    resolveRoute: (sourceTileId, targetTileId) => {
+      const sourceRef = refs.get(sourceTileId)
+      const targetRef = refs.get(targetTileId)
+      const pair = sourceRef && targetRef ? findBestAnchorPair(sourceRef.anchors, targetRef.anchors) : null
+      return pair ? { route: getOrthogonalRoute(pair.source, pair.target, gridStep), distance: pair.distance } : null
+    },
+  })
+}
+
+function addAssociatedDiscoveryConnections(
+  graph: DiscoveryState,
+  tileList: TileState[],
+  associatedTileGroups: string[][],
+  gridStep: number,
+): DiscoveryState {
+  const capabilitiesByTile = new Map(tileList.map(tile => [tile.id, getTileCapabilities(tile)]))
+  const refs = new Map(tileList.map(tile => [tile.id, getTileSpatialReference(tile, gridStep)]))
+  return addAssociatedConnectionGroups(graph, tileList, associatedTileGroups, {
+    resolveCapabilities: (sourceTileId, targetTileId) => {
+      const sourceCaps = capabilitiesByTile.get(sourceTileId)
+      const targetCaps = capabilitiesByTile.get(targetTileId)
+      if (!sourceCaps || !targetCaps) return []
+      return uniq([...(targetCaps.tools ?? []), ...getCapabilityMatches(sourceCaps, targetCaps)])
+    },
+    resolveRoute: (sourceTileId, targetTileId) => {
+      const sourceRef = refs.get(sourceTileId)
+      const targetRef = refs.get(targetTileId)
+      const pair = sourceRef && targetRef ? findBestAnchorPair(sourceRef.anchors, targetRef.anchors) : null
+      return pair ? { route: getOrthogonalRoute(pair.source, pair.target, gridStep), distance: pair.distance } : null
+    },
+  })
+}
+
 function findBestAnchorPair(sourceAnchors: AnchorPoint[], targetAnchors: AnchorPoint[]): { source: AnchorPoint; target: AnchorPoint; distance: number } | null {
   let best: { source: AnchorPoint; target: AnchorPoint; distance: number } | null = null
   for (const source of sourceAnchors) {
@@ -671,6 +725,61 @@ function getOrthogonalRoute(source: AnchorPoint, target: AnchorPoint, step: numb
 
 function routeToSvgPath(points: { x: number; y: number }[]): string {
   return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+}
+
+function getConnectionHandlePoint(tile: TileState, side: AnchorPoint['side'] = 'right'): AnchorPoint {
+  if (side === 'left') return { x: tile.x - 18, y: tile.y + tile.height / 2, side }
+  if (side === 'top') return { x: tile.x + tile.width / 2, y: tile.y - 18, side }
+  if (side === 'bottom') return { x: tile.x + tile.width / 2, y: tile.y + tile.height + 18, side }
+  return { x: tile.x + tile.width + 18, y: tile.y + tile.height / 2, side }
+}
+
+function getNearestTileSide(tile: TileState, point: { x: number; y: number }): AnchorPoint['side'] {
+  const distances: Array<{ side: AnchorPoint['side']; distance: number }> = [
+    { side: 'left', distance: Math.abs(point.x - tile.x) },
+    { side: 'right', distance: Math.abs(point.x - (tile.x + tile.width)) },
+    { side: 'top', distance: Math.abs(point.y - tile.y) },
+    { side: 'bottom', distance: Math.abs(point.y - (tile.y + tile.height)) },
+  ]
+  distances.sort((a, b) => a.distance - b.distance)
+  return distances[0]?.side ?? 'right'
+}
+
+function getOppositeAnchorSide(side: AnchorPoint['side']): AnchorPoint['side'] {
+  if (side === 'left') return 'right'
+  if (side === 'right') return 'left'
+  if (side === 'top') return 'bottom'
+  return 'top'
+}
+
+function getTileCenter(tile: TileState): { x: number; y: number } {
+  return { x: tile.x + tile.width / 2, y: tile.y + tile.height / 2 }
+}
+
+function getBezierConnectionPath(source: { x: number; y: number }, target: { x: number; y: number }, sag = 0): string {
+  const geometry = getBezierConnectionGeometry(source, target, sag)
+  return `M ${source.x} ${source.y} C ${geometry.c1.x} ${geometry.c1.y}, ${geometry.c2.x} ${geometry.c2.y}, ${target.x} ${target.y}`
+}
+
+function getBezierConnectionGeometry(source: { x: number; y: number }, target: { x: number; y: number }, sag = 0): { c1: { x: number; y: number }; c2: { x: number; y: number } } {
+  const dx = target.x - source.x
+  const dy = target.y - source.y
+  const distance = Math.hypot(dx, dy)
+  const bend = Math.min(180, Math.max(48, distance * 0.34))
+  const direction = dx >= 0 ? 1 : -1
+  const gravity = Math.min(120, Math.max(20, distance * 0.16)) + sag
+  const c1 = { x: source.x + bend * direction, y: source.y + gravity * 0.35 }
+  const c2 = { x: target.x - bend * direction, y: target.y + gravity }
+  return { c1, c2 }
+}
+
+function getBezierConnectionMidpoint(source: { x: number; y: number }, target: { x: number; y: number }): { x: number; y: number } {
+  const dx = target.x - source.x
+  const distance = Math.hypot(dx, target.y - source.y)
+  return {
+    x: source.x + dx * 0.5,
+    y: source.y + (target.y - source.y) * 0.5 + Math.min(72, Math.max(18, distance * 0.10)),
+  }
 }
 
 function rectsOverlap(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
@@ -896,6 +1005,10 @@ function App(): JSX.Element {
   const [canvasArrangeMode, setCanvasArrangeMode] = useState<'grid' | 'column' | 'row' | null>(null)
   const [guides, setGuides] = useState<{ x?: number; y?: number }[]>([])
   const [discoveryPulses, setDiscoveryPulses] = useState<DiscoveryPulse[]>([])
+  const [autoConnectionsEnabled, setAutoConnectionsEnabled] = useState(true)
+  const [canvasPointerWorld, setCanvasPointerWorld] = useState<{ x: number; y: number } | null>(null)
+  const [hoveredConnectionHandle, setHoveredConnectionHandle] = useState<{ tileId: string; side: AnchorPoint['side'] } | null>(null)
+  const connectionHandleHideTimerRef = useRef<number | null>(null)
   const [showAgentSetup, setShowAgentSetup] = useState(false)
   // .skill install dialog — populated when user drops a .skill file on the
   // canvas or double-clicks one in Finder (forwarded via `skill:file-opened`
@@ -1019,6 +1132,7 @@ function App(): JSX.Element {
   // Automatically enables agentMode on chat tiles when they get close to compatible tiles
   useEffect(() => {
     if (!workspace?.id) return
+    if (!autoConnectionsEnabled) return
     // Skip during drag operations to avoid lag
     if (dragState.type !== null) return
 
@@ -1117,7 +1231,7 @@ function App(): JSX.Element {
         window.clearTimeout(proximityDebounceTimerRef.current)
       }
     }
-  }, [tiles, dragState.type, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, workspace?.id])
+  }, [autoConnectionsEnabled, tiles, dragState.type, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, workspace?.id])
 
   // Internal clipboard — stores tile snapshots (not OS clipboard)
   const clipboard = useRef<TileState[]>([])
@@ -1681,6 +1795,7 @@ function App(): JSX.Element {
   }), [viewport])
 
   const triggerDiscoveryPulse = useCallback((tileId: string, tileList: TileState[]) => {
+    if (!autoConnectionsEnabled) return
     const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
     const maxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
     const discovery = findDiscoveryMatch(tileId, tileList, panelTileIdsRef.current, gridStep, maxDistance)
@@ -1710,7 +1825,46 @@ function App(): JSX.Element {
       setDiscoveryPulses(prev => prev.filter(existing => existing.id !== pulse.id))
     }, pulse.durationMs + 180)
     discoveryTimeoutsRef.current.push(timeout)
-  }, [settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge])
+  }, [autoConnectionsEnabled, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge])
+
+  const findManualConnectionTarget = useCallback((sourceTileId: string, point: { x: number; y: number }): string | null => {
+    const snapPadding = 34 / Math.max(0.25, viewportRef.current.zoom)
+    const candidates = tilesRef.current
+      .filter(tile => tile.id !== sourceTileId && !panelTileIdsRef.current.has(tile.id))
+      .filter(tile => (
+        point.x >= tile.x - snapPadding
+        && point.x <= tile.x + tile.width + snapPadding
+        && point.y >= tile.y - snapPadding
+        && point.y <= tile.y + tile.height + snapPadding
+      ))
+      .map(tile => ({
+        tile,
+        distance: Math.hypot(point.x - getTileCenter(tile).x, point.y - getTileCenter(tile).y),
+      }))
+      .sort((a, b) => a.distance - b.distance)
+    return candidates[0]?.tile.id ?? null
+  }, [])
+
+  const lockConnection = useCallback((tileA: string, tileB: string) => {
+    const [a, b] = [tileA, tileB].sort()
+    if (a === b) return
+    setSuppressedConnections(prev => {
+      const next = new Set(prev)
+      next.delete(`${a}::${b}`)
+      return next
+    })
+    setLockedConnections(prev => {
+      const alreadyLocked = prev.some(lc => {
+        const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
+        return la === a && lb === b
+      })
+      if (alreadyLocked) return prev
+      const next = [...prev, { sourceTileId: a, targetTileId: b }]
+      lockedConnectionsRef.current = next
+      setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, groupsRef.current), 0)
+      return next
+    })
+  }, [persistCanvasState])
 
   const getInitialTileSize = useCallback((type: TileState['type']) => {
     const configured = settings.defaultTileSizes[type]
@@ -1838,6 +1992,41 @@ function App(): JSX.Element {
     }
     return true
   }, [])
+
+  const findPanelFileOpenLeaf = useCallback((sourceTileId: string | undefined, fileType: TileState['type']): PanelLeaf | null => {
+    const layout = panelLayoutRef.current
+    if (!layout) return null
+
+    const fallbackLeaf = getNavigationLeaf()
+    const isEditorFile = fileType === 'code' || fileType === 'note'
+    if (!sourceTileId || !isEditorFile) return fallbackLeaf
+
+    const leaves = collectPanelLeaves(layout)
+    const sourceLeafId = findLeafIdContainingTile(layout, sourceTileId)
+    const sourceLeaf = sourceLeafId ? findLeafById(layout, sourceLeafId) : null
+    const tileById = new Map(tilesRef.current.map(tile => [tile.id, tile]))
+    const hasEditorRole = (leaf: PanelLeaf): boolean => leaf.tabs.some(tileId => {
+      const tile = tileById.get(tileId)
+      return tile?.type === 'code' || tile?.type === 'note'
+    })
+    const hasBlankEditor = (leaf: PanelLeaf): boolean => leaf.tabs.some(tileId => {
+      const tile = tileById.get(tileId)
+      return (tile?.type === 'code' || tile?.type === 'note') && !tile.filePath && isPreviewTabReplaceable(tile.id)
+    })
+
+    const activeEditorLeaf = activePanelIdRef.current
+      ? leaves.find(leaf => leaf.id === activePanelIdRef.current && hasEditorRole(leaf))
+      : null
+    if (activeEditorLeaf && activeEditorLeaf.id !== sourceLeafId) return activeEditorLeaf
+
+    const blankEditorLeaf = leaves.find(leaf => leaf.id !== sourceLeafId && hasBlankEditor(leaf))
+      ?? (sourceLeaf && hasBlankEditor(sourceLeaf) ? sourceLeaf : null)
+    if (blankEditorLeaf) return blankEditorLeaf
+
+    const associatedEditorLeaf = leaves.find(leaf => leaf.id !== sourceLeafId && hasEditorRole(leaf))
+      ?? (sourceLeaf && hasEditorRole(sourceLeaf) ? sourceLeaf : null)
+    return associatedEditorLeaf ?? fallbackLeaf
+  }, [getNavigationLeaf, isPreviewTabReplaceable])
 
   const cleanupTileResources = useCallback((tileId: string) => {
     const tile = tilesRef.current.find(t => t.id === tileId)
@@ -2213,6 +2402,48 @@ function App(): JSX.Element {
     })
   }, [bringToFront])
 
+  const handleConnectionMouseDown = useCallback((e: React.MouseEvent, tile: TileState, side: AnchorPoint['side']) => {
+    e.stopPropagation()
+    e.preventDefault()
+    bringToFront(tile.id)
+    const anchor = getConnectionHandlePoint(tile, side)
+    setDragState({
+      type: 'connection',
+      sourceTileId: tile.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      side,
+      anchor,
+      current: screenToWorld(e.clientX, e.clientY),
+      targetTileId: null,
+    })
+  }, [bringToFront, screenToWorld])
+
+  const showConnectionHandleForSide = useCallback((tileId: string, side: AnchorPoint['side']) => {
+    if (connectionHandleHideTimerRef.current !== null) {
+      window.clearTimeout(connectionHandleHideTimerRef.current)
+      connectionHandleHideTimerRef.current = null
+    }
+    setHoveredConnectionHandle({ tileId, side })
+  }, [])
+
+  const scheduleConnectionHandleHide = useCallback((tileId: string, side: AnchorPoint['side']) => {
+    if (connectionHandleHideTimerRef.current !== null) {
+      window.clearTimeout(connectionHandleHideTimerRef.current)
+    }
+    connectionHandleHideTimerRef.current = window.setTimeout(() => {
+      connectionHandleHideTimerRef.current = null
+      setHoveredConnectionHandle(prev => prev?.tileId === tileId && prev.side === side ? null : prev)
+    }, 140)
+  }, [])
+
+  useEffect(() => () => {
+    if (connectionHandleHideTimerRef.current !== null) {
+      window.clearTimeout(connectionHandleHideTimerRef.current)
+      connectionHandleHideTimerRef.current = null
+    }
+  }, [])
+
   const handleResizeMouseDown = useCallback((e: React.MouseEvent, tile: TileState, dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw') => {
     e.stopPropagation()
     e.preventDefault()
@@ -2304,6 +2535,11 @@ function App(): JSX.Element {
         const curWx = (e.clientX - rect.left - viewport.tx) / viewport.zoom
         const curWy = (e.clientY - rect.top - viewport.ty) / viewport.zoom
         setDragState(prev => prev.type === 'select' ? { ...prev, curWx, curWy } : prev)
+      } else if (dragState.type === 'connection') {
+        const current = screenToWorld(e.clientX, e.clientY)
+        const targetTileId = findManualConnectionTarget(dragState.sourceTileId, current)
+        setCanvasPointerWorld(current)
+        setDragState(prev => prev.type === 'connection' ? { ...prev, current, targetTileId } : prev)
       } else if (dragState.type === 'tile') {
         const wdx = dx / viewport.zoom
         const wdy = dy / viewport.zoom
@@ -2368,7 +2604,11 @@ function App(): JSX.Element {
     }
 
     const onUp = () => {
-      if (dragState.type === 'tile') {
+      if (dragState.type === 'connection') {
+        if (dragState.targetTileId) {
+          lockConnection(dragState.sourceTileId, dragState.targetTileId)
+        }
+      } else if (dragState.type === 'tile') {
         setTiles(prev => {
           const tile = prev.find(t => t.id === dragState.tileId)
           if (!tile) { saveCanvas(prev, viewport, nextZIndex); return prev }
@@ -2473,7 +2713,7 @@ function App(): JSX.Element {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [dragState, groups, nextZIndex, saveCanvas, triggerDiscoveryPulse, viewport])
+  }, [dragState, findManualConnectionTarget, groups, lockConnection, nextZIndex, saveCanvas, screenToWorld, triggerDiscoveryPulse, viewport])
 
   // ─── Zoom — native listener needed for { passive: false } ────────────────
   useEffect(() => {
@@ -2788,6 +3028,7 @@ function App(): JSX.Element {
 
   const handleOpenFile = useCallback((filePath: string, options?: FocusOpenOptions) => {
     const persist = options?.persist === true
+    const sourceTileId = options?.sourceTileId
     setSidebarSelectedPath(filePath)
 
     // If this file is already open in a tile, focus it instead of creating a duplicate
@@ -2795,30 +3036,55 @@ function App(): JSX.Element {
     if (existing) {
       focusTileInWorkspace(existing.id)
       if (persist) pinPreviewTab(existing.id)
+      if (sourceTileId) lockConnection(sourceTileId, existing.id)
       return
     }
 
-    let targetLeaf = panelLayoutRef.current ? getNavigationLeaf() : null
-    if (targetLeaf?.previewTabId && !persist && !isPreviewTabReplaceable(targetLeaf.previewTabId)) {
-      setPanelLayout(prev => prev ? pinTabInLeaf(prev, targetLeaf!.id, targetLeaf!.previewTabId!) : prev)
-      targetLeaf = { ...targetLeaf, previewTabId: null }
-    }
-
     void resolveFileTileType(filePath).then(type => {
+      let targetLeaf = panelLayoutRef.current ? findPanelFileOpenLeaf(sourceTileId, type) : null
+      if (targetLeaf?.previewTabId && !persist && !isPreviewTabReplaceable(targetLeaf.previewTabId)) {
+        setPanelLayout(prev => prev ? pinTabInLeaf(prev, targetLeaf!.id, targetLeaf!.previewTabId!) : prev)
+        targetLeaf = { ...targetLeaf, previewTabId: null }
+      }
+
       if (!targetLeaf) {
-        addTile(type, filePath)
+        const openedTileId = addTile(type, filePath)
+        if (sourceTileId) lockConnection(sourceTileId, openedTileId)
         return
       }
 
       const newTile = buildTileState(type, filePath)
-      if (!persist && targetLeaf.previewTabId && isPreviewTabReplaceable(targetLeaf.previewTabId)) {
-        replacePreviewTile(targetLeaf.previewTabId, newTile, targetLeaf.id, { preview: true })
+      const blankEditorTileId = !persist && (type === 'code' || type === 'note')
+        ? targetLeaf.tabs.find(tileId => {
+          const tile = tilesRef.current.find(candidate => candidate.id === tileId)
+          return (tile?.type === 'code' || tile?.type === 'note') && !tile.filePath && isPreviewTabReplaceable(tile.id)
+        })
+        : undefined
+      if (blankEditorTileId) {
+        const openedTileId = replacePreviewTile(blankEditorTileId, newTile, targetLeaf.id, { preview: true })
+        if (sourceTileId) lockConnection(sourceTileId, openedTileId)
         return
       }
 
-      mountTile(newTile, { panelId: targetLeaf.id, preview: !persist })
+      if (!persist && targetLeaf.previewTabId && isPreviewTabReplaceable(targetLeaf.previewTabId)) {
+        const openedTileId = replacePreviewTile(targetLeaf.previewTabId, newTile, targetLeaf.id, { preview: true })
+        if (sourceTileId) lockConnection(sourceTileId, openedTileId)
+        return
+      }
+
+      const openedTileId = mountTile(newTile, { panelId: targetLeaf.id, preview: !persist })
+      if (sourceTileId) lockConnection(sourceTileId, openedTileId)
     })
-  }, [addTile, buildTileState, focusTileInWorkspace, getNavigationLeaf, isPreviewTabReplaceable, mountTile, pinPreviewTab, replacePreviewTile])
+  }, [addTile, buildTileState, findPanelFileOpenLeaf, focusTileInWorkspace, isPreviewTabReplaceable, lockConnection, mountTile, pinPreviewTab, replacePreviewTile])
+
+  const handleImageReplaceSource = useCallback((tileId: string, filePath: string) => {
+    const updatedTiles = tilesRef.current.map(tile => (
+      tile.id === tileId ? { ...tile, filePath } : tile
+    ))
+    tilesRef.current = updatedTiles
+    setTiles(updatedTiles)
+    saveCanvas(updatedTiles, viewportRef.current, nextZIndexRef.current)
+  }, [saveCanvas])
 
   const resolveWorkspaceForProjectPath = useCallback(async (projectPath: string | null | undefined): Promise<Workspace | null> => {
     const normalizedProjectPath = normalizeWorkspacePath(projectPath)
@@ -3490,7 +3756,7 @@ function App(): JSX.Element {
       case 'note':
         return <LazyNoteTile tileId={tile.id} filePath={tile.filePath} workspacePath={workspace?.path} />
       case 'image':
-        return tile.filePath ? <LazyImageTile filePath={tile.filePath} /> : null
+        return tile.filePath ? <LazyImageTile tileId={tile.id} workspaceId={workspace?.id ?? ''} filePath={tile.filePath} onReplaceFilePath={handleImageReplaceSource} /> : null
       case 'media':
         return tile.filePath ? <LazyMediaTile tileId={tile.id} filePath={tile.filePath} /> : null
       case 'file':
@@ -3574,7 +3840,7 @@ function App(): JSX.Element {
             workspacePath={workspace?.path ?? ''}
             width={tile.width}
             height={tile.height}
-            onOpenFile={handleOpenFile}
+            onOpenFile={(filePath, options) => handleOpenFile(filePath, { ...options, sourceTileId: tile.id })}
             onOpenWorkspace={() => { void handleOpenFolder() }}
             selectedFilePath={sidebarSelectedPath}
             connectedTerminalIds={terminalPeerIds}
@@ -3643,11 +3909,12 @@ function App(): JSX.Element {
   }, [dragState, selectedTileId])
 
   const discoveryPreview = React.useMemo(() => {
+    if (!autoConnectionsEnabled) return null
     if (!discoveryFocusTileId) return null
     const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
     const maxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
     return findDiscoveryMatch(discoveryFocusTileId, tiles, panelTileIds, gridStep, maxDistance)
-  }, [discoveryFocusTileId, panelTileIds, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles])
+  }, [autoConnectionsEnabled, discoveryFocusTileId, panelTileIds, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles])
 
   const negotiatedDiscoveryState = React.useMemo(() => {
     const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
@@ -3656,7 +3923,9 @@ function App(): JSX.Element {
 
     // Pass empty set — panel/layout tiles must stay in the graph so peers keep their tools/connections.
     // Visual hiding is handled at ambientDiscoveryRoutes level only.
-    const connectionGraph = findDiscoveryConnections(tiles, new Set(), gridStep, maxDistance)
+    const connectionGraph = autoConnectionsEnabled
+      ? findDiscoveryConnections(tiles, new Set(), gridStep, maxDistance)
+      : { connectedTileIds: new Set<string>(), byTile: new Map<string, DiscoveryCapabilityLink[]>() }
 
     // Remove suppressed connections (deleted by user, cleared when tiles move)
     for (const key of suppressedConnections) {
@@ -3721,30 +3990,49 @@ function App(): JSX.Element {
       routes.set(key, { key, route, distance: dist, locked: true })
     }
 
-    for (const tile of tiles) {
-      const discovery = findDiscoveryMatch(tile.id, tiles, new Set(), gridStep, maxDistance)
-      if (!discovery?.match) continue
+    if (autoConnectionsEnabled) {
+      for (const tile of tiles) {
+        const discovery = findDiscoveryMatch(tile.id, tiles, new Set(), gridStep, maxDistance)
+        if (!discovery?.match) continue
 
-      const key = [tile.id, discovery.match.tile.id].sort().join('::')
-      const existing = routes.get(key)
-      if (existing?.locked) continue
-      if (!existing || discovery.match.distance < existing.distance) {
-        routes.set(key, {
-          key,
-          route: discovery.match.route,
-          distance: discovery.match.distance,
-          locked: false,
-        })
+        const key = [tile.id, discovery.match.tile.id].sort().join('::')
+        if (suppressedConnections.has(key)) continue
+        const existing = routes.get(key)
+        if (existing?.locked) continue
+        if (!existing || discovery.match.distance < existing.distance) {
+          routes.set(key, {
+            key,
+            route: discovery.match.route,
+            distance: discovery.match.distance,
+            locked: false,
+          })
+        }
       }
     }
 
+    const associatedTileGroups: string[][] = []
+    if (panelLayout) {
+      const panelTileGroup = getAllTileIds(panelLayout)
+      if (panelTileGroup.length > 1) associatedTileGroups.push(panelTileGroup)
+    }
+    for (const group of groups) {
+      if (!group.layoutMode) continue
+      const memberTileIds = tiles.filter(tile => tile.groupId === group.id).map(tile => tile.id)
+      if (memberTileIds.length > 1) associatedTileGroups.push(memberTileIds)
+    }
+
+    const associatedConnectionGraph = associatedTileGroups.length > 0
+      ? addAssociatedDiscoveryConnections(connectionGraph, tiles, associatedTileGroups, gridStep)
+      : connectionGraph
+    const cascadedConnectionGraph = cascadeDiscoveryConnections(associatedConnectionGraph, tiles, gridStep)
+
     return {
-      connectedTileIds: connectionGraph.connectedTileIds,
-      byTileConnections: connectionGraph.byTile,
+      connectedTileIds: cascadedConnectionGraph.connectedTileIds,
+      byTileConnections: cascadedConnectionGraph.byTile,
       ambientRoutes: Array.from(routes.values()).map(({ key, route, locked }) => ({ key, route, locked })),
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelTileIds, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles, lockedConnections, suppressedConnections, extActionsVersion])
+  }, [autoConnectionsEnabled, panelLayout, panelTileIds, groups, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles, lockedConnections, suppressedConnections, extActionsVersion])
 
   useEffect(() => {
     const sourceTileIds = [activeChatTileId, selectedTileId].filter((value): value is string => Boolean(value))
@@ -3773,15 +4061,16 @@ function App(): JSX.Element {
     preferredBrowserOpenTargetRef.current = nextTarget
   }, [activeChatTileId, selectedTileId, negotiatedDiscoveryState.byTileConnections, tileByIdMap, tiles])
 
-  // Push peer updates to terminal tiles when discovery state changes
-  const prevTerminalPeersRef = useRef<Map<string, string>>(new Map())
+  // Push peer updates into the shared peer registry when discovery state changes.
+  // The IPC name is terminal-scoped for legacy reasons, but it updates peer-state
+  // links for any tile id and writes the generated peers.md context file.
+  const prevPeerLinksRef = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     if (!workspace?.path) return
     const validTools = new Set(getAllNodeTools().map(t => t.name))
     const newMap = new Map<string, string>()
 
     for (const tile of tiles) {
-      if (tile.type !== 'terminal') continue
       const links = negotiatedDiscoveryState.byTileConnections.get(tile.id)
       const peers = (links ?? []).map(link => {
         const tools: string[] = []
@@ -3791,24 +4080,26 @@ function App(): JSX.Element {
           if (name && validTools.has(name)) tools.push(name)
         }
         return { peerId: link.peerId, peerType: link.peerType, tools }
-      })
+      }).sort((a, b) => a.peerId.localeCompare(b.peerId))
       // Serialize to detect changes without deep-compare
       const key = JSON.stringify(peers)
+      const previousKey = prevPeerLinksRef.current.get(tile.id)
+      if (peers.length === 0 && previousKey === undefined) continue
       newMap.set(tile.id, key)
 
-      if (prevTerminalPeersRef.current.get(tile.id) !== key) {
+      if (previousKey !== key) {
         window.electron.terminal.updatePeers(tile.id, workspace.path, peers)
       }
     }
 
-    // Clean up peers.md for terminals that lost all peers
-    for (const [tileId, _prev] of prevTerminalPeersRef.current) {
+    // Clean up peers.md / peer-state entries for tiles that lost all peers or disappeared
+    for (const [tileId, _prev] of prevPeerLinksRef.current) {
       if (!newMap.has(tileId)) {
         window.electron.terminal.updatePeers(tileId, workspace!.path, [])
       }
     }
 
-    prevTerminalPeersRef.current = newMap
+    prevPeerLinksRef.current = newMap
   }, [negotiatedDiscoveryState.byTileConnections, tiles, workspace?.path])
 
   // ─── Locked connection helpers ──────────────────────────────────────────────
@@ -3858,6 +4149,49 @@ function App(): JSX.Element {
     return new Set(lockedConnections.map(lc => [lc.sourceTileId, lc.targetTileId].sort().join('::')))
   }, [lockedConnections])
 
+  const manualConnectionRenderRoutes = React.useMemo(() => {
+    const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
+    const tileMap = new Map(tiles.map(tile => [tile.id, tile]))
+    return lockedConnections.flatMap(connection => {
+      const sourceTile = tileMap.get(connection.sourceTileId)
+      const targetTile = tileMap.get(connection.targetTileId)
+      if (!sourceTile || !targetTile) return []
+      if (panelTileIds.has(sourceTile.id) || panelTileIds.has(targetTile.id)) return []
+      const sourceAnchors = getTileSpatialReference(sourceTile, gridStep).anchors
+      const targetAnchors = getTileSpatialReference(targetTile, gridStep).anchors
+      const preferredPair = findBestAnchorPair(
+        sourceAnchors.flatMap(sourceAnchor => {
+          const matchingTargets = targetAnchors.filter(targetAnchor => targetAnchor.side === getOppositeAnchorSide(sourceAnchor.side))
+          return matchingTargets.length ? [sourceAnchor] : []
+        }),
+        targetAnchors,
+      )
+      const pair = findBestAnchorPair(
+        sourceAnchors,
+        targetAnchors,
+      )
+      const facingPair = preferredPair
+        ? {
+          source: preferredPair.source,
+          target: targetAnchors.filter(targetAnchor => targetAnchor.side === getOppositeAnchorSide(preferredPair.source.side))
+            .sort((a, b) => Math.abs(a.x - preferredPair.source.x) + Math.abs(a.y - preferredPair.source.y) - (Math.abs(b.x - preferredPair.source.x) + Math.abs(b.y - preferredPair.source.y)))[0] ?? preferredPair.target,
+          distance: preferredPair.distance,
+        }
+        : pair
+      if (!facingPair) return []
+      const key = [sourceTile.id, targetTile.id].sort().join('::')
+      return [{
+        key,
+        sourceTileId: sourceTile.id,
+        targetTileId: targetTile.id,
+        source: facingPair.source,
+        target: facingPair.target,
+        path: getBezierConnectionPath(facingPair.source, facingPair.target),
+        midpoint: getBezierConnectionMidpoint(facingPair.source, facingPair.target),
+      }]
+    })
+  }, [lockedConnections, panelTileIds, settings.gridSize, settings.gridSpacingSmall, tiles])
+
   const ambientDiscoveryRoutes = React.useMemo(() => {
     // Never show routes where either endpoint is hidden (inside a layout or fullview panel)
     const visibleRoutes = negotiatedDiscoveryState.ambientRoutes.filter(r => {
@@ -3865,9 +4199,9 @@ function App(): JSX.Element {
       return !panelTileIds.has(a) && !panelTileIds.has(b)
     })
     if (discoveryFocusTileId) {
-      return visibleRoutes.filter(r => lockedConnectionKeys.has(r.key))
+      return visibleRoutes.filter(r => !lockedConnectionKeys.has(r.key) && !r.locked)
     }
-    return visibleRoutes.filter(route => !lockedConnectionKeys.has(route.key) || route.locked)
+    return visibleRoutes.filter(route => !lockedConnectionKeys.has(route.key) && !route.locked)
   }, [discoveryFocusTileId, negotiatedDiscoveryState, lockedConnectionKeys, panelTileIds])
 
   const ambientDiscoveryRenderRoutes = React.useMemo(() => {
@@ -4208,11 +4542,20 @@ function App(): JSX.Element {
   const isFirstTopWorkspaceTabSelected = showTopWorkspacePickerTab
     ? openWorkspaceTabs.length === 0
     : (hasWorkspaceTabs ? openWorkspaceTabs[0]?.id === workspace?.id : true)
-  const mainPanelBorderRadius = !sidebarCollapsed && isFirstTopWorkspaceTabSelected
-    ? `0 ${mainPanelRadius}px ${mainPanelRadius}px ${mainPanelRadius}px`
-    : mainPanelRadius
+  const mainPanelTopLeftRadius = !sidebarCollapsed && isFirstTopWorkspaceTabSelected ? 0 : mainPanelRadius
+  const mainPanelCornerRadii = {
+    topLeft: mainPanelTopLeftRadius,
+    topRight: mainPanelRadius,
+    bottomRight: mainPanelRadius,
+    bottomLeft: mainPanelRadius,
+  }
+  const mainPanelBorderRadius = `${mainPanelCornerRadii.topLeft}px ${mainPanelCornerRadii.topRight}px ${mainPanelCornerRadii.bottomRight}px ${mainPanelCornerRadii.bottomLeft}px`
+  const mainPanelBackground = panelLayout ? theme.surface.panel : canvasLayerBackground
+  const mainPanelShadow = theme.mode === 'light'
+    ? '0 8px 26px rgba(15,23,42,0.14)'
+    : '0 8px 28px rgba(0,0,0,0.32)'
   const workspaceTabLabelSize = Math.max(12, appFonts.size - 1)
-  const workspaceTabBackground = theme.surface.selection
+  const workspaceTabBackground = mainPanelBackground
   const workspaceTabInactiveBackground = 'transparent'
   const workspaceTabInactiveHoverBackground = theme.surface.hover
   const workspaceTabActiveBorder = `color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
@@ -4494,7 +4837,7 @@ function App(): JSX.Element {
                     color: isActive ? theme.accent.base : theme.text.secondary,
                     transition: 'color 0.12s ease, background 0.12s ease, border-color 0.12s ease',
                     border: isActive ? `1px solid ${workspaceTabActiveBorder}` : '1px solid transparent',
-                    //borderBottom: isActive ? 'none' : '1px solid transparent',
+                    borderBottom: isActive ? 'none' : '1px solid transparent',
                     boxSizing: 'border-box',
                     position: 'relative',
                     zIndex: isActive ? 1 : 0,
@@ -4812,13 +5155,13 @@ function App(): JSX.Element {
             bottom: mainPanelBottomInset,
             // Focus mode still needs a filled rounded surface so the outer
             // corners and split gutters don't reveal the app backdrop.
-            background: panelLayout ? theme.surface.panelMuted : canvasLayerBackground,
+            background: mainPanelBackground,
             borderRadius: mainPanelBorderRadius,
             // Panel mode draws per-leaf hairline edges. Keeping the shared
             // shell border underneath causes a second line to peek through at
             // rounded outer corners.
             border: panelLayout ? '0.5px solid transparent' : `0.5px solid ${theme.border.subtle}`,
-            boxShadow: theme.shadow.panel,
+            boxShadow: mainPanelShadow,
             cursor: isDraggingCanvas ? 'grabbing' : (spaceHeld.current ? 'grab' : 'default'),
             userSelect: 'none',
             WebkitUserSelect: 'none',
@@ -4829,8 +5172,14 @@ function App(): JSX.Element {
           onDoubleClick={handleCanvasDoubleClick}
           onContextMenu={handleCanvasContextMenu}
           onWheel={handleWheel}
-          onMouseMove={e => updateCanvasGlow(e.clientX, e.clientY)}
-          onMouseLeave={hideCanvasGlow}
+          onMouseMove={e => {
+            updateCanvasGlow(e.clientX, e.clientY)
+            setCanvasPointerWorld(screenToWorld(e.clientX, e.clientY))
+          }}
+          onMouseLeave={() => {
+            hideCanvasGlow()
+            setCanvasPointerWorld(null)
+          }}
           onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
           onDrop={e => {
             e.preventDefault()
@@ -4906,6 +5255,63 @@ function App(): JSX.Element {
             }
           }}
         >
+          {!panelLayout && (
+            <div
+              onMouseDown={e => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                right: 12,
+                top: 12,
+                zIndex: 100000,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '7px 9px',
+                borderRadius: 8,
+                border: `1px solid ${theme.border.subtle}`,
+                background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : 'rgba(18,22,26,0.82)',
+                boxShadow: theme.mode === 'light' ? '0 8px 20px rgba(15,23,42,0.12)' : '0 8px 22px rgba(0,0,0,0.26)',
+                backdropFilter: 'blur(12px)',
+                color: theme.text.secondary,
+                fontSize: appFonts.secondarySize,
+              }}
+            >
+              <Link2 size={13} strokeWidth={2} aria-hidden="true" />
+              <span>Automatic</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoConnectionsEnabled}
+                title="Toggle automatic proximity connections"
+                onClick={() => setAutoConnectionsEnabled(value => !value)}
+                style={{
+                  width: 34,
+                  height: 18,
+                  borderRadius: 999,
+                  border: `1px solid ${autoConnectionsEnabled ? `rgba(${dsc.line}, 0.48)` : theme.border.default}`,
+                  background: autoConnectionsEnabled ? `rgba(${dsc.line}, 0.24)` : theme.surface.panelMuted,
+                  padding: 2,
+                  cursor: 'pointer',
+                  position: 'relative',
+                }}
+              >
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 2,
+                    left: autoConnectionsEnabled ? 18 : 2,
+                    width: 12,
+                    height: 12,
+                    borderRadius: '50%',
+                    background: autoConnectionsEnabled ? `rgb(${dsc.line})` : theme.text.disabled,
+                    transition: 'left 0.14s ease, background 0.14s ease',
+                    boxShadow: autoConnectionsEnabled ? `0 0 8px rgba(${dsc.line}, 0.36)` : 'none',
+                  }}
+                />
+              </button>
+            </div>
+          )}
+
           {/* Canvas content wrapper — fades out when in expanded/tabbed mode */}
           <div style={{
             position: 'absolute', inset: 0,
@@ -5388,8 +5794,21 @@ function App(): JSX.Element {
             )}
 
             {/* Connection pills — rendered in screen-space under tiles, like edges */}
-            {!panelLayout && (ambientDiscoveryRenderRoutes.length > 0 || discoveryPreview?.match) && (
+            {!panelLayout && (manualConnectionRenderRoutes.length > 0 || ambientDiscoveryRenderRoutes.length > 0 || discoveryPreview?.match) && (
               <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: discoveryPillZIndex }}>
+                {manualConnectionRenderRoutes.map(connection => (
+                  <Suspense key={`manual-pill-${connection.key}`} fallback={null}>
+                    <LazyConnectionPill
+                      x={connection.midpoint.x}
+                      y={connection.midpoint.y}
+                      zoom={viewport.zoom}
+                      isLocked={true}
+                      onToggleLock={() => toggleConnectionLock(connection.sourceTileId, connection.targetTileId)}
+                      onDelete={() => deleteConnection(connection.sourceTileId, connection.targetTileId)}
+                      dscLine={dsc.line}
+                    />
+                  </Suspense>
+                ))}
                 {/* Ambient route pills */}
                 {ambientDiscoveryRenderRoutes.map(connection => {
                   const mid = getRouteMidpoint(connection.displayRoute)
@@ -5438,11 +5857,25 @@ function App(): JSX.Element {
                 (dragState.type === 'resize' && dragState.tileId === tile.id) ||
                 ((dragState.type === 'group' || dragState.type === 'group-resize') && tile.groupId === dragState.groupId)
               const activeTile = isActiveDrag ? { ...tile, zIndex: 99990 } : tile
+              const isConnectionSource = dragState.type === 'connection' && dragState.sourceTileId === tile.id
+              const isConnectionTarget = dragState.type === 'connection' && dragState.targetTileId === tile.id
+              const hoveredSide = hoveredConnectionHandle?.tileId === tile.id ? hoveredConnectionHandle.side : null
+              const showConnectionHandle = isConnectionSource || Boolean(hoveredSide)
+              const activeHandleSide = isConnectionSource
+                ? dragState.side
+                : hoveredSide
+                  ? hoveredSide
+                : getNearestTileSide(tile, canvasPointerWorld ?? getTileCenter(tile))
+              const handlePoint = getConnectionHandlePoint(tile, activeHandleSide)
+              const handleSize = 22 / Math.max(0.25, viewport.zoom)
+              const sensorThickness = 52 / Math.max(0.25, viewport.zoom)
+              const sensorOverlap = 16 / Math.max(0.25, viewport.zoom)
               return (
                 <Suspense
                   key={tile.id}
                   fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12, background: theme.surface.panel }}>Loading block…</div>}
                 >
+                  <>
                   <TileColorProvider>
                   <LazyTileChrome
                     tile={activeTile}
@@ -5465,12 +5898,108 @@ function App(): JSX.Element {
                     </Suspense>
                   </LazyTileChrome>
                   </TileColorProvider>
+                  {isConnectionTarget && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: tile.x - 7 / viewport.zoom,
+                        top: tile.y - 7 / viewport.zoom,
+                        width: tile.width + 14 / viewport.zoom,
+                        height: tile.height + 14 / viewport.zoom,
+                        borderRadius: 12,
+                        border: `${2 / Math.max(0.25, viewport.zoom)}px solid rgba(${dsc.line}, 0.78)`,
+                        boxShadow: `0 0 ${18 / Math.max(0.25, viewport.zoom)}px rgba(${dsc.line}, 0.24)`,
+                        pointerEvents: 'none',
+                        zIndex: 99991,
+                      }}
+                    />
+                  )}
+                  {(['left', 'right', 'top', 'bottom'] as const).map(side => {
+                    const sensorStyle: React.CSSProperties = {
+                      position: 'absolute',
+                      pointerEvents: dragState.type === 'connection' ? 'none' : 'all',
+                      zIndex: 99991,
+                    }
+                    if (side === 'left') Object.assign(sensorStyle, {
+                      left: tile.x - sensorThickness,
+                      top: tile.y - sensorOverlap,
+                      width: sensorThickness,
+                      height: tile.height + sensorOverlap * 2,
+                    })
+                    if (side === 'right') Object.assign(sensorStyle, {
+                      left: tile.x + tile.width,
+                      top: tile.y - sensorOverlap,
+                      width: sensorThickness,
+                      height: tile.height + sensorOverlap * 2,
+                    })
+                    if (side === 'top') Object.assign(sensorStyle, {
+                      left: tile.x - sensorOverlap,
+                      top: tile.y - sensorThickness,
+                      width: tile.width + sensorOverlap * 2,
+                      height: sensorThickness,
+                    })
+                    if (side === 'bottom') Object.assign(sensorStyle, {
+                      left: tile.x - sensorOverlap,
+                      top: tile.y + tile.height,
+                      width: tile.width + sensorOverlap * 2,
+                      height: sensorThickness,
+                    })
+                    return (
+                      <div
+                        key={`${tile.id}-link-sensor-${side}`}
+                        style={sensorStyle}
+                        onMouseEnter={() => showConnectionHandleForSide(tile.id, side)}
+                        onMouseMove={e => {
+                          showConnectionHandleForSide(tile.id, side)
+                          setCanvasPointerWorld(screenToWorld(e.clientX, e.clientY))
+                        }}
+                        onMouseLeave={() => scheduleConnectionHandleHide(tile.id, side)}
+                      />
+                    )
+                  })}
+                  <button
+                    type="button"
+                    title="Drag to link blocks"
+                    aria-label="Drag to link blocks"
+                    onMouseDown={e => handleConnectionMouseDown(e, tile, activeHandleSide)}
+                    style={{
+                      position: 'absolute',
+                      left: handlePoint.x - handleSize / 2,
+                      top: handlePoint.y - handleSize / 2,
+                      width: handleSize,
+                      height: handleSize,
+                      borderRadius: '50%',
+                      border: `${1.5 / Math.max(0.25, viewport.zoom)}px solid rgba(${dsc.line}, ${isConnectionSource ? 0.9 : 0.48})`,
+                      background: isConnectionSource ? `rgba(${dsc.line}, 0.28)` : theme.surface.panelElevated,
+                      color: dsc.text,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      cursor: isConnectionSource ? 'grabbing' : 'grab',
+                      opacity: showConnectionHandle ? 1 : 0,
+                      pointerEvents: showConnectionHandle ? 'all' : 'none',
+                      zIndex: 99992,
+                      boxShadow: isConnectionSource ? `0 0 ${14 / Math.max(0.25, viewport.zoom)}px rgba(${dsc.line}, 0.34)` : '0 2px 8px rgba(0,0,0,0.22)',
+                    }}
+                    onMouseEnter={() => showConnectionHandleForSide(tile.id, activeHandleSide)}
+                    onMouseMove={e => {
+                      showConnectionHandleForSide(tile.id, activeHandleSide)
+                      setCanvasPointerWorld(screenToWorld(e.clientX, e.clientY))
+                    }}
+                    onMouseLeave={() => {
+                      if (!isConnectionSource) scheduleConnectionHandleHide(tile.id, activeHandleSide)
+                    }}
+                  >
+                    <Link2 size={Math.max(8, 11 / Math.max(0.25, viewport.zoom))} strokeWidth={2.2} aria-hidden="true" />
+                  </button>
+                  </>
                 </Suspense>
               )
             })}
 
-            {!panelLayout && (ambientDiscoveryRenderRoutes.length > 0 || discoveryPreview?.match || discoveryPulses.length > 0) && (
-              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: discoveryHighlightZIndex }}>
+            {!panelLayout && (manualConnectionRenderRoutes.length > 0 || ambientDiscoveryRenderRoutes.length > 0 || discoveryPreview?.match || discoveryPulses.length > 0 || dragState.type === 'connection') && (
+              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: dragState.type === 'connection' ? 99996 : discoveryHighlightZIndex }}>
                 {(() => {
                   const previewPairKey = discoveryPreview?.match && discoveryFocusTileId
                     ? [discoveryFocusTileId, discoveryPreview.match.tile.id].sort().join('::')
@@ -5552,7 +6081,75 @@ function App(): JSX.Element {
                   )
                 })()}
 
-                <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0, overflow: 'visible' }}>
+                <svg
+                  width={200000}
+                  height={200000}
+                  viewBox="-100000 -100000 200000 200000"
+                  style={{ position: 'absolute', left: -100000, top: -100000, overflow: 'visible', pointerEvents: 'none' }}
+                >
+                  {manualConnectionRenderRoutes.map(connection => (
+                    <g key={`manual-route-${connection.key}`}>
+                      <path
+                        d={connection.path}
+                        fill="none"
+                        stroke={`rgba(${dsc.line}, 0.20)`}
+                        strokeWidth={7 / Math.max(0.35, viewport.zoom)}
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d={connection.path}
+                        fill="none"
+                        stroke={`rgba(${dsc.line}, 0.78)`}
+                        strokeWidth={2.5 / Math.max(0.35, viewport.zoom)}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeDasharray={`${1 / Math.max(0.35, viewport.zoom)} ${10 / Math.max(0.35, viewport.zoom)}`}
+                        style={{ filter: `drop-shadow(0 0 7px rgba(${dsc.line}, 0.18))` }}
+                      />
+                      <circle cx={connection.source.x} cy={connection.source.y} r={4.2 / Math.max(0.35, viewport.zoom)} fill={`rgba(${dsc.line}, 0.88)`} />
+                      <circle cx={connection.target.x} cy={connection.target.y} r={4.2 / Math.max(0.35, viewport.zoom)} fill={`rgba(${dsc.line}, 0.88)`} />
+                    </g>
+                  ))}
+                  {dragState.type === 'connection' && (() => {
+                    const targetTile = dragState.targetTileId ? tileByIdMap.get(dragState.targetTileId) : null
+                    const targetAnchors = targetTile
+                      ? getTileSpatialReference(targetTile, Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)).anchors
+                      : []
+                    const facingTargetAnchors = targetAnchors.filter(anchor => anchor.side === getOppositeAnchorSide(dragState.side))
+                    const targetPoint = targetTile
+                      ? findBestAnchorPair([dragState.anchor], facingTargetAnchors.length ? facingTargetAnchors : targetAnchors)?.target ?? dragState.current
+                      : dragState.current
+                    const dx = dragState.current.x - dragState.anchor.x
+                    const dy = dragState.current.y - dragState.anchor.y
+                    const sag = Math.sin((dx + dy) * 0.035) * 20
+                    const path = getBezierConnectionPath(dragState.anchor, targetPoint, sag)
+                    return (
+                      <g>
+                        <path
+                          d={path}
+                          fill="none"
+                          stroke={`rgba(${dsc.line}, 0.18)`}
+                          strokeWidth={10 / Math.max(0.35, viewport.zoom)}
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d={path}
+                          fill="none"
+                          stroke={`rgba(${dsc.line}, 0.86)`}
+                          strokeWidth={3 / Math.max(0.35, viewport.zoom)}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeDasharray={`${1 / Math.max(0.35, viewport.zoom)} ${10 / Math.max(0.35, viewport.zoom)}`}
+                          style={{
+                            filter: `drop-shadow(0 0 10px rgba(${dsc.line}, 0.20))`,
+                            transition: 'd 0.08s linear',
+                          }}
+                        />
+                        <circle cx={dragState.anchor.x} cy={dragState.anchor.y} r={4.5 / Math.max(0.35, viewport.zoom)} fill={`rgba(${dsc.line}, 0.95)`} />
+                        <circle cx={targetPoint.x} cy={targetPoint.y} r={targetTile ? 6 / Math.max(0.35, viewport.zoom) : 4 / Math.max(0.35, viewport.zoom)} fill={`rgba(${dsc.line}, ${targetTile ? 0.95 : 0.58})`} />
+                      </g>
+                    )
+                  })()}
                   {discoveryPulses.map(pulse => {
                     const sourceTile = tileByIdMap.get(pulse.sourceTileId)
                     const targetTile = tileByIdMap.get(pulse.targetTileId)
@@ -5774,6 +6371,7 @@ function App(): JSX.Element {
               <LazyPanelLayout
                 root={panelLayout}
                 insetBottom={0}
+                outerRadii={mainPanelCornerRadii}
                 getTileLabel={getPanelTileLabel}
                 renderTile={(tileId) => {
                   const t = tiles.find(ti => ti.id === tileId)

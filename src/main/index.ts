@@ -31,6 +31,7 @@ import { registerExtensionIPC } from './ipc/extensions'
 import { registerChromeSyncIPC } from './ipc/chromeSync'
 import { registerLocalProxyIPC } from './ipc/localProxy'
 import { registerDreamingIPC } from './ipc/dreaming'
+import { registerImageIPC } from './ipc/image'
 import { applyWindowAppearance, getWindowAppearanceOptions } from './windowAppearance'
 import { migrateLegacyStorage } from './migration'
 import { APP_ID, APP_NAME, CONTEX_HOME } from './paths'
@@ -404,6 +405,7 @@ app.whenReady().then(async () => {
   registerJobsIPC()
   registerSkillsIPC()
   registerDreamingIPC()
+  registerImageIPC()
   registerFileProtocol()
   registerAgentPathsIPC()
   registerChromeSyncIPC()

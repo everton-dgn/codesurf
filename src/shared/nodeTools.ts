@@ -342,6 +342,50 @@ export const NODE_MCP_TOOLSETS: Record<string, NodeMCPTool[]> = {
         required: ['tile_id', 'note'],
       },
     },
+    {
+      name: 'image_edit_request',
+      description: 'Edit a connected image tile through the configured image provider. On success the canvas replaces the image source; on failure the tool returns the provider/setup error.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tile_id: { type: 'string', description: 'Target image tile id' },
+          prompt: { type: 'string', description: 'Edit instruction, e.g. "add a caption at the bottom"' },
+          provider: { type: 'string', description: 'Preferred image provider, e.g. gemini, openai, local' },
+          model: { type: 'string', description: 'Preferred image model, e.g. gemini-2.5-flash-image' },
+          mask_path: { type: 'string', description: 'Optional mask image path for inpainting/edit regions' },
+          output_path: { type: 'string', description: 'Optional desired output file path' },
+        },
+        required: ['tile_id', 'prompt'],
+      },
+    },
+    {
+      name: 'image_generate_variation',
+      description: 'Generate a provider-backed variation of a connected image tile. On success the canvas replaces the image source; on failure the tool returns the provider/setup error.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tile_id: { type: 'string', description: 'Target image tile id' },
+          prompt: { type: 'string', description: 'Optional direction for the variation' },
+          provider: { type: 'string', description: 'Preferred image provider, e.g. gemini, openai, local' },
+          model: { type: 'string', description: 'Preferred image model, e.g. gemini-2.5-flash-image' },
+          output_path: { type: 'string', description: 'Optional desired output file path' },
+        },
+        required: ['tile_id'],
+      },
+    },
+    {
+      name: 'image_replace_source',
+      description: 'Replace the visible source file for a connected image tile after an image edit or variation has been written to disk.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tile_id: { type: 'string', description: 'Target image tile id' },
+          file_path: { type: 'string', description: 'Absolute path to the replacement image file' },
+          note: { type: 'string', description: 'Optional note describing the edit that produced this file' },
+        },
+        required: ['tile_id', 'file_path'],
+      },
+    },
   ],
   universal: [
     {

@@ -556,7 +556,7 @@ test('daemon chat jobs persist detached background mode in job metadata', async 
   }, 5_000, 50)
 
   assert.equal(completed.runMode, 'background')
-  assert.match(String(completed.error ?? ''), /only implemented for Claude and Codex/i)
+  assert.match(String(completed.error ?? ''), /only implemented for Claude, Codex, OpenCode, and Hermes/i)
 })
 
 test('daemon lists external CodeSurf sessions and invalidates the external-session cache route', async t => {
@@ -780,7 +780,7 @@ test('daemon runs a persisted chat job timeline and replays events for completed
   assert.equal(state.status, 200)
   assert.equal(state.payload.id, jobId)
   assert.equal(state.payload.status, 'failed')
-  assert.match(state.payload.error, /only implemented for Claude and Codex/i)
+  assert.match(state.payload.error, /only implemented for Claude, Codex, OpenCode, and Hermes/i)
 
   const timelineResponse = await fetch(`http://127.0.0.1:${daemon.pidInfo.port}/chat/job/events?jobId=${encodeURIComponent(jobId)}&since=0`, {
     headers: {
@@ -808,7 +808,7 @@ test('daemon runs a persisted chat job timeline and replays events for completed
   const errorEvent = replayedEvents.at(-2)
   assert.equal(errorEvent?.jobId, jobId)
   assert.equal(errorEvent?.type, 'error')
-  assert.match(errorEvent?.error ?? '', /only implemented for Claude and Codex/i)
+  assert.match(errorEvent?.error ?? '', /only implemented for Claude, Codex, OpenCode, and Hermes/i)
 
   const doneEvent = replayedEvents.at(-1)
   assert.equal(doneEvent?.jobId, jobId)
@@ -876,6 +876,254 @@ exit 0
   assert.match(rawTimeline, /"type":"text","text":"TEST OK"/)
   assert.match(rawTimeline, /"type":"done"/)
   assert.doesNotMatch(rawTimeline, /Reading additional input from stdin/)
+})
+
+test('daemon hermes jobs run through hermes chat with split provider/model args', async t => {
+  const fakeBinDir = await makeTestTempDir('codesurfd-fake-hermes-bin-')
+  const fakeHermesPath = join(fakeBinDir, 'hermes')
+  await writeFile(fakeHermesPath, `#!/bin/sh
+set -eu
+if [ "\${1:-}" != "chat" ]; then
+  printf '%s\n' "expected hermes chat" >&2
+  exit 2
+fi
+shift
+model=""
+provider=""
+source=""
+toolsets=""
+quiet=0
+query_seen=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --query)
+      query_seen=1
+      shift 2
+      ;;
+    --quiet)
+      quiet=1
+      shift
+      ;;
+    --source)
+      source="$2"
+      shift 2
+      ;;
+    --model)
+      model="$2"
+      shift 2
+      ;;
+    --provider)
+      provider="$2"
+      shift 2
+      ;;
+    --toolsets)
+      toolsets="$2"
+      shift 2
+      ;;
+    --resume)
+      shift 2
+      ;;
+    --ignore-rules|--yolo)
+      shift
+      ;;
+    *)
+      printf '%s\n' "unexpected arg: $1" >&2
+      exit 3
+      ;;
+  esac
+done
+if [ "$query_seen" != "1" ] || [ "$quiet" != "1" ] || [ "$source" != "tool" ]; then
+  printf '%s\n' "missing hermes programmatic chat flags" >&2
+  exit 4
+fi
+if [ "$provider" != "openai-codex" ] || [ "$model" != "gpt-5.5" ]; then
+  printf '%s\n' "expected split openai-codex/gpt-5.5 got provider=$provider model=$model" >&2
+  exit 5
+fi
+if [ "$toolsets" != "terminal,file" ]; then
+  printf '%s\n' "expected terminal,file toolsets got $toolsets" >&2
+  exit 6
+fi
+printf '%s\n' 'session_id: hermes-session-test'
+printf '%s\n' 'HERMES OK'
+exit 0
+`, 'utf8')
+  await chmod(fakeHermesPath, 0o755)
+
+  const daemon = await startDaemon({
+    env: {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+    },
+  })
+
+  t.after(async () => {
+    await daemon.stop()
+    await rm(fakeBinDir, { recursive: true, force: true })
+  })
+
+  const start = await daemon.request('/chat/job/start', {
+    body: {
+      request: {
+        provider: 'hermes',
+        model: 'openai-codex/gpt-5.5',
+        mode: 'terminal',
+        cardId: 'chat-hermes-daemon',
+        workspaceDir: daemon.homeDir,
+        messages: [
+          { role: 'user', content: 'test hermes daemon execution' },
+        ],
+      },
+    },
+  })
+
+  assert.equal(start.status, 200)
+  const jobId = start.payload.id
+  assert.equal(start.payload.taskLabel, 'test hermes daemon execution')
+
+  const state = await waitFor(async () => {
+    const next = await daemon.request(`/chat/job/state?jobId=${encodeURIComponent(jobId)}`)
+    if (next.status === 404) return null
+    return next.payload?.status === 'running' ? null : next
+  })
+
+  assert.equal(state.status, 200)
+  assert.equal(state.payload.status, 'completed')
+  assert.equal(state.payload.error, null)
+  assert.equal(state.payload.sessionId, 'hermes-session-test')
+
+  const rawTimeline = await readFile(join(daemon.homeDir, 'timelines', `${jobId}.jsonl`), 'utf8')
+  assert.match(rawTimeline, /"type":"session","sessionId":"hermes-session-test"/)
+  assert.match(rawTimeline, /"type":"text","text":"HERMES OK"/)
+  assert.match(rawTimeline, /"type":"done"/)
+  assert.doesNotMatch(rawTimeline, /only implemented for Claude, Codex, OpenCode, and Hermes/i)
+})
+
+test('daemon hermes failures sanitize credential-looking diagnostics', async t => {
+  const fakeBinDir = await makeTestTempDir('codesurfd-fake-hermes-fail-bin-')
+  const fakeHermesPath = join(fakeBinDir, 'hermes')
+  await writeFile(fakeHermesPath, `#!/bin/sh
+printf '%s\n' 'HERMES_API_KEY=sk-test-secret' >&2
+printf '%s\n' 'Authorization: Bearer raw-secret-token' >&2
+printf '%s\n' 'TOKEN=stdout-secret'
+exit 7
+`, 'utf8')
+  await chmod(fakeHermesPath, 0o755)
+
+  const daemon = await startDaemon({
+    env: {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+    },
+  })
+
+  t.after(async () => {
+    await daemon.stop()
+    await rm(fakeBinDir, { recursive: true, force: true })
+  })
+
+  const start = await daemon.request('/chat/job/start', {
+    body: {
+      request: {
+        provider: 'hermes',
+        model: 'openai-codex/gpt-5.5',
+        mode: 'terminal',
+        cardId: 'chat-hermes-daemon-failure',
+        workspaceDir: daemon.homeDir,
+        messages: [
+          { role: 'user', content: 'test hermes daemon failure sanitization' },
+        ],
+      },
+    },
+  })
+
+  assert.equal(start.status, 200)
+  const jobId = start.payload.id
+  const state = await waitFor(async () => {
+    const next = await daemon.request(`/chat/job/state?jobId=${encodeURIComponent(jobId)}`)
+    if (next.status === 404) return null
+    return next.payload?.status === 'running' ? null : next
+  })
+
+  assert.equal(state.status, 200)
+  assert.equal(state.payload.status, 'failed')
+  assert.match(state.payload.error, /HERMES_API_KEY=\[REDACTED\]/)
+  assert.match(state.payload.error, /Authorization: Bearer \[REDACTED\]/i)
+  assert.doesNotMatch(state.payload.error, /sk-test-secret|raw-secret-token|stdout-secret/)
+
+  const rawTimeline = await readFile(join(daemon.homeDir, 'timelines', `${jobId}.jsonl`), 'utf8')
+  assert.match(rawTimeline, /"type":"error"/)
+  assert.doesNotMatch(rawTimeline, /sk-test-secret|raw-secret-token|stdout-secret/)
+})
+
+test('daemon opencode jobs run through opencode run json output', async t => {
+  const fakeBinDir = await makeTestTempDir('codesurfd-fake-opencode-bin-')
+  const fakeOpenCodePath = join(fakeBinDir, 'opencode')
+  await writeFile(fakeOpenCodePath, `#!/bin/sh
+set -eu
+if [ "\${1:-}" != "run" ]; then
+  printf '%s\n' "expected opencode run" >&2
+  exit 2
+fi
+has_format=0
+has_json=0
+for arg in "$@"; do
+  if [ "$arg" = "--format" ]; then has_format=1; fi
+  if [ "$arg" = "json" ]; then has_json=1; fi
+done
+if [ "$has_format" != "1" ] || [ "$has_json" != "1" ]; then
+  printf '%s\n' "expected --format json" >&2
+  exit 3
+fi
+printf '%s\n' '{"type":"session","sessionID":"opencode-session-test"}'
+printf '%s\n' '{"type":"message","role":"assistant","content":[{"type":"text","text":"OPENCODE OK"}]}'
+exit 0
+`, 'utf8')
+  await chmod(fakeOpenCodePath, 0o755)
+
+  const daemon = await startDaemon({
+    env: {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+    },
+  })
+
+  t.after(async () => {
+    await daemon.stop()
+    await rm(fakeBinDir, { recursive: true, force: true })
+  })
+
+  const start = await daemon.request('/chat/job/start', {
+    body: {
+      request: {
+        provider: 'opencode',
+        model: 'anthropic/claude-sonnet-4-6',
+        cardId: 'chat-opencode-daemon',
+        workspaceDir: daemon.homeDir,
+        messages: [
+          { role: 'user', content: 'test opencode daemon execution' },
+        ],
+      },
+    },
+  })
+
+  assert.equal(start.status, 200)
+  const jobId = start.payload.id
+  assert.equal(start.payload.taskLabel, 'test opencode daemon execution')
+
+  const state = await waitFor(async () => {
+    const next = await daemon.request(`/chat/job/state?jobId=${encodeURIComponent(jobId)}`)
+    if (next.status === 404) return null
+    return next.payload?.status === 'running' ? null : next
+  })
+
+  assert.equal(state.status, 200)
+  assert.equal(state.payload.status, 'completed')
+  assert.equal(state.payload.error, null)
+  assert.equal(state.payload.sessionId, 'opencode-session-test')
+
+  const rawTimeline = await readFile(join(daemon.homeDir, 'timelines', `${jobId}.jsonl`), 'utf8')
+  assert.match(rawTimeline, /"type":"session","sessionId":"opencode-session-test"/)
+  assert.match(rawTimeline, /"type":"text","text":"OPENCODE OK"/)
+  assert.match(rawTimeline, /"type":"done"/)
+  assert.doesNotMatch(rawTimeline, /only implemented for Claude, Codex, OpenCode, and Hermes/i)
 })
 
 test('daemon codex file changes create restorable checkpoint with daemon-local workspace roots', async t => {

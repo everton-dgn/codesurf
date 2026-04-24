@@ -24,6 +24,7 @@ import {
 import { getSessionOpenIntent } from './sidebar/session-open'
 import { SIDEBAR_MENU_WIDTH, SidebarItem, SidebarMenuPortal, ThreadMenuItem, ThreadMenuSectionLabel } from './sidebar/ui'
 import { buildNestedSessionList, deriveProjectsFromWorkspaces, formatSessionTitleForSidebar, getProjectDisplayLabel, getSessionAgentIcon, getSessionAgentKey, getSessionAgentLabel, getWorkspaceProjectPaths, isCronSession, isSubagentSession, normalizeSidebarPath, RESOURCE_ITEMS, SpinnerIcon } from './sidebar/utils'
+import { isInternalMaintenanceSession } from './sidebar/session-filters'
 import { applySessionPromotions, isSessionActive, sortProjectEntriesByRecentSession } from './sidebar/session-ordering'
 import { type ProjectListEntry, SESSION_PAGE_SIZE, type SessionEntry, type SessionProjectGroup, type ThreadOrganizeMode, type ThreadSortMode } from './sidebar/types'
 
@@ -38,6 +39,8 @@ interface SidebarTextDialogState {
   submit: (value: string) => Promise<void> | void
 }
 const GENERIC_SESSION_SOURCE_DETAILS = new Set(['transcript', 'conversation', 'project session', 'user session'])
+const SESSION_READ_WATERMARKS_STORAGE_KEY = 'codesurf.sidebar.sessionReadWatermarks.v1'
+type SessionReadWatermarks = Record<string, number>
 
 function getSessionSidebarIndicatorColor(session: SessionEntry, theme: ReturnType<typeof useTheme>): string {
   const key = getSessionAgentKey(session)
@@ -48,6 +51,46 @@ function getSessionSidebarIndicatorColor(session: SessionEntry, theme: ReturnTyp
   if (key === 'opencode') return '#64d2ff'
   if (key === 'codesurf') return '#95a1b3'
   return theme.accent.base
+}
+
+function getSessionActivityKey(session: SessionEntry): string {
+  const agentKey = getSessionAgentKey(session)
+  const sessionId = session.sessionId?.trim()
+  if (sessionId) return `${agentKey}:session:${sessionId}`
+  const filePath = session.filePath?.trim()
+  if (filePath) return `${agentKey}:file:${filePath}`
+  return `${agentKey}:entry:${session.workspaceId}:${session.id}`
+}
+
+function loadSessionReadWatermarks(): SessionReadWatermarks {
+  try {
+    const raw = window.localStorage.getItem(SESSION_READ_WATERMARKS_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const next: SessionReadWatermarks = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof key !== 'string' || typeof value !== 'number') continue
+      if (!Number.isFinite(value) || value <= 0) continue
+      next[key] = value
+    }
+    return next
+  } catch {
+    return {}
+  }
+}
+
+function saveSessionReadWatermarks(watermarks: SessionReadWatermarks): void {
+  try {
+    window.localStorage.setItem(SESSION_READ_WATERMARKS_STORAGE_KEY, JSON.stringify(watermarks))
+  } catch {
+    // Ignore storage failures; unread dots are a non-critical UI affordance.
+  }
+}
+
+function hasUnreadSessionUpdate(session: SessionEntry, watermarks: SessionReadWatermarks): boolean {
+  const seenAt = watermarks[getSessionActivityKey(session)] ?? session.updatedAt
+  return session.updatedAt > seenAt
 }
 
 function SessionSidebarIndicator({
@@ -169,6 +212,7 @@ function SessionSidebarRow({
     : active
       ? theme.text.secondary
       : theme.text.disabled
+  const leadingIconLeft = Math.max(0, 8 + indent * indentUnit - 14)
 
   return (
     <div
@@ -200,10 +244,15 @@ function SessionSidebarRow({
       {icon && (
         <span
           style={{
+            position: 'absolute',
+            left: leadingIconLeft,
+            top: '50%',
+            transform: 'translateY(-50%)',
             color: active ? theme.accent.base : muted ? theme.text.disabled : theme.text.muted,
-            flexShrink: 0,
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none',
           }}
         >
           {icon}
@@ -514,11 +563,13 @@ export function Sidebar({
   const [generatingSessionTitleIds, setGeneratingSessionTitleIds] = useState<SessionTitleGenerationState>({})
   const [visibleSessionCount, setVisibleSessionCount] = useState(SESSION_PAGE_SIZE)
   const [sessionPromotions, setSessionPromotions] = useState<Record<string, number>>({})
+  const [sessionReadWatermarks, setSessionReadWatermarks] = useState<SessionReadWatermarks>(() => loadSessionReadWatermarks())
   const [textDialog, setTextDialog] = useState<SidebarTextDialogState | null>(null)
   const threadMenuRef = useRef<HTMLDivElement>(null)
   const sessionLoadRequestSeqRef = useRef(0)
   const latestSessionLoadTokenByWorkspaceRef = useRef(new Map<string, number>())
   const lastSessionLoadAtByWorkspaceRef = useRef(new Map<string, number>())
+  const readSeededWorkspaceIdsRef = useRef(new Set<string>())
 
   useEffect(() => {
     let cancelled = false
@@ -620,6 +671,23 @@ export function Sidebar({
     scrollSessionsToTop()
   }, [scrollSessionsToTop])
 
+  const markSessionRead = useCallback((session: SessionEntry | null | undefined) => {
+    if (!session) return
+    const key = getSessionActivityKey(session)
+    setSessionReadWatermarks(prev => {
+      const current = prev[key] ?? 0
+      if (current >= session.updatedAt) return prev
+      return {
+        ...prev,
+        [key]: session.updatedAt,
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    saveSessionReadWatermarks(sessionReadWatermarks)
+  }, [sessionReadWatermarks])
+
   useEffect(() => {
     const validIds = new Set(sessions.map(session => session.id))
     setSessionPromotions(prev => {
@@ -635,6 +703,46 @@ export function Sidebar({
       return changed ? next : prev
     })
   }, [sessions])
+
+  useEffect(() => {
+    if (sessions.length === 0) return
+    setSessionReadWatermarks(prev => {
+      let changed = false
+      const next: SessionReadWatermarks = { ...prev }
+      for (const session of sessions) {
+        const key = getSessionActivityKey(session)
+        if (Object.prototype.hasOwnProperty.call(next, key)) continue
+        const isSeededWorkspace = readSeededWorkspaceIdsRef.current.has(session.workspaceId)
+        next[key] = isSeededWorkspace ? 0 : session.updatedAt
+        changed = true
+      }
+      for (const session of sessions) {
+        readSeededWorkspaceIdsRef.current.add(session.workspaceId)
+      }
+      return changed ? next : prev
+    })
+  }, [sessions])
+
+  useEffect(() => {
+    const activeSessions = sessions.filter(session => isSessionActive(session, {
+      activeChatTileId,
+      activeChatSessionId,
+      activeChatSessionEntryId,
+    }))
+    if (activeSessions.length === 0) return
+    setSessionReadWatermarks(prev => {
+      let changed = false
+      const next: SessionReadWatermarks = { ...prev }
+      for (const session of activeSessions) {
+        const key = getSessionActivityKey(session)
+        const current = next[key] ?? 0
+        if (current >= session.updatedAt) continue
+        next[key] = session.updatedAt
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [activeChatSessionEntryId, activeChatSessionId, activeChatTileId, sessions])
 
   // Streaming session/tile ids published by ChatTile — used to swap the row
   // icon for a spinner while the thread is actively streaming. Read-only: we
@@ -714,6 +822,7 @@ export function Sidebar({
 
     if (latestSessionLoadTokenByWorkspaceRef.current.get(workspaceEntry.id) !== requestToken) return
     const annotated = annotateSessions(workspaceEntry, items)
+    if (annotated.length === 0) readSeededWorkspaceIdsRef.current.add(workspaceEntry.id)
     setSessions(prev => [...prev.filter(session => session.workspaceId !== workspaceEntry.id), ...annotated])
     lastSessionLoadAtByWorkspaceRef.current.set(workspaceEntry.id, Date.now())
     setLoadedSessionWorkspaceIds(prev => prev.includes(workspaceEntry.id) ? prev : [...prev, workspaceEntry.id])
@@ -887,6 +996,7 @@ export function Sidebar({
       const hasContent = Boolean(session.title?.trim()) || Boolean(session.lastMessage?.trim()) || session.messageCount > 0
       if (!hasContent) return false
       if (normalizedTitle === 'new agent') return false
+      if (isInternalMaintenanceSession(session)) return false
       if (!showArchivedSessions && session.isArchived === true) return false
       if (!showCronSessions && isCronSession(session)) return false
       if (!showSubagentSessions && isSubagentSession(session)) return false
@@ -1063,6 +1173,7 @@ export function Sidebar({
   }, [setSessionArchived])
 
   const openSessionFromSidebar = useCallback((session: SessionEntry, options?: { persist?: boolean }) => {
+    markSessionRead(session)
     const intent = getSessionOpenIntent(session, options)
     if (intent.kind === 'chat') {
       onOpenSessionInChat(session, { persist: intent.persist })
@@ -1075,7 +1186,7 @@ export function Sidebar({
     if (intent.kind === 'file' && session.filePath) {
       onOpenFile(session.filePath, { persist: intent.persist })
     }
-  }, [onOpenFile, onOpenSessionInApp, onOpenSessionInChat])
+  }, [markSessionRead, onOpenFile, onOpenSessionInApp, onOpenSessionInChat])
 
   const sessionContextMenuItems = useCallback((session: SessionEntry): MenuItem[] => {
     const items: MenuItem[] = []
@@ -1710,12 +1821,14 @@ export function Sidebar({
                     const titleGeneration = getSessionTitleGenerationIndicator(generatingSessionTitleIds[sessionTitleKey] === true, sessionMeta)
                     const rowMeta = titleGeneration.rowMeta
                     const isGeneratingTitle = generatingSessionTitleIds[sessionTitleKey] === true
+                    const hasUnreadUpdate = !isSelected && hasUnreadSessionUpdate(session, sessionReadWatermarks)
+                    const showActivityIndicator = isStreaming || isGeneratingTitle || hasUnreadUpdate
                     return (
                       <SessionSidebarRow
                         key={session.id}
                         label={formatSessionTitleForSidebar(session.title)}
                         meta={rowMeta}
-                        icon={<SessionSidebarIndicator session={session} streaming={isStreaming || isGeneratingTitle} muted={session.isArchived === true && !isSelected} theme={theme} />}
+                        icon={showActivityIndicator ? <SessionSidebarIndicator session={session} streaming={isStreaming || isGeneratingTitle} muted={session.isArchived === true && !isSelected} theme={theme} /> : undefined}
                         indent={Math.max(1, session.displayIndent + 1)}
                         indentUnit={6}
                         extraWidth={getSessionRowExtraWidth(session.checkpointCount)}

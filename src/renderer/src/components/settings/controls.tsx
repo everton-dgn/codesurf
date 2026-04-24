@@ -189,7 +189,7 @@ export function SectionLabel({ label }: { label: string }): React.JSX.Element {
   const fonts = useAppFonts()
   return (
     <div style={{
-      fontSize: fonts.secondarySize, fontWeight: 600, color: theme.text.disabled,
+      fontSize: fonts.secondarySize, fontWeight: 700, color: theme.text.muted,
       letterSpacing: '0.08em', textTransform: 'uppercase',
       marginTop: 20, marginBottom: 8, paddingLeft: 2,
     }}>
@@ -244,7 +244,7 @@ export function CompactFontRow({ label, description, token, fontOptions, onChang
   }
   const microLabelStyle: React.CSSProperties = {
     fontSize: Math.max(9, fonts.secondarySize - 2),
-    color: theme.text.disabled,
+    color: theme.text.muted,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginBottom: 2,

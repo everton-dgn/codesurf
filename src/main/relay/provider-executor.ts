@@ -2,9 +2,32 @@ import { execFileSync, spawn } from 'child_process'
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk'
 import type { RelayAgentExecutor, RelaySpawnRequest, RelayTurnInput } from '../../../packages/contex-relay/src'
 import { getAgentPath, getShellEnvPath } from '../agent-paths'
+import {
+  buildHermesChatArgs,
+  buildOpenClawAgentArgs,
+  buildOpenCodeRunArgs,
+  parseHermesOutput,
+  parseOpenClawOutput,
+  parseOpenCodeRunOutput,
+  sanitizeAgentCliDiagnostic,
+} from '../agents/agent-cli-contracts'
 import { resolveStoredPermission } from '../permissions'
 
 const claudeSessions = new Map<string, string>()
+const hermesSessions = new Map<string, string>()
+const openClawSessions = new Map<string, string>()
+const openCodeSessions = new Map<string, string>()
+const OPENCLAW_AGENT_LIST_TIMEOUT_MS = 15_000
+
+function workspaceDirFromSpawnRequest(spawnRequest: RelaySpawnRequest): string | null {
+  return typeof spawnRequest.metadata?.workspaceDir === 'string'
+    ? spawnRequest.metadata.workspaceDir
+    : typeof spawnRequest.metadata?.projectPath === 'string'
+      ? spawnRequest.metadata.projectPath
+      : typeof spawnRequest.metadata?.cwd === 'string'
+        ? spawnRequest.metadata.cwd
+        : null
+}
 
 function modeForClaude(mode?: string): string {
   const modeMap: Record<string, string> = {
@@ -30,13 +53,7 @@ function thinkingForClaude(thinking?: string): { type: string; budget_tokens?: n
 
 async function runClaudeTurn(participantId: string, spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
   const claudePermissionMode = modeForClaude(spawnRequest.mode)
-  const workspaceDir = typeof spawnRequest.metadata?.workspaceDir === 'string'
-    ? spawnRequest.metadata.workspaceDir
-    : typeof spawnRequest.metadata?.projectPath === 'string'
-      ? spawnRequest.metadata.projectPath
-      : typeof spawnRequest.metadata?.cwd === 'string'
-        ? spawnRequest.metadata.cwd
-        : null
+  const workspaceDir = workspaceDirFromSpawnRequest(spawnRequest)
   const options: Options = {
     model: spawnRequest.model ?? 'claude-sonnet-4-6',
     permissionMode: claudePermissionMode as any,
@@ -158,7 +175,7 @@ async function runCodexTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnInp
       clearTimeout(timer)
       if (timedOut) return
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `Codex exited with ${code}`))
+        reject(new Error(sanitizeAgentCliDiagnostic(stderr.trim() || `Codex exited with ${code}`)))
         return
       }
       resolve(stdout.trim())
@@ -166,32 +183,27 @@ async function runCodexTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnInp
   })
 }
 
-async function runOpenCodeTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
+async function runOpenCodeTurn(participantId: string, spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
   const opencodeBin = getAgentPath('opencode') || 'opencode'
   const shellPath = getShellEnvPath()
-  
-  // Map mode to OpenCode approval mode
-  const modeMap: Record<string, string> = {
-    'default': 'suggest',
-    'acceptEdits': 'auto-edit',
-    'plan': 'suggest',
-    'bypassPermissions': 'full-auto',
-  }
-  const approvalMode = modeMap[spawnRequest.mode ?? ''] ?? 'suggest'
-  
+  const workspaceDir = workspaceDirFromSpawnRequest(spawnRequest)
+  const existingSessionId = openCodeSessions.get(participantId) ?? null
+  const agent = typeof spawnRequest.metadata?.agent === 'string'
+    ? spawnRequest.metadata.agent
+    : typeof spawnRequest.metadata?.agentName === 'string'
+      ? spawnRequest.metadata.agentName
+      : null
+
   return await new Promise<string>((resolve, reject) => {
-    const args = [
-      'run',
-      '--approval-mode', approvalMode,
-      '--format', 'json',
-    ]
-    
-    if (spawnRequest.model) {
-      args.push('--model', spawnRequest.model)
-    }
-    
-    args.push(input.prompt)
-    
+    const args = buildOpenCodeRunArgs({
+      prompt: input.prompt,
+      model: spawnRequest.model,
+      agent,
+      sessionId: existingSessionId,
+      cwd: workspaceDir,
+      bypassPermissions: spawnRequest.mode === 'bypassPermissions',
+    })
+
     const proc = spawn(opencodeBin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...(shellPath && { PATH: shellPath }) },
@@ -219,21 +231,13 @@ async function runOpenCodeTurn(spawnRequest: RelaySpawnRequest, input: RelayTurn
       clearTimeout(timer)
       if (timedOut) return
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `OpenCode exited with ${code}`))
+        reject(new Error(sanitizeAgentCliDiagnostic(stderr.trim() || stdout.trim() || `OpenCode exited with ${code}`)))
         return
       }
-      
-      // Try to extract JSON from stdout
-      try {
-        const jsonMatch = stdout.match(/\{[\s\S]*\}/)
-        if (jsonMatch) {
-          resolve(jsonMatch[0])
-        } else {
-          resolve(stdout.trim())
-        }
-      } catch {
-        resolve(stdout.trim())
-      }
+
+      const parsed = parseOpenCodeRunOutput(stdout)
+      if (parsed.sessionId) openCodeSessions.set(participantId, parsed.sessionId)
+      resolve(parsed.text || stdout.trim())
     })
   })
 }
@@ -247,6 +251,8 @@ function parseOpenClawAgents(openclawBin: string, shellPath?: string | null): Ar
     const raw = execFileSync(openclawBin, ['agents', 'list', '--json'], {
       encoding: 'utf-8',
       env: { ...process.env, ...(shellPath && { PATH: shellPath }) },
+      timeout: OPENCLAW_AGENT_LIST_TIMEOUT_MS,
+      windowsHide: true,
     }).trim()
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed) ? parsed : []
@@ -281,26 +287,12 @@ function selectOpenClawAgentId(openclawBin: string, shellPath?: string | null, p
   return agents.find(agent => agent.isDefault)?.id ?? agents[0]?.id ?? 'main'
 }
 
-function extractOpenClawTextPayload(payload: any): string {
-  if (!payload || typeof payload !== 'object') return ''
-  if (typeof payload.text === 'string') return payload.text
-  if (typeof payload.content === 'string') return payload.content
-  if (typeof payload.message === 'string') return payload.message
-  if (typeof payload.summary === 'string') return payload.summary
-  if (Array.isArray(payload.parts)) {
-    return payload.parts
-      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
-      .filter(Boolean)
-      .join('')
-  }
-  return ''
-}
-
-async function runOpenClawTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
+async function runOpenClawTurn(participantId: string, spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
   const openclawBin = getAgentPath('openclaw') || 'openclaw'
   const shellPath = getShellEnvPath()
-  const agentId = selectOpenClawAgentId(openclawBin, shellPath, spawnRequest.model)
-  if (!agentId) {
+  const existingSessionId = openClawSessions.get(participantId) ?? null
+  const agentId = existingSessionId ? null : selectOpenClawAgentId(openclawBin, shellPath, spawnRequest.model)
+  if (!existingSessionId && !agentId) {
     const agents = parseOpenClawAgents(openclawBin, shellPath)
     const available = agents
       .map(agent => agent.model || agent.id)
@@ -310,7 +302,12 @@ async function runOpenClawTurn(spawnRequest: RelaySpawnRequest, input: RelayTurn
   }
 
   return await new Promise<string>((resolve, reject) => {
-    const args = ['agent', '--json', '--agent', agentId, '--message', input.prompt]
+    const args = buildOpenClawAgentArgs({
+      prompt: input.prompt,
+      agentId,
+      sessionId: existingSessionId,
+      thinking: spawnRequest.thinking,
+    })
 
     const proc = spawn(openclawBin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -339,37 +336,24 @@ async function runOpenClawTurn(spawnRequest: RelaySpawnRequest, input: RelayTurn
       clearTimeout(timer)
       if (timedOut) return
       if (code !== 0) {
-        reject(new Error(stderr.trim() || stdout.trim() || `OpenClaw exited with ${code}`))
+        reject(new Error(sanitizeAgentCliDiagnostic(stderr.trim() || stdout.trim() || `OpenClaw exited with ${code}`)))
         return
       }
 
-      try {
-        const parsed = JSON.parse(stdout)
-        const payloads = Array.isArray(parsed?.payloads)
-          ? parsed.payloads
-          : Array.isArray(parsed?.result?.payloads)
-            ? parsed.result.payloads
-            : []
-        const text = payloads
-          .map((payload: any) => extractOpenClawTextPayload(payload))
-          .filter(Boolean)
-          .join('\n\n')
-          || parsed?.summary
-          || parsed?.result?.summary
-          || ''
-        resolve(text.trim())
-      } catch {
-        resolve(stdout.trim())
-      }
+      const parsed = parseOpenClawOutput(stdout)
+      if (parsed.sessionId) openClawSessions.set(participantId, parsed.sessionId)
+      resolve(parsed.text || stdout.trim())
     })
   })
 }
 
-async function runHermesTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
+async function runHermesTurn(participantId: string, spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
   const hermesBin = getAgentPath('hermes') || 'hermes'
   const shellPath = getShellEnvPath()
 
-  // Map mode to hermes toolsets
+  // Map mode to Hermes toolsets. CodeSurf owns the context envelope, so Hermes
+  // should not independently inject workspace rules unless a future UI exposes
+  // that as an inspected choice.
   const modeMap: Record<string, string> = {
     'full': 'terminal,file,web,browser',
     'terminal': 'terminal,file',
@@ -380,17 +364,21 @@ async function runHermesTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnIn
     'plan': '',
   }
   const toolsets = modeMap[spawnRequest.mode ?? ''] ?? 'terminal,file'
+  const existingSessionId = hermesSessions.get(participantId) ?? null
+  const provider = typeof spawnRequest.metadata?.provider === 'string'
+    ? spawnRequest.metadata.provider
+    : null
 
   return await new Promise<string>((resolve, reject) => {
-    const args = ['chat', '--query', input.prompt, '--quiet', '--source', 'tool']
-
-    if (spawnRequest.model) {
-      args.push('--model', spawnRequest.model)
-    }
-
-    if (toolsets) {
-      args.push('--toolsets', toolsets)
-    }
+    const args = buildHermesChatArgs({
+      prompt: input.prompt,
+      model: spawnRequest.model,
+      provider,
+      toolsets,
+      resumeSessionId: existingSessionId,
+      ignoreRules: true,
+      bypassPermissions: spawnRequest.mode === 'bypassPermissions',
+    })
 
     const proc = spawn(hermesBin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -419,13 +407,12 @@ async function runHermesTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnIn
       clearTimeout(timer)
       if (timedOut) return
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `Hermes exited with ${code}`))
+        reject(new Error(sanitizeAgentCliDiagnostic(stderr.trim() || `Hermes exited with ${code}`)))
         return
       }
-      const cleaned = stdout
-        .replace(/^\s*(?:session_id|session)\s*:\s*\S+\s*$/gmi, '')
-        .trim()
-      resolve(cleaned)
+      const parsed = parseHermesOutput(stdout)
+      if (parsed.sessionId) hermesSessions.set(participantId, parsed.sessionId)
+      resolve(parsed.text)
     })
   })
 }
@@ -443,11 +430,11 @@ class MainProcessRelayExecutor implements RelayAgentExecutor {
       case 'codex':
         return runCodexTurn(this.spawnRequest, input, this.spawnRequest.timeoutMs)
       case 'opencode':
-        return runOpenCodeTurn(this.spawnRequest, input, this.spawnRequest.timeoutMs)
+        return runOpenCodeTurn(this.participantId, this.spawnRequest, input, this.spawnRequest.timeoutMs)
       case 'openclaw':
-        return runOpenClawTurn(this.spawnRequest, input, this.spawnRequest.timeoutMs)
+        return runOpenClawTurn(this.participantId, this.spawnRequest, input, this.spawnRequest.timeoutMs)
       case 'hermes':
-        return runHermesTurn(this.spawnRequest, input, this.spawnRequest.timeoutMs)
+        return runHermesTurn(this.participantId, this.spawnRequest, input, this.spawnRequest.timeoutMs)
       default:
         throw new Error(`Unsupported relay provider: ${this.spawnRequest.provider ?? 'unknown'}`)
     }

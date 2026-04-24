@@ -563,6 +563,21 @@ function sessionIdentityAgent(entry: AggregatedSessionEntry): string {
   return String(entry.source ?? 'codesurf').trim().toLowerCase() || 'codesurf'
 }
 
+function normalizeSessionIdentityText(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function fallbackSessionIdentityKey(entry: AggregatedSessionEntry): string | null {
+  const agent = sessionIdentityAgent(entry)
+  const title = normalizeSessionIdentityText(entry.title)
+  if (!agent || !title) return null
+  const projectPath = normalizeSessionIdentityText(entry.projectPath)
+  return `${agent}:${projectPath}:${title}`
+}
+
 function mergeSessionEntries(localSessions: AggregatedSessionEntry[], nativeSessions: AggregatedSessionEntry[]): AggregatedSessionEntry[] {
   const byKey = new Map<string, AggregatedSessionEntry>()
 
@@ -611,7 +626,26 @@ function mergeSessionEntries(localSessions: AggregatedSessionEntry[], nativeSess
     byKey.set(key, mergeCanonicalMetadata(existing, entry))
   }
 
-  return [...byKey.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+  const merged = [...byKey.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+  const hermesNativeByFallbackKey = new Map<string, AggregatedSessionEntry>()
+  for (const entry of merged) {
+    if (entry.source !== 'hermes' || !entry.sessionId) continue
+    const key = fallbackSessionIdentityKey(entry)
+    if (key) hermesNativeByFallbackKey.set(key, entry)
+  }
+
+  return merged.filter(entry => {
+    if (entry.source !== 'codesurf') return true
+    if (sessionIdentityAgent(entry) !== 'hermes') return true
+    if (entry.sessionId) return true
+
+    const key = fallbackSessionIdentityKey(entry)
+    const native = key ? hermesNativeByFallbackKey.get(key) : null
+    if (!native) return true
+
+    const timeDelta = Math.abs((entry.updatedAt || 0) - (native.updatedAt || 0))
+    return timeDelta > 30 * 60 * 1000
+  })
 }
 
 export function registerCanvasIPC(): void {

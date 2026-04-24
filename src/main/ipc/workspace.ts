@@ -9,6 +9,7 @@ import { writeMCPConfigToWorkspace } from '../mcp-server'
 import { applyWindowAppearance } from '../windowAppearance'
 import { CONTEX_HOME } from '../paths'
 import { ensureCodeSurfStructure } from '../session-sources'
+import { validateGenerationProvider } from '../generation-provider-validation'
 
 const SETTINGS_PATH = join(CONTEX_HOME, 'settings.json')
 const LEGACY_CONFIG_PATH = join(CONTEX_HOME, 'config.json')
@@ -198,6 +199,22 @@ export function registerWorkspaceIPC(): void {
       return { ...result, settings: withDefaultSettings(result.settings) }
     }
     return result
+  })
+
+  ipcMain.handle('settings:validateGenerationProvider', async (_, providerId: string, providerPatch?: Partial<AppSettings['generationProviders'][string]>) => {
+    const settings = readSettingsSync()
+    const provider = settings.generationProviders?.[providerId]
+    if (!provider) {
+      return {
+        ok: false,
+        providerId,
+        message: `Provider "${providerId}" is not configured.`,
+        models: [],
+        imageModels: [],
+        videoModels: [],
+      }
+    }
+    return validateGenerationProvider({ ...provider, ...(providerPatch ?? {}), id: providerId })
   })
 
   ipcMain.handle('workspace:delete', async (_, id: string) => {

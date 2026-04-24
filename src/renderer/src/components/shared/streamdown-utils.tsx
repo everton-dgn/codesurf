@@ -85,7 +85,7 @@ export function ensureCodeBlockLayoutStyles(): void {
       min-height: 0 !important;
       height: auto !important;
       margin: 6px 0 !important;
-      border-radius: 6px !important;
+      border-radius: 10px !important;
       /* CSS-var backed backgrounds so theme tokens win even after Shiki's
          async DOM replacement inlines its own (dark) bg. ChatMarkdown root
          sets --chat-code-{shell,body,header}-bg on the container. */

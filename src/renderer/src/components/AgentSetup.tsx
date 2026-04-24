@@ -19,6 +19,11 @@ interface AgentPathsConfig {
   opencode: AgentPathEntry
   openclaw: AgentPathEntry
   hermes: AgentPathEntry
+  'cursor-agent': AgentPathEntry
+  gemini: AgentPathEntry
+  cline: AgentPathEntry
+  amp: AgentPathEntry
+  kilo: AgentPathEntry
   shellPath: string | null
   updatedAt: string
 }
@@ -74,12 +79,28 @@ function OpenClawLogo({ size = 20 }: { size?: number }) {
   )
 }
 
+function GenericAgentLogo({ label, color = '#9ca3af', size = 20 }: { label: string; color?: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="6" fill={`${color}20`} stroke={color} strokeWidth="1.5" />
+      <text x="12" y="15" textAnchor="middle" fontSize="8" fontWeight="700" fill={color} fontFamily="system-ui, -apple-system, sans-serif">
+        {label}
+      </text>
+    </svg>
+  )
+}
+
 const AGENTS = [
   { id: 'claude' as const, label: 'Claude Code', logo: <ClaudeLogo />, installHint: 'npm install -g @anthropic-ai/claude-code' },
   { id: 'codex' as const, label: 'Codex', logo: <CodexLogo />, installHint: 'npm install -g @openai/codex' },
   { id: 'opencode' as const, label: 'OpenCode', logo: <OpenCodeLogo />, installHint: 'go install github.com/opencodeco/opencode@latest' },
   { id: 'openclaw' as const, label: 'OpenClaw', logo: <OpenClawLogo />, installHint: 'npm install -g openclaw' },
-  { id: 'hermes' as const, label: 'Hermes', logo: <HermesLogo />, installHint: 'pip install hermes-agent' },
+  { id: 'hermes' as const, label: 'Hermes', logo: <HermesLogo />, installHint: 'Install Hermes Agent and ensure hermes is on PATH' },
+  { id: 'cursor-agent' as const, label: 'Cursor Agent', logo: <GenericAgentLogo label="Cu" color="#60a5fa" />, installHint: 'Install Cursor Agent and ensure cursor-agent is on PATH' },
+  { id: 'gemini' as const, label: 'Gemini CLI', logo: <GenericAgentLogo label="Ge" color="#22d3ee" />, installHint: 'npm install -g @google/gemini-cli' },
+  { id: 'cline' as const, label: 'Cline', logo: <GenericAgentLogo label="Cl" color="#a78bfa" />, installHint: 'Install Cline CLI and authenticate providers through Cline' },
+  { id: 'amp' as const, label: 'Amp', logo: <GenericAgentLogo label="Am" color="#f472b6" />, installHint: 'Install Amp and configure AMP_API_KEY outside CodeSurf' },
+  { id: 'kilo' as const, label: 'Kilo Code', logo: <GenericAgentLogo label="Ki" color="#f59e0b" />, installHint: 'npm install -g @kilocode/cli' },
 ]
 
 interface AgentSetupProps {

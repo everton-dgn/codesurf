@@ -1,6 +1,7 @@
 import { describe, test } from 'node:test'
 import { expect } from './node-expect.ts'
 import {
+  getTileNodeTools,
   buildPeerCommandPayload,
   getDisconnectedPeerBridgeMcpToolNames,
   getPeerBridgeNodeTools,
@@ -41,5 +42,14 @@ describe('node peer bridge tools', () => {
       command: 'chat_send_message',
       message: 'hello',
     })
+  })
+
+  test('image tiles expose editing tools for connected agents', () => {
+    const imageTools = getTileNodeTools('image').map(tool => tool.name)
+
+    expect(imageTools).toContain('image_annotate')
+    expect(imageTools).toContain('image_edit_request')
+    expect(imageTools).toContain('image_generate_variation')
+    expect(imageTools).toContain('image_replace_source')
   })
 })

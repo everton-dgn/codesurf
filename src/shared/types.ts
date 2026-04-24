@@ -383,6 +383,22 @@ export function normalizeFontSettings(raw: Partial<FontSettings> | undefined): F
 
 // ── AppSettings ─────────────────────────────────────────────────────────────
 
+export type GenerationProviderCapability = 'text' | 'image' | 'video'
+
+export interface GenerationProviderSettings {
+  id: string
+  label: string
+  enabled: boolean
+  capabilities: GenerationProviderCapability[]
+  apiKey?: string
+  baseUrl?: string
+  textModel?: string
+  imageModel?: string
+  videoModel?: string
+  videoAspectRatio?: '16:9' | '9:16' | string
+  videoResolution?: '720p' | '1080p' | '4k' | string
+}
+
 export interface AppSettings {
   // The three font tokens
   fonts: FontSettings
@@ -431,6 +447,8 @@ export interface AppSettings {
   // Local OpenAI-compat proxy endpoint remapping
   localProxyEnabled: boolean
   localProxyPort: number
+  // Image/video generation and editing providers.
+  generationProviders: Record<string, GenerationProviderSettings>
   // Pinned extension entries used by the sidebar and canvas menu.
   // Values may be whole extension ids (pin all contributed blocks) or
   // specific extension tile types such as `ext:hq-email-list`.
@@ -534,6 +552,91 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   localProxyEnabled: false,
   localProxyPort: 1337,
+  generationProviders: {
+    gemini: {
+      id: 'gemini',
+      label: 'Gemini / Nano Banana',
+      enabled: false,
+      capabilities: ['image', 'video'],
+      apiKey: '',
+      imageModel: 'gemini-2.5-flash-image',
+      videoModel: 'veo-3.1-generate-preview',
+      videoAspectRatio: '16:9',
+      videoResolution: '720p',
+    },
+    openai: {
+      id: 'openai',
+      label: 'OpenAI',
+      enabled: false,
+      capabilities: ['text', 'image', 'video'],
+      apiKey: '',
+      textModel: '',
+      imageModel: '',
+      videoModel: '',
+    },
+    anthropic: {
+      id: 'anthropic',
+      label: 'Anthropic',
+      enabled: false,
+      capabilities: ['text'],
+      apiKey: '',
+      textModel: 'claude-sonnet-4-20250514',
+    },
+    openrouter: {
+      id: 'openrouter',
+      label: 'OpenRouter',
+      enabled: false,
+      capabilities: ['text', 'image'],
+      apiKey: '',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      textModel: 'openrouter/auto',
+      imageModel: '',
+    },
+    replicate: {
+      id: 'replicate',
+      label: 'Replicate',
+      enabled: false,
+      capabilities: ['image', 'video'],
+      apiKey: '',
+      imageModel: '',
+      videoModel: '',
+    },
+    runway: {
+      id: 'runway',
+      label: 'Runway',
+      enabled: false,
+      capabilities: ['video'],
+      apiKey: '',
+      videoModel: '',
+    },
+    luma: {
+      id: 'luma',
+      label: 'Luma',
+      enabled: false,
+      capabilities: ['video'],
+      apiKey: '',
+      videoModel: '',
+    },
+    stability: {
+      id: 'stability',
+      label: 'Stability AI',
+      enabled: false,
+      capabilities: ['image'],
+      apiKey: '',
+      imageModel: '',
+    },
+    local: {
+      id: 'local',
+      label: 'Local / custom',
+      enabled: false,
+      capabilities: ['text', 'image', 'video'],
+      apiKey: '',
+      baseUrl: '',
+      textModel: '',
+      imageModel: '',
+      videoModel: '',
+    },
+  },
   pinnedExtensionIds: [],
   hiddenFromSidebarExtIds: [],
   settingsPanelExtIds: [],
@@ -584,6 +687,23 @@ function resolveFonts(saved?: Partial<FontSettings>, legacyPrimary?: Partial<Fon
 
 export function withDefaultSettings(input: Partial<AppSettings> | null | undefined): AppSettings {
   const settings = input ?? {}
+  const generationProviders = Object.fromEntries(
+    Object.entries({
+      ...DEFAULT_SETTINGS.generationProviders,
+      ...(settings.generationProviders ?? {}),
+    }).map(([id, provider]) => {
+      const defaults = DEFAULT_SETTINGS.generationProviders[id]
+      return [id, {
+        ...(defaults ?? { id, label: id, enabled: false, capabilities: [] as GenerationProviderCapability[] }),
+        ...provider,
+        id: provider.id || id,
+        capabilities: Array.isArray(provider.capabilities)
+          ? Array.from(new Set([...(defaults?.capabilities ?? []), ...provider.capabilities]))
+              .filter(capability => capability === 'text' || capability === 'image' || capability === 'video')
+          : (defaults?.capabilities ?? []),
+      }]
+    }),
+  ) as Record<string, GenerationProviderSettings>
   const base: AppSettings = {
     ...DEFAULT_SETTINGS,
     ...settings,
@@ -603,6 +723,7 @@ export function withDefaultSettings(input: Partial<AppSettings> | null | undefin
       ...DEFAULT_SETTINGS.storage,
       ...(settings.storage ?? {}),
     },
+    generationProviders,
     // Resolve fonts: new 3-token system, with legacy migration
     fonts: resolveFonts(
       settings.fonts as Partial<FontSettings>,

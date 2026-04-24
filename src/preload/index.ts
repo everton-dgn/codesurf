@@ -98,6 +98,11 @@ contextBridge.exposeInMainWorld('electron', {
     },
   },
 
+  image: {
+    edit: (req: { tileId: string; prompt: string; provider?: string; model?: string; outputPath?: string }) =>
+      ipcRenderer.invoke('image:edit', req),
+  },
+
   // Extension action IPC
   extActions: {
     onAction: (callback: (data: { tileId: string; action: string; params: Record<string, unknown> }) => void) => {
@@ -220,6 +225,8 @@ contextBridge.exposeInMainWorld('electron', {
       jobId?: string | null
       jobSequence?: number
     }) => ipcRenderer.invoke('chat:resumeJob', req),
+    steer: (payload: { cardId: string; message: string }) =>
+      ipcRenderer.invoke('chat:steer', payload) as Promise<{ ok: boolean; error?: string }>,
     stop: (cardId: string) => ipcRenderer.invoke('chat:stop', cardId),
     clearSession: (cardId: string) => ipcRenderer.invoke('chat:clearSession', cardId),
     opencodeModels: () => ipcRenderer.invoke('chat:opencodeModels'),
@@ -370,6 +377,8 @@ contextBridge.exposeInMainWorld('electron', {
     set: (settings: any) => ipcRenderer.invoke('settings:set', settings),
     getRawJson: () => ipcRenderer.invoke('settings:getRawJson'),
     setRawJson: (json: string) => ipcRenderer.invoke('settings:setRawJson', json),
+    validateGenerationProvider: (providerId: string, providerPatch?: Record<string, unknown>) =>
+      ipcRenderer.invoke('settings:validateGenerationProvider', providerId, providerPatch),
   },
 
   permissions: {

@@ -413,6 +413,567 @@ Suggested commit message:
 
 ---
 
+## Burst 8 — Agent CLI contract matrix for Hermes, OpenClaw, and OpenCode
+
+Objective: stop provider integrations from regressing whenever an external CLI changes flags, output shape, or session semantics. CodeSurf should have one tested adapter contract per agent, not ad hoc spawn arrays scattered through chat/relay paths.
+
+Files:
+- Create: `src/main/agents/agent-cli-contracts.ts` or equivalent pure helper module
+- Modify: `src/main/agent-paths.ts`
+- Modify: `src/main/relay/provider-executor.ts`
+- Modify: `src/main/ipc/chat.ts` only where the interactive provider path needs the same contract
+- Modify: `src/renderer/src/components/AgentSetup.tsx` if readiness/status needs surfacing
+- Test: `test/agent-cli-contracts.test.ts`
+
+### Step 1: Write failing adapter-contract tests
+
+Use fake binaries in a temp directory that record argv and emit deterministic stdout. Cover at least:
+
+Hermes:
+- uses `hermes chat --query <prompt> --quiet --source tool`
+- maps model with `--model <model>`
+- maps mode to explicit `--toolsets ...`
+- does not pass dangerous/yolo flags unless the user explicitly selected bypass behavior
+- can parse and retain `session_id: ...` while stripping that line from the visible assistant output
+
+OpenClaw:
+- uses the real CLI shape: `openclaw agent --json --agent <id> --message <prompt>`
+- supports `--session-id <id>` when resuming a known session
+- supports `--thinking <level>` and `--timeout <seconds>` when present
+- never reintroduces imaginary flags such as `--output-format stream-json`, `--yes`, `--approval-mode`, `--model`, or `-p`
+- parses text from `payloads[]`, `result.payloads[]`, `summary`, or raw stdout fallback
+
+OpenCode:
+- uses current `opencode run` flags: `--format json`, `--model`, `--agent`, `--session`, `--dir`, `--attach` where appropriate
+- does **not** pass stale `--approval-mode` flags
+- uses `--dangerously-skip-permissions` only for explicit bypass/accept-all modes
+- parses JSON event streams instead of extracting the first `{...}` blob with a regex
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+
+Expected:
+- FAIL until the spawn-argument builders are extracted and the stale OpenCode/OpenClaw/Hermes assumptions are corrected.
+
+### Step 2: Extract pure adapter builders
+
+Create small pure functions for each provider:
+- `buildHermesChatArgs(request)`
+- `parseHermesOutput(stdout)`
+- `buildOpenClawAgentArgs(request)`
+- `parseOpenClawOutput(stdout)`
+- `buildOpenCodeRunArgs(request)`
+- `parseOpenCodeRunOutput(stdout)`
+
+Keep process spawning in `provider-executor.ts`; keep argv/output semantics in the tested helper.
+
+### Step 3: Reuse contracts in relay and chat paths
+
+In `src/main/relay/provider-executor.ts`:
+- replace inline argv construction with the tested helpers
+- keep timeout handling and sanitized error messages
+- persist per-participant session ids where the CLI exposes them
+
+In `src/main/ipc/chat.ts`:
+- use the same OpenCode/Hermes/OpenClaw contract helpers wherever an interactive provider path exists
+- avoid duplicating flag maps between main chat and relay execution
+
+### Step 4: Surface readiness without blocking chat UI
+
+In `src/main/agent-paths.ts` and `AgentSetup.tsx`:
+- show detected path, version, and last-smoke-test status for Hermes/OpenClaw/OpenCode
+- never run model/provider refresh on hot chat render paths
+- never log secrets, config contents, auth tokens, or provider keys
+
+### Step 5: Verify + commit
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+- `npm test`
+- `npm run build`
+
+Suggested commit message:
+- `test: lock agent cli integration contracts`
+
+---
+
+## Burst 9 — Hermes integration hardening
+
+Objective: make Hermes a first-class CodeSurf agent lane while keeping CodeSurf, not Hermes defaults, in charge of privacy boundaries for context sent from CodeSurf.
+
+Files:
+- Modify: `src/main/relay/provider-executor.ts`
+- Modify: `src/main/ipc/chat.ts` if Hermes is selectable in chat provider UI
+- Modify: `src/main/agent-paths.ts`
+- Modify: `src/main/session-sources.ts` if Hermes sessions should appear in CodeSurf history
+- Test: `test/agent-cli-contracts.test.ts`
+- Test: add/extend a session-source test if Hermes history import is implemented
+
+### Step 1: Treat CodeSurf-managed context as the default
+
+When CodeSurf assembles the prompt/context bundle itself:
+- pass `--ignore-rules` by default so Hermes does not independently inject AGENTS/SOUL/memory outside CodeSurf's inspected context bucket policy
+- do **not** pass `--ignore-user-config` by default because provider credentials/model config live there
+- use `--source tool` or `--source codesurf-relay` so delegated CodeSurf turns do not pollute the user's normal Hermes session list unless explicitly requested
+
+### Step 2: Persist Hermes resume metadata
+
+- capture `session_id: ...` from Hermes quiet output
+- store it per CodeSurf participant/card/runtime lane
+- pass `--resume <sessionId>` on the next turn for that lane
+- make the visible assistant response exclude the session id line
+
+### Step 3: Make toolset/mode mapping inspectable
+
+- map CodeSurf modes to explicit Hermes toolsets in one place
+- default plan/query modes to no filesystem/terminal tools
+- require explicit bypass selection before passing `--yolo`
+- expose the effective toolset summary in the runtime/tool chip, not in hidden logs
+
+### Step 4: Smoke-test readiness
+
+Add a non-secret smoke test path:
+- `hermes --version`
+- optionally `hermes chat --query "Respond with exactly: CODESURF_HERMES_SMOKE_OK" --quiet --source tool --ignore-rules --toolsets ""`
+
+The smoke result should be cached and shown in Agent Setup, not run every chat mount.
+
+### Step 5: Verify + commit
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+- `npm run build`
+
+Suggested commit message:
+- `feat: harden hermes agent integration`
+
+---
+
+## Burst 10 — OpenClaw integration hardening
+
+Objective: keep OpenClaw integration aligned with the real installed CLI and make session/agent routing explicit.
+
+Files:
+- Modify: `src/main/relay/provider-executor.ts`
+- Modify: `src/main/agent-paths.ts`
+- Modify: `src/main/session-sources.ts`
+- Test: `test/agent-cli-contracts.test.ts`
+- Test: add/extend a session-source test if OpenClaw import behavior changes
+
+### Step 1: Lock the real CLI contract
+
+The real command shape is:
+- `openclaw agent --json --agent <id> --message <text>`
+- `openclaw agent --json --session-id <id> --message <text>` for explicit resume
+- `openclaw agents list --json` for configured agents
+
+Do not add flags that the CLI does not expose. In particular, preserve tests that fail if `--output-format`, `--yes`, `--approval-mode`, `--model`, or `-p` appear in OpenClaw argv.
+
+### Step 2: Improve agent/model selection
+
+- `spawnRequest.model` should match an agent id or configured agent model exactly
+- if no exact match exists, return a clear error with available agent ids/models
+- prefer stable agents over transient gateway/lead ids
+- expose the selected `agentId` in runtime lane metadata
+
+### Step 3: Resume and parse sessions
+
+- capture returned OpenClaw session id when present
+- prefer `--session-id` on follow-up turns when the lane has a known session
+- keep `src/main/session-sources.ts` import behavior aligned with `~/.openclaw/agents`
+- preserve nested group metadata for OpenClaw subagents/cron-style sessions
+
+### Step 4: Verify + commit
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+- targeted session-source test, if added
+- `npm run build`
+
+Suggested commit message:
+- `feat: harden openclaw agent routing`
+
+---
+
+## Burst 11 — OpenCode integration hardening
+
+Objective: split OpenCode into two stable paths: a warm long-lived SDK/server path for interactive chat/model discovery, and a tested CLI one-shot path for relay/agent lanes.
+
+Files:
+- Modify: `src/main/ipc/chat.ts`
+- Modify: `src/main/relay/provider-executor.ts`
+- Modify: `src/main/agent-paths.ts`
+- Modify: `src/renderer/src/components/ChatTile.tsx` only if model/status events need small UI wiring
+- Test: `test/agent-cli-contracts.test.ts`
+- Test: add a focused OpenCode server manager test if practical
+
+### Step 1: Remove stale CLI assumptions
+
+Current `opencode run --help` exposes:
+- `--format json`
+- `--model`
+- `--agent`
+- `--session`
+- `--continue`
+- `--dir`
+- `--attach`
+- `--variant`
+- `--thinking`
+- `--dangerously-skip-permissions`
+
+It does not expose `--approval-mode`. Update tests and implementation so stale approval-mode mappings cannot come back.
+
+### Step 2: Parse OpenCode JSON events robustly
+
+- parse JSONL/event output line-by-line when `--format json` is used
+- collect assistant text/result events intentionally
+- capture session id when available
+- preserve stderr as diagnostics without exposing secrets
+- avoid regex extraction of the first `{...}` blob
+
+### Step 3: Keep model discovery non-blocking
+
+In `src/main/ipc/chat.ts`:
+- keep `OpenCodeServerManager` warmup off the critical chat render path
+- cache fallback models immediately
+- broadcast `chat:opencodeModelsUpdated` only after a successful background refresh
+- show stale/error source in Agent Setup instead of beachballing ChatTile
+
+### Step 4: Unify server/client lifecycle
+
+- keep one `opencode serve` manager per app process
+- detect dead server process and clear cached client URL before retry
+- expose health/readiness metadata to Agent Setup
+- use `--attach` for CLI one-shots if a running server should be reused; otherwise keep pure `opencode run` isolated
+
+### Step 5: Verify + commit
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+- targeted OpenCode chat/model tests if added
+- `npm test`
+- `npm run build`
+
+Suggested commit message:
+- `feat: harden opencode integration`
+
+---
+
+## Burst 12 — Generalized agent adapter registry for more providers
+
+Objective: make adding agents like Cursor, Kilo Code, Cline, Amp, Gemini CLI, and future CLIs a data-driven adapter addition instead of another hardcoded union in `agent-paths.ts` and `provider-executor.ts`.
+
+Discovery snapshot from this machine on 2026-04-24:
+- `cursor-agent` found: `2026.04.16-2d20146`
+- `cursor` found: `3.0.16`
+- `cline` found: `2.11.0`
+- `amp` found: `0.0.1774936733-g4206cc`
+- `gemini` found: `0.34.0`
+- `kilo` / `kilocode` not found locally, but Kilo docs describe `npm install -g @kilocode/cli` and `kilo run [message..]`
+
+Files:
+- Create: `src/main/agents/agent-adapter-registry.ts`
+- Create: `src/main/agents/agent-adapter-types.ts`
+- Create: `src/main/agents/adapters/*.ts`
+- Modify: `src/main/agent-paths.ts`
+- Modify: `src/main/relay/provider-executor.ts`
+- Modify: `src/main/ipc/chat.ts`
+- Modify: `src/preload/index.ts` only if provider ids/types are currently hardcoded
+- Modify: `src/renderer/src/env.d.ts` only if provider ids/types are currently hardcoded
+- Modify: `src/renderer/src/components/AgentSetup.tsx`
+- Test: `test/agent-adapter-registry.test.ts`
+- Test: `test/agent-cli-contracts.test.ts`
+
+### Step 1: Write failing registry tests
+
+Cover:
+- registry contains built-ins: `claude`, `codex`, `opencode`, `openclaw`, `hermes`
+- registry can add new adapters: `cursor-agent`, `cline`, `amp`, `gemini`, `kilo`
+- each adapter declares capabilities:
+  - `headlessRun`
+  - `streamJson`
+  - `resume`
+  - `modelSelect`
+  - `cwdSelect`
+  - `approvalMode`
+  - `mcp`
+  - `acp`
+  - `sessionImport`
+- missing binaries appear as unavailable without throwing
+- no provider id requires a TypeScript union edit outside the registry
+
+Run:
+- `node --test test/agent-adapter-registry.test.ts`
+
+Expected:
+- FAIL until adapters are registry-backed instead of hardcoded.
+
+### Step 2: Move detection to adapter metadata
+
+Each adapter should define:
+- binary candidates, e.g. `['cursor-agent']`, `['gemini']`, `['kilo']`
+- version args, e.g. `['--version']`
+- safe help args, e.g. `['--help']`
+- executable path fallback candidates
+- non-secret smoke test, if safe
+
+Do not store secrets or auth state in the registry. Store only binary path, version, last check timestamp, and capability/readiness summary.
+
+### Step 3: Make Agent Setup registry-driven
+
+In `AgentSetup.tsx`:
+- render adapters from registry output
+- group by status: Ready / Installed-needs-auth / Missing / Import-only
+- show exact binary path and version
+- show capability chips rather than bespoke provider copy
+- keep expensive probes behind explicit refresh, not live render
+
+### Step 4: Verify + commit
+
+Run:
+- `node --test test/agent-adapter-registry.test.ts test/agent-cli-contracts.test.ts`
+- `npm run build`
+
+Suggested commit message:
+- `feat: add registry-backed agent adapters`
+
+---
+
+## Burst 13 — Cursor Agent and Gemini CLI adapters
+
+Objective: add the first two new headless adapters with strong CLI contracts and stream parsing: Cursor Agent and Gemini CLI.
+
+Files:
+- Create/modify: `src/main/agents/adapters/cursor-agent.ts`
+- Create/modify: `src/main/agents/adapters/gemini.ts`
+- Modify: `src/main/agents/agent-cli-contracts.ts`
+- Modify: `src/main/relay/provider-executor.ts`
+- Test: `test/agent-cli-contracts.test.ts`
+
+### Step 1: Cursor Agent contract tests
+
+Use the real local help as the baseline:
+- `cursor-agent --print --output-format stream-json <prompt>` for headless runs
+- `--stream-partial-output` only when CodeSurf wants token deltas
+- `--workspace <path>` for cwd/workspace selection
+- `--model <model>` for model selection
+- `--resume <chatId>` or `--continue` for session continuation
+- `--mode plan` or `--mode ask` for read-only modes
+- `--yolo` / `--force` only when the user explicitly chooses bypass behavior
+- `--trust` only for headless mode after the workspace trust model is explicit in CodeSurf
+
+Tests should fail if Cursor Agent is invoked through the GUI-only `cursor` command for headless execution.
+
+### Step 2: Gemini CLI contract tests
+
+Use the real local help as the baseline:
+- `gemini --prompt <prompt>` for non-interactive/headless mode
+- `--output-format stream-json` or `--output-format json` for parseable output
+- `--model <model>` for model selection
+- `--resume <id|latest>` for session continuation
+- `--approval-mode plan|default|auto_edit|yolo` mapped from CodeSurf modes
+- `--sandbox` when CodeSurf wants sandboxed execution
+- `--include-directories <path>` only when context policy allows extra dirs
+- `--yolo` only for explicit bypass behavior
+
+Tests should ensure CodeSurf never uses raw-output flags by default.
+
+### Step 3: Stream parsing and session capture
+
+For both adapters:
+- parse JSON/stream-json line-by-line
+- collect assistant text deltas/results intentionally
+- capture session/chat id when the CLI emits it
+- emit normal CodeSurf tool/status chips for adapter metadata and exact prompt/context bundle
+- redact any credential-looking stderr before surfacing diagnostics
+
+### Step 4: Verify + commit
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+- `npm test`
+- `npm run build`
+
+Suggested commit message:
+- `feat: add cursor and gemini agent adapters`
+
+---
+
+## Burst 14 — Cline and Amp adapters
+
+Objective: add two more mature local coding-agent adapters while respecting their different execution models.
+
+Files:
+- Create/modify: `src/main/agents/adapters/cline.ts`
+- Create/modify: `src/main/agents/adapters/amp.ts`
+- Modify: `src/main/agents/agent-cli-contracts.ts`
+- Modify: `src/main/relay/provider-executor.ts`
+- Test: `test/agent-cli-contracts.test.ts`
+
+### Step 1: Cline contract tests
+
+Use the real local help as the baseline:
+- `cline task <prompt>` or `cline <prompt>` for a new task
+- `--json` for parseable messages
+- `--cwd <path>` for workspace selection
+- `--model <model>` for model selection
+- `--plan` for read-only/planning mode
+- `--act` for editing mode
+- `--taskId <id>` or `--continue` for resume
+- `--timeout <seconds>` for bounded execution
+- `--yolo` / `--auto-approve-all` only for explicit bypass behavior
+- `--acp` should be exposed as an alternate IDE/ACP lane, not mixed into headless run mode by accident
+
+### Step 2: Amp contract tests
+
+Use the real local help as the baseline:
+- `amp -x <prompt>` / `amp --execute <prompt>` for one-shot execution
+- `--stream-json` for Claude-Code-compatible stream JSON
+- `--mode <deep|free|large|rush|smart>` mapped from CodeSurf mode/model intent
+- `amp threads new` for empty thread creation when needed
+- `amp threads continue <threadId>` or `--last` for continuation workflows
+- `--no-ide` by default unless CodeSurf explicitly wants IDE context imported
+- `--dangerously-allow-all` only for explicit bypass behavior
+- `--mcp-config` only from inspected CodeSurf MCP config, never by copying hidden user config into logs
+
+### Step 3: Normalize resume semantics
+
+Cline and Amp identify sessions differently:
+- Cline: task ids / recent task per cwd
+- Amp: thread ids / thread URLs / last thread per mode
+
+Store these in a normalized runtime-lane field:
+- `externalSessionId`
+- `externalSessionKind`
+- `externalSessionUrl?`
+- `resumeArgs[]`
+
+### Step 4: Verify + commit
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+- `npm test`
+- `npm run build`
+
+Suggested commit message:
+- `feat: add cline and amp agent adapters`
+
+---
+
+## Burst 15 — Kilo Code adapter and extension-backed/import-only agents
+
+Objective: add Kilo Code support and define the fallback path for agents that are primarily IDE extensions or expose sessions but not a stable headless CLI.
+
+Files:
+- Create/modify: `src/main/agents/adapters/kilo.ts`
+- Modify: `src/main/agents/agent-adapter-registry.ts`
+- Modify: `src/main/session-sources.ts`
+- Modify: `src/main/ipc/canvas.ts` if imported sessions need preview/load plumbing
+- Modify: `src/renderer/src/components/Sidebar.tsx` only through existing session row affordances
+- Test: `test/agent-cli-contracts.test.ts`
+- Test: add/extend session-source tests
+
+### Step 1: Kilo CLI discovery contract
+
+Kilo is not currently installed on this machine, so the first implementation must be discovery-first and fake-binary-tested.
+
+Docs baseline:
+- install: `npm install -g @kilocode/cli`
+- binary: `kilo`
+- version: `kilo --version`
+- headless: `kilo run [message..]`
+- server: `kilo serve`
+- sessions: `kilo session`
+- export/import: `kilo export [sessionID]`, `kilo import <file>`
+- ACP/MCP: `kilo acp`, `kilo mcp`
+
+Tests should prove missing Kilo is reported as Missing, not treated as a broken CodeSurf install.
+
+### Step 2: Add Kilo adapter when binary is present
+
+When `kilo` is installed:
+- prefer `kilo run <prompt>` for one-shot execution if it supports the needed output flags
+- use `kilo export` / `kilo session` for session import if run output is not stable enough yet
+- expose `kilo acp` as a possible ACP lane, not as default chat execution
+- expose `kilo serve` as a possible long-lived server lane only after lifecycle tests exist
+
+### Step 3: Import-only and extension-backed agent category
+
+Some agents may be useful before they are spawnable:
+- Cursor IDE chat/session history
+- Cline task history
+- Kilo session exports
+- VS Code extension-backed agents without a safe headless CLI
+
+Represent these as `sessionImport` or `readOnlyHistory` adapters, not fake chat providers. They should appear in session/history surfaces and context-deck-style review, but not in the model picker until there is a tested run contract.
+
+### Step 4: Verify + commit
+
+Run:
+- `node --test test/agent-cli-contracts.test.ts`
+- targeted session-source tests
+- `npm test`
+- `npm run build`
+
+Suggested commit message:
+- `feat: add kilo and import-only agent adapters`
+
+---
+
+## Burst 16 — Multi-agent picker and lane UX polish
+
+Objective: make many agents feel coherent in CodeSurf instead of turning the model picker into a noisy list of random CLIs.
+
+Files:
+- Modify: `src/renderer/src/components/ChatTile.tsx`
+- Modify: `src/renderer/src/components/AgentSetup.tsx`
+- Modify: `src/shared/types.ts`
+- Modify: `src/main/agents/agent-adapter-types.ts`
+- Test: add focused unit tests for provider grouping helpers if present
+
+### Step 1: Group by execution shape
+
+Provider UI should group adapters by capability, not brand only:
+- Native SDK / daemon-backed
+- Headless CLI
+- ACP-capable
+- MCP/server-capable
+- Import-only history
+- Missing / setup needed
+
+### Step 2: Keep advanced controls collapsed
+
+For each adapter show a compact default row:
+- name
+- detected version/path
+- readiness status
+- current model/mode
+
+Hide advanced controls behind disclosure:
+- exact argv preview
+- output parser mode
+- resume id/thread id
+- sandbox/approval details
+- context policy envelope
+
+### Step 3: Existing-surface manifestation only
+
+When an agent starts/runs/resumes:
+- use normal tool/status chips for adapter selected, effective context, and session id capture
+- use normal runtime/session rows for imported histories
+- do not create a separate mega "Agents" mini-app inside chat
+
+### Step 4: Verify + commit
+
+Run:
+- `npm test`
+- `npm run build`
+
+Suggested commit message:
+- `feat: polish multi-agent lane picker`
+
+---
+
 ## Manual acceptance checklist
 
 A burst is not done until these are true:
@@ -426,6 +987,14 @@ A burst is not done until these are true:
 - [ ] Daemon tests pass
 - [ ] `npm run build` passes
 - [ ] docs reflect the real implemented behavior, not the aspirational one
+- [ ] Hermes relay turns use the tested `hermes chat --query ...` contract and do not bypass CodeSurf context policy
+- [ ] OpenClaw relay turns use only real `openclaw agent` flags and make selected agent/session routing visible
+- [ ] OpenCode relay/chat paths use current `opencode run`/SDK-server contracts without stale approval-mode flags
+- [ ] Cursor Agent uses `cursor-agent --print` for headless execution, not the GUI-only `cursor` command
+- [ ] Gemini CLI uses headless `--prompt` plus parseable output and does not enable raw output by default
+- [ ] Cline and Amp adapters normalize external task/thread ids into runtime-lane resume metadata
+- [ ] Kilo can be missing without breaking CodeSurf, and becomes available when a tested `kilo` binary is installed
+- [ ] Missing/import-only agents appear as setup/history surfaces, not fake runnable providers
 
 ---
 
@@ -438,5 +1007,14 @@ A burst is not done until these are true:
 5. Burst 5 — daemon skill indexing
 6. Burst 6 — file-reference expansion
 7. Burst 7 — context buckets
+8. Burst 8 — agent CLI contract matrix for Hermes/OpenClaw/OpenCode
+9. Burst 9 — Hermes integration hardening
+10. Burst 10 — OpenClaw integration hardening
+11. Burst 11 — OpenCode integration hardening
+12. Burst 12 — generalized agent adapter registry
+13. Burst 13 — Cursor Agent and Gemini CLI adapters
+14. Burst 14 — Cline and Amp adapters
+15. Burst 15 — Kilo Code and import-only adapters
+16. Burst 16 — multi-agent picker and lane UX polish
 
-This order maximizes actual visible product value first, then continues the deeper Command Code harvests.
+This order maximizes actual visible product value first, continues the deeper Command Code harvests, locks the first external-agent integrations behind tested contracts, then expands the adapter registry to Cursor/Kilo/Cline/Amp/Gemini without hardcoding every future agent into core files.

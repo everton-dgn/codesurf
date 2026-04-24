@@ -30,6 +30,7 @@ export const DEFAULT_MODELS: Record<BuiltinProvider, ModelOption[]> = {
     { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
   ],
   codex: [
+    { id: 'gpt-5.5', label: 'GPT-5.5' },
     { id: 'gpt-5.4', label: 'GPT-5.4' },
     { id: 'gpt-5.1-codex-mini', label: 'Codex Mini' },
     { id: 'gpt-5.3-codex', label: 'Codex 5.3' },
@@ -48,11 +49,22 @@ export const DEFAULT_MODELS: Record<BuiltinProvider, ModelOption[]> = {
     { id: 'main', label: 'Main (default)', description: 'Configured default OpenClaw agent' },
   ],
   hermes: [
+    { id: 'openai-codex/gpt-5.5', label: 'GPT-5.5' },
+    { id: 'openai-codex/gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { id: 'openai-codex/gpt-5.4', label: 'GPT-5.4' },
+    { id: 'openai-codex/gpt-5.3-codex', label: 'Codex 5.3' },
+    { id: 'openai-codex/gpt-5.1-codex-max', label: 'Codex Max' },
+    { id: 'openai-codex/gpt-5.1-codex-mini', label: 'Codex Mini' },
+    { id: 'anthropic/claude-opus-4-7', label: 'Opus 4.7' },
     { id: 'anthropic/claude-opus-4-6', label: 'Opus 4.6' },
     { id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet 4.6' },
-    { id: 'openai/gpt-5.4', label: 'GPT-5.4' },
-    { id: 'openai/o4-mini', label: 'o4-mini' },
-    { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { id: 'anthropic/claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+    { id: 'gemini/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro' },
+    { id: 'gemini/gemini-3-pro-preview', label: 'Gemini 3 Pro' },
+    { id: 'gemini/gemini-3-flash-preview', label: 'Gemini 3 Flash' },
+    { id: 'openrouter/moonshotai/kimi-k2.6', label: 'Kimi K2.6', description: 'openrouter recommended' },
+    { id: 'openrouter/deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: 'openrouter' },
+    { id: 'openrouter/qwen/qwen3.6-plus', label: 'Qwen 3.6 Plus', description: 'openrouter' },
   ],
 }
 
@@ -124,7 +136,7 @@ export function getApproxContextWindowTokens(providerId: string, modelId: string
   const normalizedModel = modelId.toLowerCase()
   const normalizedProvider = providerId.toLowerCase()
 
-  if (normalizedModel.includes('gpt-5.4')) return 258_000
+  if (/gpt-5(?:\.|-|$)/.test(normalizedModel)) return 258_000
   if (normalizedModel.includes('o3') || normalizedModel.includes('o4')) return 200_000
   if (normalizedProvider === 'claude' || normalizedModel.includes('claude')) return 200_000
   if (normalizedProvider === 'codex') return 258_000

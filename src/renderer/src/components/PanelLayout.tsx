@@ -19,6 +19,20 @@ const PANEL_SPLIT_GUTTER_PX = 6
 const PANEL_SHELL_RADIUS_PX = 16
 const PANEL_LEAF_RADIUS_PX = 12
 
+interface PanelCornerRadii {
+  topLeft: number
+  topRight: number
+  bottomRight: number
+  bottomLeft: number
+}
+
+const DEFAULT_PANEL_CORNER_RADII: PanelCornerRadii = {
+  topLeft: PANEL_SHELL_RADIUS_PX,
+  topRight: PANEL_SHELL_RADIUS_PX,
+  bottomRight: PANEL_SHELL_RADIUS_PX,
+  bottomLeft: PANEL_SHELL_RADIUS_PX,
+}
+
 interface PanelOuterEdges {
   top: boolean
   right: boolean
@@ -26,11 +40,11 @@ interface PanelOuterEdges {
   left: boolean
 }
 
-function getLeafBorderRadius(edges: PanelOuterEdges): string {
-  const topLeft = edges.top && edges.left ? PANEL_SHELL_RADIUS_PX : PANEL_LEAF_RADIUS_PX
-  const topRight = edges.top && edges.right ? PANEL_SHELL_RADIUS_PX : PANEL_LEAF_RADIUS_PX
-  const bottomRight = edges.bottom && edges.right ? PANEL_SHELL_RADIUS_PX : PANEL_LEAF_RADIUS_PX
-  const bottomLeft = edges.bottom && edges.left ? PANEL_SHELL_RADIUS_PX : PANEL_LEAF_RADIUS_PX
+function getLeafBorderRadius(edges: PanelOuterEdges, outerRadii: PanelCornerRadii): string {
+  const topLeft = edges.top && edges.left ? outerRadii.topLeft : PANEL_LEAF_RADIUS_PX
+  const topRight = edges.top && edges.right ? outerRadii.topRight : PANEL_LEAF_RADIUS_PX
+  const bottomRight = edges.bottom && edges.right ? outerRadii.bottomRight : PANEL_LEAF_RADIUS_PX
+  const bottomLeft = edges.bottom && edges.left ? outerRadii.bottomLeft : PANEL_LEAF_RADIUS_PX
   return `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`
 }
 
@@ -615,9 +629,10 @@ interface LeafPanelProps {
   onCloseOthers: (panelId: string, tileId: string) => void
   onCloseToRight: (panelId: string, tileId: string) => void
   onLaunchTemplate?: (template: import('../../../shared/types').LayoutTemplate) => void
+  outerRadii: PanelCornerRadii
 }
 
-function LeafPanel({ leaf, outerEdges, getTileLabel, renderTile, isInteracting, onActivate, onPinTab, onCloseTab, onTabMouseDown, onPanelFocus, onAddTile, dragTarget, onExit, getTileType, onSplitNew, onCloseOthers, onCloseToRight, onLaunchTemplate }: LeafPanelProps): JSX.Element {
+function LeafPanel({ leaf, outerEdges, getTileLabel, renderTile, isInteracting, onActivate, onPinTab, onCloseTab, onTabMouseDown, onPanelFocus, onAddTile, dragTarget, onExit, getTileType, onSplitNew, onCloseOthers, onCloseToRight, onLaunchTemplate, outerRadii }: LeafPanelProps): JSX.Element {
   const theme = useTheme()
   const keepMountedWhenInactive = useCallback((tileId: string) => {
     const type = getTileType(tileId)
@@ -627,7 +642,7 @@ function LeafPanel({ leaf, outerEdges, getTileLabel, renderTile, isInteracting, 
   const tabs = leaf.tabs.map(id => ({ id, label: getTileLabel(id) }))
   const isEmpty = tabs.length === 0
   const dockZone = dragTarget?.panelId === leaf.id ? dragTarget.zone : null
-  const borderRadius = getLeafBorderRadius(outerEdges)
+  const borderRadius = getLeafBorderRadius(outerEdges, outerRadii)
 
   useEffect(() => {
     const el = panelRef.current
@@ -719,9 +734,10 @@ export interface PanelLayoutProps {
   onCloseToRight: (panelId: string, tileId: string) => void
   insetBottom?: number
   onLaunchTemplate?: (template: import('../../../shared/types').LayoutTemplate) => void
+  outerRadii?: PanelCornerRadii
 }
 
-export function PanelLayout({ root, getTileLabel, renderTile, onLayoutChange, onCloseTab, onAddTile, onExit, activePanelId: _activePanelId, onActivePanelChange, getTileType, onSplitNew, onCloseOthers, onCloseToRight, insetBottom = 4, onLaunchTemplate }: PanelLayoutProps): JSX.Element {
+export function PanelLayout({ root, getTileLabel, renderTile, onLayoutChange, onCloseTab, onAddTile, onExit, activePanelId: _activePanelId, onActivePanelChange, getTileType, onSplitNew, onCloseOthers, onCloseToRight, insetBottom = 4, onLaunchTemplate, outerRadii = DEFAULT_PANEL_CORNER_RADII }: PanelLayoutProps): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
   const [dragTarget, setDragTarget] = useState<{ panelId: string; zone: DockZone } | null>(null)
@@ -860,6 +876,7 @@ export function PanelLayout({ root, getTileLabel, renderTile, onLayoutChange, on
           onCloseOthers={onCloseOthers}
           onCloseToRight={onCloseToRight}
           onLaunchTemplate={onLaunchTemplate}
+          outerRadii={outerRadii}
         />
       )
     }

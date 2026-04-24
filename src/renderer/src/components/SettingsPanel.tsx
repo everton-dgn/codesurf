@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, lazy } from 'react'
-import type { AppSettings, AutoDreamSettings, ExecutionHostRecord, ExecutionMode, ToolPermissionGrant, Workspace } from '../../../shared/types'
-import { withDefaultSettings } from '../../../shared/types'
-import { Settings, Type, Monitor, FolderOpen, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, Puzzle, RefreshCw, Star, Wrench, Users, FileText, Globe, Eye, EyeOff, PanelRight, Pin, Shield } from 'lucide-react'
+import type { AppSettings, AutoDreamSettings, ExecutionHostRecord, ExecutionMode, GenerationProviderSettings, ToolPermissionGrant, Workspace } from '../../../shared/types'
+import { DEFAULT_SETTINGS, withDefaultSettings } from '../../../shared/types'
+import { Settings, Type, Monitor, FolderOpen, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, Puzzle, RefreshCw, Star, Wrench, Users, FileText, Globe, Eye, EyeOff, PanelRight, Pin, Shield, KeyRound, Image as ImageIcon, Video } from 'lucide-react'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { THEME_OPTIONS, getThemeCanvasDefaults, resolveEffectiveThemeId, getThemeById, type AppearanceMode } from '../theme'
@@ -25,7 +25,7 @@ interface Props {
   systemPrefersDark?: boolean
 }
 
-type BuiltinSection = 'general' | 'daemon' | 'canvas' | 'browser' | 'permissions' | 'mcp' | 'extensions' | 'prompts' | 'skills' | 'tools' | 'agents'
+type BuiltinSection = 'general' | 'daemon' | 'canvas' | 'providers' | 'browser' | 'permissions' | 'mcp' | 'extensions' | 'prompts' | 'skills' | 'tools' | 'agents'
 type Section = BuiltinSection | `ext:${string}`
 
 const SECTIONS: { id: Section; label: string; icon: React.ReactNode; description: string; group?: string }[] = [
@@ -33,6 +33,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ReactNode; description
   { id: 'general',    label: 'General',    icon: <Type size={15} />,       description: 'Display settings — fonts, weights, sizes, line heights, and raw JSON', group: 'app' },
   { id: 'daemon',     label: 'Daemon',     icon: <Settings size={15} />,   description: 'Daemon status, restart controls, execution routing, and remote hosts', group: 'app' },
   { id: 'canvas',     label: 'Canvas',     icon: <Monitor size={15} />,    description: 'Background, grid and snap settings', group: 'app' },
+  { id: 'providers',  label: 'Providers',  icon: <KeyRound size={15} />,   description: 'Image and video generation providers, keys, and default models', group: 'app' },
 
 
   { id: 'browser',    label: 'Browser',    icon: <Globe size={15} />,      description: 'Chrome data sync — cookies, bookmarks, history', group: 'app' },
@@ -68,6 +69,24 @@ interface MCPConfig {
 type PermissionListResult = {
   path: string
   grants: ToolPermissionGrant[]
+}
+
+type ProviderModelOption = {
+  id: string
+  name: string
+  label: string
+  methods: string[]
+  capabilities: Array<'image' | 'video' | 'text'>
+}
+
+type ProviderValidationResult = {
+  ok: boolean
+  providerId: string
+  message: string
+  models: ProviderModelOption[]
+  textModels: ProviderModelOption[]
+  imageModels: ProviderModelOption[]
+  videoModels: ProviderModelOption[]
 }
 
 type ExtensionListEntry = {
@@ -162,6 +181,8 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
   const [permissionData, setPermissionData] = useState<PermissionListResult | null>(null)
   const [permissionsLoading, setPermissionsLoading] = useState(false)
   const [permissionsError, setPermissionsError] = useState<string | null>(null)
+  const [visibleProviderKeys, setVisibleProviderKeys] = useState<Record<string, boolean>>({})
+  const [providerValidation, setProviderValidation] = useState<Record<string, ProviderValidationResult | { loading: true }>>({})
 
   const latestSettingsSaveRef = useRef(0)
   const settingsRef = useRef<AppSettings>(withDefaultSettings(initialSettings))
@@ -508,6 +529,42 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
       },
     })
   }, [updateSettingsPatch])
+
+  const updateGenerationProvider = useCallback((providerId: string, patch: Partial<GenerationProviderSettings>) => {
+    const current = settingsRef.current.generationProviders?.[providerId]
+    if (!current) return
+    updateSettingsPatch({
+      generationProviders: {
+        ...settingsRef.current.generationProviders,
+        [providerId]: {
+          ...current,
+          ...patch,
+          id: providerId,
+        },
+      },
+    })
+  }, [updateSettingsPatch])
+
+  const validateProvider = useCallback(async (provider: GenerationProviderSettings) => {
+    setProviderValidation(prev => ({ ...prev, [provider.id]: { loading: true } }))
+    try {
+      const result = await window.electron.settings.validateGenerationProvider(provider.id, provider)
+      setProviderValidation(prev => ({ ...prev, [provider.id]: result }))
+    } catch (err) {
+      setProviderValidation(prev => ({
+        ...prev,
+        [provider.id]: {
+          ok: false,
+          providerId: provider.id,
+          message: err instanceof Error ? err.message : String(err),
+          models: [],
+          textModels: [],
+          imageModels: [],
+          videoModels: [],
+        },
+      }))
+    }
+  }, [])
 
   const saveExecutionHost = useCallback(async (host: ExecutionHostRecord) => {
     setExecutionHostsError(null)
@@ -1176,6 +1233,309 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
           </>
         )
 
+      case 'providers': {
+        const generationProviders = Object.values(settings.generationProviders ?? {})
+        const providerOrder = ['gemini', 'anthropic', 'openrouter', 'openai', 'replicate', 'runway', 'luma', 'stability', 'local']
+        const sortedProviders = generationProviders.sort((a, b) => {
+          const ai = providerOrder.indexOf(a.id)
+          const bi = providerOrder.indexOf(b.id)
+          if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
+          return a.label.localeCompare(b.label)
+        })
+        const inputStyle: React.CSSProperties = {
+          width: '100%',
+          minWidth: 0,
+          padding: '7px 9px',
+          fontSize: fonts.secondarySize,
+          background: theme.surface.input,
+          color: theme.text.secondary,
+          border: `1px solid ${theme.border.default}`,
+          borderRadius: 8,
+          outline: 'none',
+          fontFamily: fonts.mono,
+        }
+        const labelStyle: React.CSSProperties = {
+          fontSize: Math.max(10, fonts.secondarySize - 1),
+          color: theme.text.disabled,
+          marginBottom: 5,
+        }
+        return (
+          <>
+            <SectionLabel label="Generation Providers" />
+            <div style={{ background: theme.surface.panelMuted, border: `1px solid ${theme.border.subtle}`, borderRadius: 10, padding: '12px 16px', marginBottom: 10 }}>
+              <div style={{ fontSize: fonts.size, color: theme.text.secondary, lineHeight: 1.45 }}>
+                These keys are for canvas image and video tools. Connected blocks can request edits or generations against an enabled provider, then replace the image or media source when the file is ready.
+              </div>
+              <div style={{ fontSize: Math.max(10, fonts.secondarySize - 1), color: theme.text.disabled, marginTop: 6 }}>
+                Keys are stored in the local CodeSurf settings file on this machine.
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 10 }}>
+              {sortedProviders.map(provider => {
+                const capabilities = new Set(provider.capabilities ?? [])
+                const showKey = visibleProviderKeys[provider.id] ?? false
+                const validation = providerValidation[provider.id]
+                const validationLoading = validation && 'loading' in validation
+                const validationResult = validation && !('loading' in validation) ? validation : null
+                const textModelOptions = validationResult?.textModels ?? []
+                const imageModelOptions = validationResult?.imageModels ?? []
+                const videoModelOptions = validationResult?.videoModels ?? []
+                const allModelOptions = validationResult?.models ?? []
+                const textListId = `provider-${provider.id}-text-models`
+                const imageListId = `provider-${provider.id}-image-models`
+                const videoListId = `provider-${provider.id}-video-models`
+                return (
+                  <div
+                    key={provider.id}
+                    style={{
+                      background: theme.surface.panelMuted,
+                      border: `1px solid ${provider.enabled ? theme.accent.base : theme.border.subtle}`,
+                      borderRadius: 10,
+                      padding: 14,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                      minWidth: 0,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: fonts.size, color: theme.text.primary, fontWeight: 700 }}>{provider.label}</span>
+                          {capabilities.has('image') && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: theme.text.muted, background: theme.surface.input, borderRadius: 999, padding: '3px 7px' }}>
+                              <ImageIcon size={11} />
+                              image
+                            </span>
+                          )}
+                          {capabilities.has('text') && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: theme.text.muted, background: theme.surface.input, borderRadius: 999, padding: '3px 7px' }}>
+                              <Type size={11} />
+                              text
+                            </span>
+                          )}
+                          {capabilities.has('video') && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: theme.text.muted, background: theme.surface.input, borderRadius: 999, padding: '3px 7px' }}>
+                              <Video size={11} />
+                              video
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: Math.max(10, fonts.secondarySize - 1), color: theme.text.disabled, fontFamily: fonts.mono, marginTop: 4 }}>
+                          {provider.id}
+                        </div>
+                      </div>
+                      <Toggle value={provider.enabled} onChange={enabled => updateGenerationProvider(provider.id, { enabled })} />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => validateProvider(provider)}
+                        disabled={Boolean(validationLoading)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          fontSize: fonts.secondarySize,
+                          fontWeight: 600,
+                          border: `1px solid ${theme.border.default}`,
+                          background: theme.surface.input,
+                          color: theme.text.secondary,
+                          cursor: validationLoading ? 'default' : 'pointer',
+                          opacity: validationLoading ? 0.7 : 1,
+                        }}
+                      >
+                        <RefreshCw size={13} />
+                        {validationLoading ? 'Checking...' : 'Validate key'}
+                      </button>
+                      {validationResult ? (
+                        <div
+                          style={{
+                            flex: 1,
+                            minWidth: 180,
+                            fontSize: Math.max(10, fonts.secondarySize - 1),
+                            color: validationResult.ok ? theme.accent.base : '#ff9b8b',
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          {validationResult.message}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {provider.id !== 'local' && (
+                      <div>
+                        <div style={labelStyle}>API key</div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <input
+                            type={showKey ? 'text' : 'password'}
+                            value={provider.apiKey ?? ''}
+                            onChange={e => updateGenerationProvider(provider.id, { apiKey: e.target.value })}
+                            placeholder={`${provider.label} API key`}
+                            autoComplete="off"
+                            spellCheck={false}
+                            style={inputStyle}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setVisibleProviderKeys(prev => ({ ...prev, [provider.id]: !showKey }))}
+                            title={showKey ? 'Hide key' : 'Show key'}
+                            style={{
+                              width: 34,
+                              height: 34,
+                              borderRadius: 8,
+                              border: `1px solid ${theme.border.default}`,
+                              background: theme.surface.input,
+                              color: theme.text.secondary,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {capabilities.has('text') && (
+                      <div>
+                        <div style={labelStyle}>Default text model</div>
+                        <input
+                          type="text"
+                          value={provider.textModel ?? ''}
+                          onChange={e => updateGenerationProvider(provider.id, { textModel: e.target.value })}
+                          placeholder={provider.id === 'anthropic' ? 'claude-sonnet-4-20250514' : provider.id === 'openrouter' ? 'openrouter/auto' : 'Provider model id'}
+                          list={textModelOptions.length ? textListId : undefined}
+                          spellCheck={false}
+                          style={inputStyle}
+                        />
+                        {textModelOptions.length ? (
+                          <datalist id={textListId}>
+                            {textModelOptions.map(model => <option key={model.name || model.id} value={model.id}>{model.label}</option>)}
+                          </datalist>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {capabilities.has('image') && (
+                      <div>
+                        <div style={labelStyle}>Default image model</div>
+                        <input
+                          type="text"
+                          value={provider.imageModel ?? ''}
+                          onChange={e => updateGenerationProvider(provider.id, { imageModel: e.target.value })}
+                          placeholder={provider.id === 'gemini' ? 'gemini-2.5-flash-image' : 'Provider model id'}
+                          list={imageModelOptions.length ? imageListId : undefined}
+                          spellCheck={false}
+                          style={inputStyle}
+                        />
+                        {imageModelOptions.length ? (
+                          <datalist id={imageListId}>
+                            {imageModelOptions.map(model => <option key={model.name || model.id} value={model.id}>{model.label}</option>)}
+                          </datalist>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {capabilities.has('video') && (
+                      <div>
+                        <div style={labelStyle}>Default video model</div>
+                        <input
+                          type="text"
+                          value={provider.videoModel ?? ''}
+                          onChange={e => updateGenerationProvider(provider.id, { videoModel: e.target.value })}
+                          placeholder={provider.id === 'gemini' ? 'veo-3.1-generate-preview' : 'Provider model id'}
+                          list={videoModelOptions.length ? videoListId : undefined}
+                          spellCheck={false}
+                          style={inputStyle}
+                        />
+                        {videoModelOptions.length ? (
+                          <datalist id={videoListId}>
+                            {videoModelOptions.map(model => <option key={model.name || model.id} value={model.id}>{model.label}</option>)}
+                          </datalist>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {provider.id === 'gemini' && capabilities.has('video') && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <div>
+                          <div style={labelStyle}>Video aspect</div>
+                          <select
+                            value={provider.videoAspectRatio ?? '16:9'}
+                            onChange={e => updateGenerationProvider(provider.id, { videoAspectRatio: e.target.value })}
+                            style={inputStyle}
+                          >
+                            <option value="16:9">16:9 landscape</option>
+                            <option value="9:16">9:16 portrait</option>
+                          </select>
+                        </div>
+                        <div>
+                          <div style={labelStyle}>Video resolution</div>
+                          <select
+                            value={provider.videoResolution ?? '720p'}
+                            onChange={e => updateGenerationProvider(provider.id, { videoResolution: e.target.value })}
+                            style={inputStyle}
+                          >
+                            <option value="720p">720p</option>
+                            <option value="1080p">1080p</option>
+                            <option value="4k">4k</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {validationResult?.ok && allModelOptions.length ? (
+                      <div style={{ fontSize: Math.max(10, fonts.secondarySize - 1), color: theme.text.disabled, lineHeight: 1.35 }}>
+                        {allModelOptions.length} accessible models listed. Image and video fields above will autocomplete with compatible models where the API exposes that metadata.
+                      </div>
+                    ) : null}
+
+                    {(provider.id === 'local' || provider.baseUrl !== undefined) && (
+                      <div>
+                        <div style={labelStyle}>Base URL</div>
+                        <input
+                          type="text"
+                          value={provider.baseUrl ?? ''}
+                          onChange={e => updateGenerationProvider(provider.id, { baseUrl: e.target.value })}
+                          placeholder="http://localhost:8188 or compatible endpoint"
+                          spellCheck={false}
+                          style={inputStyle}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <SettingRow label="Reset providers" description="Restore the built-in provider list while keeping unrelated settings untouched.">
+              <button
+                type="button"
+                onClick={() => updateSettingsPatch({ generationProviders: DEFAULT_SETTINGS.generationProviders })}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  fontSize: fonts.secondarySize,
+                  fontWeight: 600,
+                  border: `1px solid ${theme.border.default}`,
+                  background: theme.surface.input,
+                  color: theme.text.secondary,
+                  cursor: 'pointer',
+                }}
+              >
+                Reset list
+              </button>
+            </SettingRow>
+          </>
+        )
+      }
+
 
 
       case 'browser':
@@ -1806,7 +2166,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
               const groupLabel = group === 'app' ? 'App' : group === 'customise' ? 'Customise' : 'System'
               return (
                 <div key={group}>
-                  <div style={{ padding: '14px 16px 4px', fontSize: 9, fontWeight: 700, color: theme.text.disabled, letterSpacing: 1.2, textTransform: 'uppercase', userSelect: 'none' }}>{groupLabel}</div>
+                  <div style={{ padding: '14px 16px 4px', fontSize: 9, fontWeight: 700, color: theme.text.muted, letterSpacing: 1.2, textTransform: 'uppercase', userSelect: 'none' }}>{groupLabel}</div>
                   {groupSections.map(s => (
                     <div
                       key={s.id}
@@ -1814,15 +2174,15 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                       style={{
                         display: 'flex', alignItems: 'center', gap: 10,
                         padding: '8px 16px', cursor: 'pointer',
-                        color: section === s.id ? theme.text.primary : theme.text.disabled,
+                        color: section === s.id ? theme.text.primary : theme.text.secondary,
                         background: section === s.id ? theme.surface.selection : 'transparent',
                         fontSize: fonts.size, userSelect: 'none',
                         transition: 'color 0.1s'
                       }}
-                      onMouseEnter={e => { if (section !== s.id) e.currentTarget.style.color = theme.text.muted }}
-                      onMouseLeave={e => { if (section !== s.id) e.currentTarget.style.color = theme.text.disabled }}
+                      onMouseEnter={e => { if (section !== s.id) e.currentTarget.style.color = theme.text.primary }}
+                      onMouseLeave={e => { if (section !== s.id) e.currentTarget.style.color = theme.text.secondary }}
                     >
-                      <span style={{ opacity: section === s.id ? 1 : 0.5 }}>{s.icon}</span>
+                      <span style={{ opacity: section === s.id ? 1 : 0.8 }}>{s.icon}</span>
                       {s.label}
                     </div>
                   ))}
@@ -1837,7 +2197,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
               if (panelExts.length === 0) return null
               return (
                 <div>
-                  <div style={{ padding: '14px 16px 4px', fontSize: 9, fontWeight: 700, color: theme.text.disabled, letterSpacing: 1.2, textTransform: 'uppercase', userSelect: 'none' }}>Extensions</div>
+                  <div style={{ padding: '14px 16px 4px', fontSize: 9, fontWeight: 700, color: theme.text.muted, letterSpacing: 1.2, textTransform: 'uppercase', userSelect: 'none' }}>Extensions</div>
                   {panelExts.map(e => {
                     const sid = `ext:${e.id}` as Section
                     return (
@@ -1847,14 +2207,14 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                         style={{
                           display: 'flex', alignItems: 'center', gap: 10,
                           padding: '8px 16px', cursor: 'pointer',
-                          color: section === sid ? theme.text.primary : theme.text.disabled,
+                          color: section === sid ? theme.text.primary : theme.text.secondary,
                           background: section === sid ? theme.surface.selection : 'transparent',
                           fontSize: fonts.size, userSelect: 'none', transition: 'color 0.1s',
                         }}
-                        onMouseEnter={e2 => { if (section !== sid) e2.currentTarget.style.color = theme.text.muted }}
-                        onMouseLeave={e2 => { if (section !== sid) e2.currentTarget.style.color = theme.text.disabled }}
+                        onMouseEnter={e2 => { if (section !== sid) e2.currentTarget.style.color = theme.text.primary }}
+                        onMouseLeave={e2 => { if (section !== sid) e2.currentTarget.style.color = theme.text.secondary }}
                       >
-                        <span style={{ opacity: 0.6 }}>
+                        <span style={{ opacity: 0.85 }}>
                           <svg width="15" height="15" viewBox="0 0 14 14" fill="none"><path d="M6 1.5h2a.5.5 0 01.5.5v1.5H8a1 1 0 00-1 1 1 1 0 001 1h.5V7a.5.5 0 01-.5.5H6V7a1 1 0 00-1-1 1 1 0 00-1 1v.5H2.5A.5.5 0 012 7V5.5h.5a1 1 0 001-1 1 1 0 00-1-1H2V2a.5.5 0 01.5-.5H6z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round"/></svg>
                         </span>
                         {e.name}
@@ -1877,7 +2237,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
           {/* Section header */}
           <div style={{ padding: '28px 28px 0' }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: theme.text.primary, marginBottom: 4 }}>{active.label}</div>
-            <div style={{ fontSize: fonts.size, color: theme.text.disabled }}>{active.description}</div>
+            <div style={{ fontSize: fonts.size, color: theme.text.muted }}>{active.description}</div>
           </div>
 
           {/* Content */}

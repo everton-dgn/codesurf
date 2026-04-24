@@ -240,6 +240,141 @@ const THEMES: Record<string, AppTheme> = {
       modal: '0 32px 80px rgba(0,0,0,0.62)',
     },
   },
+  // ─────────────────────────────────────────────────────────────
+  // New theme — sampled from user-supplied reference screenshot.
+  // Palette is warm monochrome (R=G, B slightly lower) and INVERTS the
+  // usual hierarchy: sidebar is the darkest layer, content floats above it.
+  // Four decisions below are marked TODO(YOU) — they shape the theme's identity.
+  // ─────────────────────────────────────────────────────────────
+  'warm-graphite': {
+    // TODO(YOU) #1 — Naming. Rename `id` + `label` to something that matches
+    // your mental model. Must be lowercase-kebab for id. Examples:
+    //   'basalt' / 'Basalt',  'ember-dark' / 'Ember Dark',  'kiln' / 'Kiln'
+    id: 'warm-graphite',
+    label: 'Warm Graphite',
+    mode: 'dark',
+    description: 'Warm monochrome — compressed luma range, no true black.',
+    canvas: {
+      // Ref image: 99% of pixels L=32..56. Floor at the observed darkest (#262625).
+      background: '#262625',
+      backgroundEffect: '',
+      gridSmall: '#2d2d2b',
+      gridLarge: '#373735',
+      gridGlowSmall: 'rgba(255,250,240,0.40)',
+      gridGlowLarge: 'rgba(255,250,240,0.55)',
+    },
+    surface: {
+      // Flush with canvas — preserves the no-black aesthetic with no resize flash.
+      app: '#262625',
+      sidebarOverlay: 'rgba(20,20,19,0.88)',
+      sidebar: '#262625',       // sampled: darkest chrome
+      panel: '#2d2d2b',         // sampled: base panel / bubbles
+      panelMuted: '#262625',
+      panelElevated: '#373735', // sampled: lifted surface
+      titlebar: '#262625',
+      input: '#3d3d3b',         // sampled: input bar
+      hover: 'rgba(255,250,240,0.05)',
+      selection: 'rgba(212,165,116,0.14)',
+      selectionBorder: 'rgba(212,165,116,0.28)',
+      accentSoft: 'rgba(212,165,116,0.16)',
+    },
+    border: {
+      subtle: 'rgba(255,250,240,0.06)',
+      default: 'rgba(255,250,240,0.12)',
+      strong: 'rgba(255,250,240,0.22)',
+      accent: 'rgba(212,165,116,0.5)',
+    },
+    text: {
+      // TODO(YOU) #2 — Text tint. Pick ONE line (delete the others):
+      //   primary: '#e8e6e1',  // warm off-white — matches the palette warmth
+      //   primary: '#e7eaf0',  // neutral-cool — sharper, more "IDE"
+      //   primary: '#ede6d8',  // strongly warm — almost parchment
+      primary: '#e8e6e1',
+      secondary: '#c5c1b8',
+      muted: '#8a857b',
+      disabled: '#5d584f',
+      inverse: '#1a1a19',
+    },
+    accent: {
+      // TODO(YOU) #3 — Accent. Screenshot doesn't reveal one; this is
+      // a pure design call. Pick ONE trio (delete the others):
+      //   amber:  base '#d4a574', hover '#e6b988', soft 'rgba(212,165,116,0.16)'
+      //   sage:   base '#9bb68a', hover '#b0ca9f', soft 'rgba(155,182,138,0.16)'
+      //   rose:   base '#c78e8e', hover '#dba4a4', soft 'rgba(199,142,142,0.16)'
+      //   blue:   base '#7aa2ff', hover '#94b6ff', soft 'rgba(122,162,255,0.16)'
+      base: '#d4a574',
+      hover: '#e6b988',
+      soft: 'rgba(212,165,116,0.16)',
+    },
+    status: {
+      success: '#8fb57a',
+      warning: '#e6b85f',
+      danger: '#e68a7a',
+    },
+    chat: {
+      background: '#373735', // sampled: chat column background
+      placeholder: '#6f6a60',
+      input: '#3d3d3b',
+      inputBorder: 'rgba(255,250,240,0.08)',
+      text: '#e8e6e1',
+      textSecondary: '#c5c1b8',
+      muted: '#8a857b',
+      subtle: '#5d584f',
+      divider: 'rgba(255,250,240,0.07)',
+      // TODO(YOU) #4 — Bubble differentiation. The screenshot shows bubbles
+      // at the SAME shade (flat, role shown by alignment only). If you prefer
+      // the classic differentiated look, swap the commented values:
+      //   assistantBubble: '#2d2d2b',  userBubble: '#3d3d3b'  // flat (screenshot-accurate)
+      //   assistantBubble: '#2d2d2b',  userBubble: '#4a3d2c'  // warm-tinted user bubble
+      assistantBubble: '#2d2d2b',
+      assistantBubbleBorder: 'rgba(255,250,240,0.06)',
+      userBubble: '#2d2d2b',
+      userBubbleBorder: 'rgba(255,250,240,0.08)',
+      dropdownBackground: '#262625',
+      dropdownBorder: 'rgba(255,250,240,0.10)',
+      dropdownActiveBackground: '#373735',
+      dropdownHoverBackground: '#2d2d2b',
+    },
+    terminal: {
+      background: '#2d2d2b',
+      foreground: '#e8e6e1',
+      cursor: '#d4a574',
+      cursorAccent: '#2d2d2b',
+      selection: 'rgba(212,165,116,0.25)',
+      black: '#262625',
+      red: '#e68a7a',
+      green: '#8fb57a',
+      yellow: '#e6b85f',
+      blue: '#7aa2ff',
+      magenta: '#c78e8e',
+      cyan: '#7fb8b0',
+      white: '#c5c1b8',
+      brightBlack: '#5d584f',
+      brightRed: '#ff9b8a',
+      brightGreen: '#a3c98e',
+      brightYellow: '#ffcc73',
+      brightBlue: '#94b6ff',
+      brightMagenta: '#dba4a4',
+      brightCyan: '#9bd0c6',
+      brightWhite: '#e8e6e1',
+    },
+    editor: {
+      monacoBase: 'vs-dark',
+      background: '#2d2d2b',
+    },
+    extension: {
+      background: '#2d2d2b',
+      panel: '#373735',
+      border: 'rgba(255,250,240,0.10)',
+      text: '#e8e6e1',
+      muted: '#8a857b',
+      accent: '#d4a574',
+    },
+    shadow: {
+      panel: '0 10px 36px rgba(0,0,0,0.45)',
+      modal: '0 32px 80px rgba(0,0,0,0.65)',
+    },
+  },
   'graphite-dark': {
     id: 'graphite-dark',
     label: 'Graphite Dark',

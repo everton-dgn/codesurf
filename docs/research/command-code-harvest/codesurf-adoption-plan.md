@@ -292,6 +292,117 @@ Do:
 - inject summaries, not massive raw content
 - let user inspect included skills before send
 
+## Phase 8 — Harden Hermes, OpenClaw, and OpenCode as first-class agent lanes
+
+## Goal
+
+Make external agent integrations durable, inspectable, and privacy-aligned instead of relying on brittle one-off CLI spawn calls.
+
+## Why now
+
+CodeSurf already detects these binaries and has relay/chat execution paths for them. The next improvement is to lock each integration behind tested adapter contracts so future CLI drift does not silently break runtime lanes.
+
+## Tasks
+
+### 8.1 Shared agent CLI contracts
+
+Files:
+- new: `src/main/agents/agent-cli-contracts.ts`
+- `src/main/relay/provider-executor.ts`
+- `src/main/ipc/chat.ts`
+- `src/main/agent-paths.ts`
+- test: `test/agent-cli-contracts.test.ts`
+
+Do:
+- extract pure argv builders and stdout parsers for Hermes, OpenClaw, and OpenCode
+- test those builders with fake binaries before touching runtime behavior
+- keep timeouts and spawn lifecycle in the executor layer, not the contract helpers
+- surface selected agent/session/model metadata as runtime-lane metadata
+
+### 8.2 Hermes integration improvements
+
+Do:
+- use `hermes chat --query <prompt> --quiet --source tool` as the tested baseline
+- preserve CodeSurf's own privacy/context-bucket policy by passing `--ignore-rules` when CodeSurf already assembled the context
+- avoid `--ignore-user-config` by default so provider credentials remain available
+- capture `session_id: ...`, store it per runtime lane, and resume with `--resume <id>`
+- only pass `--yolo` for explicit user-selected bypass behavior
+
+### 8.3 OpenClaw integration improvements
+
+Do:
+- use the real CLI contract: `openclaw agent --json --agent <id> --message <prompt>` or `--session-id <id>` for resume
+- discover configured agents through `openclaw agents list --json`
+- match requested models against agent id/model exactly, with clear available-agent errors
+- preserve session-source import for `~/.openclaw/agents` and nested subagent/cron metadata
+- never reintroduce non-existent flags (`--output-format`, `--approval-mode`, `--model`, `-p`, etc.)
+
+### 8.4 OpenCode integration improvements
+
+Do:
+- split OpenCode into two stable paths:
+  - SDK/server manager for interactive chat and model discovery
+  - `opencode run --format json ...` for relay/one-shot lanes
+- remove stale `--approval-mode` usage; current `opencode run` uses `--dangerously-skip-permissions` for explicit bypass
+- parse JSON events line-by-line instead of regexing the first object
+- keep model discovery/warmup asynchronous and cached so ChatTile never beachballs
+- expose OpenCode server health/readiness in Agent Setup
+
+## Phase 9 — Expand to Cursor, Kilo Code, Cline, Amp, Gemini CLI, and future agents
+
+## Goal
+
+Make CodeSurf a multi-agent lane host where new coding agents can be added by registering a tested adapter, not by threading another provider through every UI and executor switch statement.
+
+## Tasks
+
+### 9.1 Generalized adapter registry
+
+Files:
+- new: `src/main/agents/agent-adapter-registry.ts`
+- new: `src/main/agents/agent-adapter-types.ts`
+- new: `src/main/agents/adapters/*.ts`
+- `src/main/agent-paths.ts`
+- `src/main/relay/provider-executor.ts`
+- `src/renderer/src/components/AgentSetup.tsx`
+- tests: `test/agent-adapter-registry.test.ts`, `test/agent-cli-contracts.test.ts`
+
+Do:
+- define capabilities (`headlessRun`, `streamJson`, `resume`, `modelSelect`, `cwdSelect`, `approvalMode`, `mcp`, `acp`, `sessionImport`)
+- move binary candidates/version/help probes into adapter metadata
+- render Agent Setup from registry output
+- store readiness metadata only; never store or log secrets/auth tokens/API keys
+
+### 9.2 Cursor Agent and Gemini CLI
+
+Do:
+- Cursor Agent: prefer `cursor-agent --print --output-format stream-json`, with `--workspace`, `--model`, `--resume`, `--mode plan|ask`, and bypass flags only on explicit user choice
+- Gemini CLI: prefer headless `gemini --prompt`, parseable `--output-format json|stream-json`, `--model`, `--resume`, `--approval-mode`, and sandbox/policy flags only through CodeSurf's inspected policy
+- parse stream events line-by-line and surface exact included context through normal tool chips
+
+### 9.3 Cline and Amp
+
+Do:
+- Cline: support `cline task <prompt>` / `cline <prompt>`, `--json`, `--cwd`, `--model`, `--plan`, `--act`, `--taskId`, `--continue`
+- Amp: support `amp -x` / `amp --execute`, `--stream-json`, `--mode`, `amp threads new`, `amp threads continue`
+- normalize task/thread/session ids into runtime-lane resume metadata
+- keep IDE context import (`--ide`) disabled unless the user explicitly asks for it
+
+### 9.4 Kilo Code and import-only adapters
+
+Do:
+- Kilo: discovery-first because it may not be installed; docs baseline is `npm install -g @kilocode/cli`, `kilo run [message..]`, `kilo serve`, `kilo session`, `kilo export`, `kilo acp`, and `kilo mcp`
+- missing Kilo should show as Missing/setup-needed, not an app error
+- agents without stable headless execution should enter CodeSurf as `sessionImport` / `readOnlyHistory` adapters before becoming runnable chat providers
+
+### 9.5 Multi-agent UI discipline
+
+Do:
+- group agents by capability shape: native SDK, headless CLI, ACP, MCP/server, import-only, missing/setup
+- keep default UI compact and Apple-minimal
+- hide exact argv, sandbox, approval, resume, and context-policy details under advanced disclosure
+- use existing chat tool/status chips and session rows; do not create a separate mega Agents mini-app in chat
+
 ## What should become CodeSurf skills first
 
 Good first-party skills:
@@ -339,6 +450,15 @@ If doing this in small controlled bursts, I would go in this exact order:
 8. add file reference expansion
 9. add MCP client manager
 10. add skill indexing and chat-side skill inclusion
+11. add shared Hermes/OpenClaw/OpenCode adapter-contract tests
+12. harden Hermes session/context/toolset integration
+13. harden OpenClaw agent/session routing
+14. harden OpenCode SDK/CLI lifecycle and JSON-event parsing
+15. add a registry-backed adapter model for more agents
+16. add Cursor Agent and Gemini CLI adapters
+17. add Cline and Amp adapters
+18. add Kilo Code and import-only/history adapters
+19. polish the multi-agent picker/lane UX
 
 ## The main principle
 

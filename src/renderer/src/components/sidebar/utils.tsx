@@ -115,6 +115,7 @@ export function getSessionAgentLabel(session: SessionEntry): string {
   if (key === 'claude') return 'Claude'
   if (key === 'codex') return 'Codex'
   if (key === 'cursor') return 'Cursor'
+  if (key === 'hermes') return 'Hermes'
   if (key === 'openclaw') return 'OpenClaw'
   if (key === 'opencode') return 'OpenCode'
   return session.sourceLabel || 'CodeSurf'
@@ -238,6 +239,7 @@ import {
   CodeSurfIcon,
   CodexIcon,
   CursorIcon,
+  HermesIcon,
   OpenClawIcon,
   OpenCodeIcon,
 } from '../icons/providerIcons'
@@ -247,6 +249,7 @@ export const SESSION_SOURCE_ICONS: Record<string, React.JSX.Element> = {
   claude:   <ClaudeIcon size={14} />,
   codex:    <CodexIcon size={14} />,
   cursor:   <CursorIcon size={14} />,
+  hermes:   <HermesIcon size={14} />,
   openclaw: <OpenClawIcon size={14} />,
   opencode: <OpenCodeIcon size={14} />,
 }

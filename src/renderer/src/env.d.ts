@@ -64,9 +64,20 @@ interface ElectronAPI {
     onInject(cb: (cardId: string, message: string, appendNewline: boolean) => void): () => void
     inject(cardId: string, message: string): Promise<void>
   }
+  tileContext?: {
+    get(workspaceId: string, tileId: string, key?: string): Promise<unknown>
+    getAll(workspaceId: string, tileId: string, tagPrefix?: string): Promise<Array<{ key: string; value: unknown; updatedAt?: number; source?: string }>>
+    set(workspaceId: string, tileId: string, key: string, value: unknown): Promise<boolean>
+    delete(workspaceId: string, tileId: string, key: string): Promise<boolean>
+    onChanged?(tileId: string, cb: (data: { tileId: string; key: string; value: unknown }) => void): () => void
+  }
+  image?: {
+    edit(req: { tileId: string; prompt: string; provider?: string; model?: string; outputPath?: string }): Promise<{ ok: boolean; result?: string; error?: string }>
+  }
   chat?: {
     send(req: unknown): Promise<{ ok: boolean; jobId?: string; detached?: boolean }>
     resumeJob?(req: unknown): Promise<{ ok: boolean; resumed?: boolean; jobId?: string | null }>
+    steer?(payload: { cardId: string; message: string }): Promise<{ ok: boolean; error?: string }>
     stop(cardId: string): Promise<void>
     clearSession(cardId: string): Promise<{ ok: boolean }>
     opencodeModels(): Promise<{ models: Array<{ id: string; label: string; description?: string }>; source?: string; loading?: boolean }>
@@ -291,6 +302,15 @@ interface ElectronAPI {
     set(settings: import('../../shared/types').AppSettings): Promise<import('../../shared/types').AppSettings>
     getRawJson(): Promise<{ path: string; content: string }>
     setRawJson(json: string): Promise<{ ok: boolean; error?: string; settings?: import('../../shared/types').AppSettings }>
+    validateGenerationProvider(providerId: string, providerPatch?: Partial<import('../../shared/types').GenerationProviderSettings>): Promise<{
+      ok: boolean
+      providerId: string
+      message: string
+      models: Array<{ id: string; name: string; label: string; methods: string[]; capabilities: Array<'image' | 'video' | 'text'> }>
+      textModels: Array<{ id: string; name: string; label: string; methods: string[]; capabilities: Array<'image' | 'video' | 'text'> }>
+      imageModels: Array<{ id: string; name: string; label: string; methods: string[]; capabilities: Array<'image' | 'video' | 'text'> }>
+      videoModels: Array<{ id: string; name: string; label: string; methods: string[]; capabilities: Array<'image' | 'video' | 'text'> }>
+    }>
   }
   permissions: {
     list(): Promise<{ path: string; grants: import('../../shared/types').ToolPermissionGrant[] }>

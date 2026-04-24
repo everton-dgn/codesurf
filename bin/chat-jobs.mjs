@@ -99,6 +99,15 @@ function sanitizeClaudeStderrText(text) {
     .trim()
 }
 
+function sanitizeAgentCliDiagnostic(message) {
+  const secretName = String.raw`[A-Z0-9_./-]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_./-]*`
+  const quotedOrBareValue = String.raw`(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)`
+  return String(message ?? '')
+    .replace(new RegExp(`\\b(${secretName})\\s*=\\s*${quotedOrBareValue}`, 'gi'), '$1=[REDACTED]')
+    .replace(/\b(authorization\s*:\s*(?:bearer|token)\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)/gi, '$1[REDACTED]')
+    .replace(/\b(api\s*key|api[_-]?key|token|secret|password)\s*:\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)/gi, '$1: [REDACTED]')
+}
+
 function formatClaudeSdkError(error, stderrText) {
   const message = error instanceof Error ? error.message : String(error)
   const stderr = sanitizeClaudeStderrText(stderrText)
@@ -504,6 +513,143 @@ function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPro
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
   const preamble = joinPromptSections(instructionPrompt, skillsPrompt, asyncPrompt)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
+}
+
+function pushOpenCodeFlag(args, flag, value) {
+  const str = String(value ?? '').trim()
+  if (!str) return
+  args.push(flag, str)
+}
+
+function buildOpenCodeRunArgs(request) {
+  const args = ['run', '--format', 'json']
+  pushOpenCodeFlag(args, '--model', request.model)
+  pushOpenCodeFlag(args, '--agent', request.agent)
+  pushOpenCodeFlag(args, '--session', request.sessionId)
+  pushOpenCodeFlag(args, '--dir', request.cwd)
+  if (request.bypassPermissions) args.push('--dangerously-skip-permissions')
+  args.push(request.prompt)
+  return args
+}
+
+const HERMES_MODEL_PROVIDER_PREFIXES = {
+  anthropic: 'anthropic',
+  arcee: 'arcee',
+  'arcee-ai': 'arcee',
+  copilot: 'copilot',
+  'copilot-acp': 'copilot-acp',
+  gemini: 'gemini',
+  google: 'gemini',
+  huggingface: 'huggingface',
+  'kimi-coding': 'kimi-coding',
+  'kimi-coding-cn': 'kimi-coding-cn',
+  kilocode: 'kilocode',
+  minimax: 'minimax',
+  'minimax-cn': 'minimax-cn',
+  nous: 'nous',
+  nvidia: 'nvidia',
+  'ollama-cloud': 'ollama-cloud',
+  openai: 'openai',
+  'openai-codex': 'openai-codex',
+  openrouter: 'openrouter',
+  stepfun: 'stepfun',
+  'x-ai': 'xai',
+  xai: 'xai',
+  xiaomi: 'xiaomi',
+  'z-ai': 'zai',
+  zai: 'zai',
+}
+
+function resolveHermesModelSelection(model, provider) {
+  const rawModel = String(model ?? '').trim()
+  const explicitProvider = String(provider ?? '').trim()
+  if (!rawModel) return { model: null, provider: explicitProvider || null }
+  if (explicitProvider) return { model: rawModel, provider: explicitProvider }
+
+  const slashIndex = rawModel.indexOf('/')
+  if (slashIndex <= 0) return { model: rawModel, provider: null }
+
+  const prefix = rawModel.slice(0, slashIndex).trim().toLowerCase()
+  const remainder = rawModel.slice(slashIndex + 1).trim()
+  const inferredProvider = HERMES_MODEL_PROVIDER_PREFIXES[prefix]
+  if (!inferredProvider || !remainder) return { model: rawModel, provider: null }
+  return { model: remainder, provider: inferredProvider }
+}
+
+function buildHermesChatArgs(request) {
+  const args = ['chat', '--query', request.prompt, '--quiet', '--source', 'tool']
+  const selection = resolveHermesModelSelection(request.model, request.provider)
+  pushOpenCodeFlag(args, '--model', selection.model)
+  pushOpenCodeFlag(args, '--provider', selection.provider)
+  pushOpenCodeFlag(args, '--toolsets', Array.isArray(request.toolsets) ? request.toolsets.join(',') : request.toolsets)
+  pushOpenCodeFlag(args, '--resume', request.resumeSessionId)
+  if (request.ignoreRules) args.push('--ignore-rules')
+  if (request.bypassPermissions) args.push('--yolo')
+  return args
+}
+
+function parseHermesOutput(stdout) {
+  let sessionId = null
+  const textLines = []
+  for (const line of String(stdout ?? '').replace(/\r\n/g, '\n').split('\n')) {
+    const match = line.match(/^\s*(?:session_id|session)\s*:\s*(.+?)\s*$/i)
+    if (match) {
+      if (!sessionId) sessionId = match[1].trim()
+      continue
+    }
+    textLines.push(line)
+  }
+  return {
+    sessionId,
+    text: textLines.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
+  }
+}
+
+function extractAgentSessionId(value) {
+  if (!value || typeof value !== 'object') return null
+  const candidates = [
+    value.sessionId,
+    value.session_id,
+    value.sessionID,
+    value.thread_id,
+    value.result?.sessionId,
+    value.result?.session_id,
+    value.result?.sessionID,
+  ]
+  if (value.type === 'session' || value.type === 'thread.started') {
+    candidates.push(value.id)
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+  }
+  return null
+}
+
+function extractAgentContentText(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(part => {
+      if (!part || typeof part !== 'object') return ''
+      return typeof part.text === 'string'
+        ? part.text
+        : typeof part.content === 'string'
+          ? part.content
+          : ''
+    })
+    .filter(Boolean)
+    .join('')
+}
+
+function extractOpenCodeTextPayload(event) {
+  if (!event || typeof event !== 'object') return ''
+  if (typeof event.result === 'string') return event.result
+  if (typeof event.text === 'string' && (event.role === 'assistant' || event.type === 'assistant')) return event.text
+  if (typeof event.message === 'string' && (event.role === 'assistant' || event.type === 'assistant')) return event.message
+  if (event.type === 'message' && event.role === 'assistant') return extractAgentContentText(event.content)
+  if (event.role === 'assistant') return extractAgentContentText(event.content)
+  if (event.type === 'assistant') return extractAgentContentText(event.message?.content ?? event.content)
+  return ''
 }
 
 function writeSseEvent(res, payload) {
@@ -1010,6 +1156,186 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     await appendEvent(job.id, { type: 'done' })
   }
 
+  function hermesToolsetsForRequest(request) {
+    const explicitToolsets = Array.isArray(request.toolsets)
+      ? request.toolsets.filter(Boolean).join(',')
+      : String(request.toolsets ?? '').trim()
+    if (explicitToolsets) return explicitToolsets
+
+    const modeMap = {
+      full: 'terminal,file,web,browser',
+      terminal: 'terminal,file',
+      web: 'web,browser',
+      query: '',
+    }
+    return modeMap[request.mode ?? ''] ?? 'terminal,file,web'
+  }
+
+  async function runHermesJob(job, request, workspaceDir, instructionPrompt) {
+    const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
+    if (!lastUserMsg) {
+      await appendEvent(job.id, { type: 'error', error: 'No user message' })
+      await appendEvent(job.id, { type: 'done' })
+      return
+    }
+
+    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    const proc = spawn('hermes', buildHermesChatArgs({
+      prompt,
+      model: request.model,
+      provider: request.providerId ?? request.modelProvider ?? request.providerName,
+      toolsets: hermesToolsetsForRequest(request),
+      resumeSessionId: request.sessionId,
+      ignoreRules: Boolean(instructionPrompt || request.skillsPrompt || request.contextBuckets || request.memoryPrompt),
+      bypassPermissions: request.mode === 'bypassPermissions',
+    }), {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+      ...(workspaceDir ? { cwd: workspaceDir } : {}),
+    })
+
+    job.proc = proc
+    job.cancel = () => proc.kill('SIGTERM')
+
+    let stdoutBuf = ''
+    let stderrBuf = ''
+    let exitCode = null
+    let procError = null
+
+    proc.stdout?.on('data', (chunk) => {
+      stdoutBuf += chunk.toString()
+    })
+    proc.stderr?.on('data', (chunk) => {
+      stderrBuf += chunk.toString()
+    })
+
+    await new Promise((resolveJob) => {
+      proc.on('close', (code) => {
+        exitCode = code
+        resolveJob()
+      })
+      proc.on('error', (error) => {
+        procError = error
+        resolveJob()
+      })
+    })
+
+    if (procError instanceof Error) {
+      await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(procError.message) })
+    } else if (typeof exitCode === 'number' && exitCode !== 0) {
+      const diagnostic = stderrBuf.trim() || stdoutBuf.trim() || `Hermes exited with code ${exitCode}`
+      await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(diagnostic) })
+    } else {
+      const parsed = parseHermesOutput(stdoutBuf)
+      if (parsed.sessionId) await appendEvent(job.id, { type: 'session', sessionId: parsed.sessionId })
+      if (parsed.text) await appendEvent(job.id, { type: 'text', text: parsed.text })
+    }
+
+    await appendEvent(job.id, { type: 'done' })
+  }
+
+  async function runOpenCodeJob(job, request, workspaceDir, instructionPrompt) {
+    const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
+    if (!lastUserMsg) {
+      await appendEvent(job.id, { type: 'error', error: 'No user message' })
+      await appendEvent(job.id, { type: 'done' })
+      return
+    }
+
+    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    const agent = typeof request.agent === 'string'
+      ? request.agent
+      : typeof request.agentName === 'string'
+        ? request.agentName
+        : typeof request.metadata?.agent === 'string'
+          ? request.metadata.agent
+          : null
+    const proc = spawn('opencode', buildOpenCodeRunArgs({
+      prompt,
+      model: request.model,
+      agent,
+      sessionId: request.sessionId,
+      cwd: workspaceDir,
+      bypassPermissions: request.mode === 'bypassPermissions',
+    }), {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+    })
+
+    job.proc = proc
+    job.cancel = () => proc.kill('SIGTERM')
+
+    const emittedSessionIds = new Set()
+    const fallbackTextParts = []
+    let pendingStdout = ''
+    let stdoutChain = Promise.resolve()
+    let stderrBuf = ''
+    let exitCode = null
+    let procError = null
+
+    const handleOpenCodeJsonEvent = async (evt) => {
+      if (!evt || typeof evt !== 'object') return
+      const sessionId = extractAgentSessionId(evt)
+      if (sessionId && !emittedSessionIds.has(sessionId)) {
+        emittedSessionIds.add(sessionId)
+        await appendEvent(job.id, { type: 'session', sessionId })
+      }
+
+      const text = extractOpenCodeTextPayload(evt)
+      if (text) await appendEvent(job.id, { type: 'text', text })
+    }
+
+    const processOpenCodeLine = async (line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+      try {
+        await handleOpenCodeJsonEvent(JSON.parse(trimmed))
+      } catch {
+        fallbackTextParts.push(line)
+      }
+    }
+
+    proc.stdout?.on('data', (chunk) => {
+      pendingStdout += chunk.toString()
+      const lines = pendingStdout.split(/\r?\n/)
+      pendingStdout = lines.pop() ?? ''
+      stdoutChain = stdoutChain.then(async () => {
+        for (const line of lines) await processOpenCodeLine(line)
+      }).catch(() => {})
+    })
+
+    proc.stderr?.on('data', (chunk) => {
+      stderrBuf += chunk.toString()
+    })
+
+    await new Promise((resolveJob) => {
+      proc.on('close', (code) => {
+        exitCode = code
+        resolveJob()
+      })
+      proc.on('error', (error) => {
+        procError = error
+        resolveJob()
+      })
+    })
+
+    await stdoutChain.catch(() => {})
+    if (pendingStdout.trim()) {
+      await processOpenCodeLine(pendingStdout)
+    }
+
+    if (procError instanceof Error) {
+      await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(procError.message) })
+    } else if (typeof exitCode === 'number' && exitCode !== 0) {
+      const diagnostic = stderrBuf.trim() || fallbackTextParts.join('\n').trim() || `OpenCode exited with code ${exitCode}`
+      await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(diagnostic) })
+    } else if (fallbackTextParts.length > 0) {
+      await appendEvent(job.id, { type: 'text', text: fallbackTextParts.join('\n').trim() })
+    }
+
+    await appendEvent(job.id, { type: 'done' })
+  }
+
   async function runJob(job, request, workspaceDir) {
     try {
       const memoryContext = await loadMemoryContext({
@@ -1070,8 +1396,12 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         await runClaudeJob(job, request, workspaceDir, instructionPrompt)
       } else if (request.provider === 'codex') {
         await runCodexJob(job, request, workspaceDir, instructionPrompt)
+      } else if (request.provider === 'opencode') {
+        await runOpenCodeJob(job, request, workspaceDir, instructionPrompt)
+      } else if (request.provider === 'hermes') {
+        await runHermesJob(job, request, workspaceDir, instructionPrompt)
       } else {
-        await appendEvent(job.id, { type: 'error', error: `Daemon execution is only implemented for Claude and Codex right now. Requested: ${request.provider}` })
+        await appendEvent(job.id, { type: 'error', error: `Daemon execution is only implemented for Claude, Codex, OpenCode, and Hermes right now. Requested: ${request.provider}` })
         await appendEvent(job.id, { type: 'done' })
       }
     } finally {

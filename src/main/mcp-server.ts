@@ -12,14 +12,22 @@
 import { bus } from './event-bus'
 import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { promises as fs } from 'fs'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { ExtensionRegistry } from './extensions/registry'
+import type { AppSettings, TileState } from '../shared/types'
 import { buildPeerCommandPayload, getAllNodeTools, getNodeToolSchemaByName, getPeerBridgeNodeTools } from '../shared/nodeTools'
+import { withDefaultSettings } from '../shared/types'
 import * as peerState from './peer-state'
 import { CONTEX_HOME } from './paths'
-import { loadWorkspaceTileState, saveWorkspaceTileState } from './storage/workspaceArtifacts'
+import { canvasStatePath, ensureWorkspaceStorageMigrated, loadWorkspaceTileState, saveWorkspaceTileState } from './storage/workspaceArtifacts'
+import {
+  extractGeminiInlineImage,
+  makeImageOutputPath,
+  mimeTypeForImagePath,
+  selectImageProvider,
+} from './image-generation'
 
 const MCP_TOKEN = randomUUID()
 const MAX_BODY = 1024 * 1024 // 1MB
@@ -28,6 +36,8 @@ const MAX_BODY = 1024 * 1024 // 1MB
 const sseClients = new Map<string, Set<ServerResponse>>()
 
 const getContexDir = (): string => CONTEX_HOME
+const SETTINGS_PATH = join(CONTEX_HOME, 'settings.json')
+const LEGACY_CONFIG_PATH = join(CONTEX_HOME, 'config.json')
 
 interface MCPRequest {
   jsonrpc: string
@@ -44,8 +54,44 @@ type UserConfigWorkspaceRef = {
   path: string
 }
 
-function workspaceCanvasStatePath(workspaceId: string): string {
-  return join(CONTEX_HOME, 'workspaces', workspaceId, '.contex', 'canvas-state.json')
+type ResolvedImageTileSource = {
+  workspaceId: string
+  filePath: string
+}
+
+type TileContextBackedState = {
+  _context?: Record<string, { key: string; value: unknown; updatedAt: number; source: string }>
+  [key: string]: unknown
+}
+
+async function readAppSettingsForMcp(): Promise<ReturnType<typeof withDefaultSettings>> {
+  for (const path of [SETTINGS_PATH, LEGACY_CONFIG_PATH]) {
+    try {
+      const raw = await fs.readFile(path, 'utf8')
+      const parsed = JSON.parse(raw) as Partial<AppSettings> | { settings?: Partial<AppSettings> }
+      const settings = parsed && typeof parsed === 'object' && 'settings' in parsed
+        ? parsed.settings
+        : parsed
+      return withDefaultSettings(settings)
+    } catch {
+      // try next source
+    }
+  }
+  return withDefaultSettings({})
+}
+
+async function readCanvasStateTiles(workspaceId: string): Promise<TileState[]> {
+  const storageIds = await ensureWorkspaceStorageMigrated(workspaceId)
+  for (const storageId of storageIds) {
+    try {
+      const raw = await fs.readFile(canvasStatePath(storageId), 'utf8')
+      const parsed = JSON.parse(raw) as { tiles?: TileState[] }
+      if (Array.isArray(parsed.tiles)) return parsed.tiles
+    } catch {
+      // try next alias
+    }
+  }
+  return []
 }
 
 async function findNoteTileBackingFile(tileId: string): Promise<string | null> {
@@ -60,9 +106,8 @@ async function findNoteTileBackingFile(tileId: string): Promise<string | null> {
     }
 
     try {
-      const raw = await fs.readFile(workspaceCanvasStatePath(ws.id), 'utf8')
-      const parsed = JSON.parse(raw) as { tiles?: Array<Record<string, unknown>> }
-      const tile = parsed.tiles?.find(entry => entry?.id === tileId && entry?.type === 'note')
+      const tiles = await readCanvasStateTiles(ws.id)
+      const tile = tiles.find(entry => entry?.id === tileId && entry?.type === 'note')
       const filePath = typeof tile?.filePath === 'string' ? tile.filePath.trim() : ''
       if (filePath) return filePath
     } catch {
@@ -70,6 +115,37 @@ async function findNoteTileBackingFile(tileId: string): Promise<string | null> {
     }
   }
   return null
+}
+
+async function findImageTileSourcePath(tileId: string): Promise<ResolvedImageTileSource | null> {
+  const workspaces = await readWorkspaceRefsFromUserConfig()
+  for (const ws of workspaces) {
+    try {
+      const tiles = await readCanvasStateTiles(ws.id)
+      const tile = tiles.find(entry => entry?.id === tileId && entry?.type === 'image')
+      const filePath = typeof tile?.filePath === 'string' ? tile.filePath.trim() : ''
+      if (filePath) return { workspaceId: ws.id, filePath }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const state = await loadWorkspaceTileState<{ _context?: Record<string, { value?: unknown }> }>(ws.id, tileId, {})
+      const contextPath = state._context?.['ctx:image:path']?.value ?? state._context?.['ctx:file:path']?.value
+      const filePath = typeof contextPath === 'string' ? contextPath.trim() : ''
+      if (filePath) return { workspaceId: ws.id, filePath }
+    } catch {
+      // ignore
+    }
+  }
+  return null
+}
+
+async function setTileContextFromMcp(workspaceId: string, tileId: string, key: string, value: unknown): Promise<void> {
+  const state = await loadWorkspaceTileState<TileContextBackedState>(workspaceId, tileId, {})
+  if (!state._context) state._context = {}
+  state._context[key] = { key, value, updatedAt: Date.now(), source: 'mcp:contex' }
+  await saveWorkspaceTileState(workspaceId, tileId, state)
 }
 
 async function readWorkspaceRefsFromUserConfig(): Promise<UserConfigWorkspaceRef[]> {
@@ -376,6 +452,11 @@ const TOOLS = [
   {
     name: 'list_extensions',
     description: 'List all installed extensions with their block types and available actions. Call this before canvas_create_tile with an ext: type, or before ext_invoke_action, to discover what is available.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'generation_list_providers',
+    description: 'List configured image and video generation providers. API keys are redacted; use this to choose provider and model ids for image/video tooling requests.',
     inputSchema: { type: 'object', properties: {} }
   },
   // ── Kanban tools ─────────────────────────────────────────────────────────
@@ -870,6 +951,194 @@ function publishPeerCommand(tileId: string, command: string, payload: Record<str
   return `Dispatched ${command} to ${tileId}`
 }
 
+async function runGeminiImageEdit(options: {
+  apiKey: string
+  model: string
+  prompt: string
+  sourcePath: string
+  outputPath?: string
+}): Promise<{ outputPath: string; mimeType: string }> {
+  const sourceBytes = await fs.readFile(options.sourcePath)
+  const sourceMimeType = mimeTypeForImagePath(options.sourcePath)
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(options.model)}:generateContent`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': options.apiKey,
+    },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { text: options.prompt },
+          {
+            inline_data: {
+              mime_type: sourceMimeType,
+              data: sourceBytes.toString('base64'),
+            },
+          },
+        ],
+      }],
+      generationConfig: {
+        responseModalities: ['TEXT', 'IMAGE'],
+      },
+    }),
+  })
+
+  const text = await response.text()
+  let payload: unknown = null
+  try {
+    payload = text ? JSON.parse(text) : null
+  } catch {
+    payload = null
+  }
+
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object'
+      ? ((payload as { error?: { message?: string } }).error?.message ?? text)
+      : text
+    throw new Error(`Gemini image edit failed (${response.status}): ${message || response.statusText}`)
+  }
+
+  const generated = extractGeminiInlineImage(payload)
+  if (!generated) {
+    throw new Error('Gemini completed the request but did not return an image')
+  }
+
+  const outputPath = makeImageOutputPath(options.sourcePath, options.outputPath, generated.mimeType)
+  await fs.mkdir(dirname(outputPath), { recursive: true })
+  await fs.writeFile(outputPath, Buffer.from(generated.data, 'base64'))
+  return { outputPath, mimeType: generated.mimeType }
+}
+
+export async function executeImageEditTool(tileId: string, name: string, args: Record<string, unknown>): Promise<string> {
+  const prompt = asString(args.prompt) ?? (name === 'image_generate_variation' ? 'Create a natural variation of this image.' : '')
+  if (!prompt) return 'Missing prompt'
+
+  const requestPayload = {
+    prompt,
+    provider: asString(args.provider) ?? '',
+    model: asString(args.model) ?? '',
+    maskPath: asString(args.mask_path) ?? '',
+    outputPath: asString(args.output_path) ?? '',
+    status: 'running',
+  }
+  publishPeerCommand(tileId, name, requestPayload)
+
+  const source = await findImageTileSourcePath(tileId)
+  if (!source) {
+    const message = `Image block ${tileId} has no source file path, so it cannot be edited`
+    publishPeerCommand(tileId, 'image_edit_error', { message, prompt })
+    return message
+  }
+
+  await setTileContextFromMcp(source.workspaceId, tileId, 'ctx:image:edit:request', {
+    kind: name === 'image_edit_request' ? 'edit' : 'variation',
+    prompt,
+    provider: requestPayload.provider,
+    model: requestPayload.model,
+    maskPath: requestPayload.maskPath,
+    outputPath: requestPayload.outputPath,
+    sourcePath: source.filePath,
+    status: 'running',
+    at: Date.now(),
+  }).catch(() => {})
+
+  const settings = await readAppSettingsForMcp()
+  const selection = selectImageProvider(settings, asString(args.provider))
+  if (typeof selection === 'string') {
+    await setTileContextFromMcp(source.workspaceId, tileId, 'ctx:image:edit:last', {
+      sourcePath: source.filePath,
+      status: 'error',
+      error: selection,
+      prompt,
+      at: Date.now(),
+    }).catch(() => {})
+    publishPeerCommand(tileId, 'image_edit_error', { message: selection, prompt, sourcePath: source.filePath })
+    return selection
+  }
+
+  const model = asString(args.model) ?? selection.model
+  if (selection.provider.id !== 'gemini') {
+    const message = `Image generation provider "${selection.provider.label}" is configured but not implemented yet. Use Gemini / Nano Banana for image edits for now.`
+    await setTileContextFromMcp(source.workspaceId, tileId, 'ctx:image:edit:last', {
+      sourcePath: source.filePath,
+      status: 'error',
+      error: message,
+      prompt,
+      provider: selection.provider.id,
+      model,
+      at: Date.now(),
+    }).catch(() => {})
+    publishPeerCommand(tileId, 'image_edit_error', { message, prompt, sourcePath: source.filePath })
+    return message
+  }
+
+  const apiKey = selection.provider.apiKey?.trim()
+  if (!apiKey) {
+    const message = 'Gemini / Nano Banana needs an API key in Settings > Providers before it can edit images.'
+    await setTileContextFromMcp(source.workspaceId, tileId, 'ctx:image:edit:last', {
+      sourcePath: source.filePath,
+      status: 'error',
+      error: message,
+      prompt,
+      provider: selection.provider.id,
+      model,
+      at: Date.now(),
+    }).catch(() => {})
+    publishPeerCommand(tileId, 'image_edit_error', { message, prompt, sourcePath: source.filePath })
+    return message
+  }
+
+  try {
+    const result = await runGeminiImageEdit({
+      apiKey,
+      model,
+      prompt,
+      sourcePath: source.filePath,
+      outputPath: asString(args.output_path),
+    })
+    publishPeerCommand(tileId, 'image_replace_source', {
+      filePath: result.outputPath,
+      note: prompt,
+      provider: selection.provider.id,
+      model,
+    })
+    await Promise.all([
+      setTileContextFromMcp(source.workspaceId, tileId, 'ctx:image:path', result.outputPath),
+      setTileContextFromMcp(source.workspaceId, tileId, 'ctx:file:path', result.outputPath),
+      setTileContextFromMcp(source.workspaceId, tileId, 'ctx:image:edit:last', {
+        sourcePath: source.filePath,
+        outputPath: result.outputPath,
+        note: prompt,
+        provider: selection.provider.id,
+        model,
+        status: 'done',
+        at: Date.now(),
+      }),
+    ]).catch(() => {})
+    return `Image updated via ${selection.provider.label} (${model}): ${result.outputPath}`
+  } catch (err: any) {
+    const message = err?.message ? String(err.message) : 'Image edit failed'
+    await setTileContextFromMcp(source.workspaceId, tileId, 'ctx:image:edit:last', {
+      sourcePath: source.filePath,
+      status: 'error',
+      error: message,
+      prompt,
+      provider: selection.provider.id,
+      model,
+      at: Date.now(),
+    }).catch(() => {})
+    publishPeerCommand(tileId, 'image_edit_error', {
+      message,
+      prompt,
+      provider: selection.provider.id,
+      model,
+      sourcePath: source.filePath,
+    })
+    return message
+  }
+}
+
 async function handleTool(name: string, args: Record<string, unknown>): Promise<string> {
   const cardId = args.card_id as string
 
@@ -938,6 +1207,19 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         } catch { /**/ }
       }
       return publishPeerCommand(tileId, name, { content })
+    }
+
+    if (name === 'image_edit_request' || name === 'image_generate_variation') {
+      return executeImageEditTool(tileId, name, args)
+    }
+
+    if (name === 'image_replace_source') {
+      const filePath = asString(args.file_path)
+      if (!filePath) return 'Missing file_path'
+      return publishPeerCommand(tileId, name, {
+        filePath,
+        note: asString(args.note) ?? '',
+      })
     }
 
     if (name === 'kanban_create_card' || name === 'kanban_update_card' || name === 'kanban_move_card' || name === 'kanban_pause_card' || name === 'kanban_delete_card' || name === 'kanban_create_column' || name === 'kanban_rename_column' || name === 'kanban_delete_column') {
@@ -1478,6 +1760,24 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       contextConsumes: m.contributes?.context?.consumes ?? [],
     }))
     return JSON.stringify(exts, null, 2)
+  }
+
+  if (name === 'generation_list_providers') {
+    const settings = await readAppSettingsForMcp()
+    const providers = Object.values(settings.generationProviders ?? {}).map(provider => ({
+      id: provider.id,
+      label: provider.label,
+      enabled: provider.enabled,
+      capabilities: provider.capabilities,
+      hasApiKey: Boolean(provider.apiKey?.trim()),
+      baseUrl: provider.baseUrl ?? '',
+      textModel: provider.textModel ?? '',
+      imageModel: provider.imageModel ?? '',
+      videoModel: provider.videoModel ?? '',
+      videoAspectRatio: provider.videoAspectRatio ?? '',
+      videoResolution: provider.videoResolution ?? '',
+    }))
+    return JSON.stringify(providers, null, 2)
   }
 
   const extensionTool = getExtensionTools().find(tool => tool.name === name)

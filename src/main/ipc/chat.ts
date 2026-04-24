@@ -7,11 +7,11 @@
  */
 
 import { ipcMain, BrowserWindow, dialog } from 'electron'
-import { query, type Query, type Options } from '@anthropic-ai/claude-agent-sdk'
+import { query, type Query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { spawn, ChildProcess, execFileSync, execFile } from 'child_process'
 import * as http from 'http'
 import * as net from 'net'
-import { promises as fs, existsSync } from 'fs'
+import { promises as fs, existsSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join, relative, resolve, sep } from 'path'
 import { promisify } from 'util'
@@ -40,6 +40,10 @@ import {
   persistGrant,
   type ToolPermissionRequest,
 } from '../permissions'
+import {
+  buildHermesChatArgs,
+  sanitizeAgentCliDiagnostic,
+} from '../agents/agent-cli-contracts'
 // Lazy-loaded: @opencode-ai/sdk only exports ESM, Electron main is CJS.
 // externalizeDepsPlugin converts dynamic import() to require() which can't
 // resolve ESM-only exports — wrap in try/catch so the app still starts.
@@ -240,15 +244,19 @@ async function expandLatestUserFileReferences(req: ChatRequest): Promise<{
   for (const reference of expansion.references ?? []) {
     if (!reference.binary) continue
     const mediaType = String(reference.mediaType ?? '')
-    if (!isSupportedVisionMediaType(mediaType)) continue
     const resolvedPath = String(reference.resolvedPath ?? '').trim()
     if (!resolvedPath) continue
-    imageAttachments.push({
-      path: resolvedPath,
-      mediaType,
-      displayPath: reference.displayPath,
-      byteCount: reference.byteCount,
-    })
+    if (isSupportedVisionMediaType(mediaType)) {
+      imageAttachments.push({
+        path: resolvedPath,
+        mediaType,
+        displayPath: reference.displayPath,
+        byteCount: reference.byteCount,
+      })
+      continue
+    }
+    const converted = await convertVisionImageToPng(resolvedPath, reference.displayPath, mediaType)
+    if (converted) imageAttachments.push(converted)
   }
 
   return {
@@ -270,6 +278,40 @@ const ANTHROPIC_SUPPORTED_IMAGE_TYPES = new Set([
 
 function isSupportedVisionMediaType(mediaType: string): boolean {
   return ANTHROPIC_SUPPORTED_IMAGE_TYPES.has(mediaType.toLowerCase())
+}
+
+function isConvertibleVisionImage(path: string, mediaType: string): boolean {
+  const normalized = mediaType.toLowerCase()
+  if (normalized === 'image/heic' || normalized === 'image/heif' || normalized === 'image/tiff' || normalized === 'image/bmp') return true
+  return /\.(heic|heif|tiff?|bmp)$/i.test(path)
+}
+
+async function convertVisionImageToPng(
+  sourcePath: string,
+  displayPath: string,
+  mediaType: string,
+): Promise<ChatImageAttachment | null> {
+  if (!isConvertibleVisionImage(sourcePath, mediaType)) return null
+  try {
+    const dir = join(tmpdir(), 'contex-chat-vision')
+    await fs.mkdir(dir, { recursive: true })
+    const safeBase = basename(displayPath || sourcePath)
+      .replace(/\.[^.]+$/, '')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .slice(0, 80) || 'image'
+    const dest = join(dir, `${safeBase}-${Date.now()}-${Math.floor(Math.random() * 1e6).toString(36)}.png`)
+    await execFileAsync('sips', ['-s', 'format', 'png', sourcePath, '--out', dest], { maxBuffer: 1024 * 1024 * 4 })
+    const stat = await fs.stat(dest)
+    return {
+      path: dest,
+      mediaType: 'image/png',
+      displayPath: `${displayPath || sourcePath} (converted to PNG)`,
+      byteCount: stat.size,
+    }
+  } catch (error) {
+    log('failed to convert image attachment for vision', sourcePath, mediaType, error instanceof Error ? error.message : String(error))
+    return null
+  }
 }
 
 function buildRuntimeSessionEntryId(req: ChatRequest): string {
@@ -698,7 +740,7 @@ async function getExecutionRoutingState(): Promise<{
 }
 
 function supportsDaemonChatProvider(provider: string | null | undefined): boolean {
-  return provider === 'claude' || provider === 'codex'
+  return provider === 'claude' || provider === 'codex' || provider === 'opencode' || provider === 'hermes'
 }
 
 function supportsProviderNativeBackground(provider: string | null | undefined): boolean {
@@ -735,6 +777,68 @@ function joinPromptSections(...sections: Array<string | undefined | null>): stri
   return normalized.length > 0 ? normalized.join('\n\n') : undefined
 }
 
+// CodeSurf-wide completion-reporting convention. Injected into EVERY provider
+// (Claude, Codex, OpenCode, OpenClaw, Hermes) so substantial agent runs produce
+// a consistent handoff without turning tiny edits into noisy reports.
+//
+// Keep this short. It costs tokens on every turn (Claude/Codex) and on every
+// first user message (OpenCode/OpenClaw/Hermes). If you want to tune the tone
+// or required sections, edit the string below — the plumbing stays the same.
+export const CODESURF_OUTPUT_CONVENTION = [
+  '## CodeSurf Task-Completion Convention',
+  '',
+  'Default to a short natural-language completion. For simple edits, one sentence plus any verification result is enough.',
+  '',
+  'Only use the structured completion card for substantial work: multi-file changes, long-running tasks, risky edits, migrations, debugging sessions, or work where the user needs a durable handoff. When you do use it, use this exact format (literal uppercase section headers inside a fenced code block):',
+  '',
+  '```',
+  'CHANGES MADE:',
+  '  <path>: <one-line what + why>',
+  '  <path>: <one-line what + why>',
+  '',
+  'DIDN\'T TOUCH:',
+  '  <path or area>: <one-line why you left it alone>',
+  '',
+  'CONCERNS:',
+  '  - <risk, assumption, or follow-up the user should verify>',
+  '```',
+  '',
+  'Rules:',
+  '- Do NOT use the structured card for trivial changes such as copy tweaks, captions, one-line edits, formatting, or small visual adjustments.',
+  '- For simple tasks, say what changed and whether verification passed, then stop.',
+  '- Include CHANGES MADE only when the structured card is warranted. Skip the block entirely for pure Q&A turns.',
+  '- DIDN\'T TOUCH is only useful when there were adjacent risky areas you deliberately left alone.',
+  '- CONCERNS is never empty if you had to make a judgment call, guess a value, or skip verification. If there are truly no concerns, write "CONCERNS: none".',
+  '- One line per entry. No prose paragraphs inside the block.',
+  '- Put the block inside a single fenced code block so the host UI can render it as a structured card.',
+].join('\n')
+
+function buildCodeSurfOutputConvention(): string {
+  return CODESURF_OUTPUT_CONVENTION
+}
+
+// CodeSurf-wide "Insight" convention. This is intentionally NOT injected into
+// normal provider prompts; examples of the star-framed format strongly prime
+// models to emit it on every small task. Only add this block when the user
+// explicitly asks for insights.
+export const CODESURF_INSIGHT_CONVENTION = [
+  '## CodeSurf Insight Convention',
+  '',
+  'Do not emit an Insight block unless the user explicitly asks for an insight.',
+  '',
+  'When explicitly requested, use this exact wrapper:',
+  '`★ Insight ─────────────────────────────────────`',
+  '- [point 1]',
+  '- [point 2]',
+  '`─────────────────────────────────────────────────`',
+  '',
+  'Keep it to 1–2 bullets. It must explain non-obvious reasoning, not summarize the work.',
+].join('\n')
+
+function buildCodeSurfInsightConvention(): string {
+  return CODESURF_INSIGHT_CONVENTION
+}
+
 // Anthropic limits: ~5 MB per image; keep a conservative per-request total so
 // we don't blow past context-window or HTTP payload limits on big screenshots.
 const MAX_IMAGE_BYTES_PER_FILE = 5 * 1024 * 1024
@@ -743,11 +847,7 @@ const MAX_IMAGE_BYTES_PER_REQUEST = 20 * 1024 * 1024
 function buildClaudePromptWithImages(
   text: string,
   imageAttachments: ChatImageAttachment[] | undefined,
-): string | AsyncIterable<any> {
-  if (!imageAttachments || imageAttachments.length === 0) {
-    return text
-  }
-
+): AsyncIterable<SDKUserMessage> {
   // Read images off disk synchronously-at-start-of-async-gen so any read
   // failure surfaces before we yield the message. We stream one user message
   // containing text + image blocks, then close the input stream so the query
@@ -804,6 +904,22 @@ function buildClaudePromptWithImages(
   return generator()
 }
 
+function buildClaudeTextInput(text: string, priority: SDKUserMessage['priority'] = 'now'): AsyncIterable<SDKUserMessage> {
+  async function* generator(): AsyncGenerator<SDKUserMessage, void, unknown> {
+    yield {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text }],
+      },
+      parent_tool_use_id: null,
+      priority,
+      timestamp: new Date().toISOString(),
+    }
+  }
+  return generator()
+}
+
 function buildAsyncExecutionPrompt(asyncExecution: ChatRequest['asyncExecution']): string | undefined {
   if (!asyncExecution) return undefined
 
@@ -836,7 +952,8 @@ function buildClaudeAgentPrompt(
   asyncExecution: ChatRequest['asyncExecution'],
 ): string | undefined {
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
-  return joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt)
+  const outputConvention = buildCodeSurfOutputConvention()
+  return joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
 }
 
 function buildCodexPrompt(
@@ -847,7 +964,8 @@ function buildCodexPrompt(
   skillsPrompt?: string,
 ): string {
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
-  const preamble = joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt)
+  const outputConvention = buildCodeSurfOutputConvention()
+  const preamble = joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
 }
 
@@ -1102,10 +1220,10 @@ async function selectChatExecutionHost(req: ChatRequest): Promise<ExecutionHostR
   if (!supportsDaemonChatProvider(provider)) {
     const providerLabel = provider || 'This provider'
     if (req.executionTarget === 'cloud') {
-      throw new Error(`${providerLabel} does not support remote daemon execution yet. Daemon-backed chat currently supports Claude and Codex only.`)
+      throw new Error(`${providerLabel} does not support remote daemon execution yet. Daemon-backed chat currently supports Claude, Codex, OpenCode, and Hermes only.`)
     }
     if (executionPreference.mode === 'daemon-only' || executionPreference.mode === 'specific-host') {
-      throw new Error(`${providerLabel} does not support daemon-backed chat yet. Supported daemon providers: Claude and Codex.`)
+      throw new Error(`${providerLabel} does not support daemon-backed chat yet. Supported daemon providers: Claude, Codex, OpenCode, and Hermes.`)
     }
     return null
   }
@@ -2315,6 +2433,22 @@ async function readSnapshotContent(filePath: string): Promise<{ existed: boolean
   }
 }
 
+// Synchronous variant used to capture a Codex pre-edit snapshot without
+// yielding the event loop. The async version races against Codex's write:
+// by the time `await fs.readFile` resolves, Codex has often already flushed
+// bytes to disk, so `before.content` equals `after.content` and the
+// resulting diff is empty (+0/-0). The fs.readFileSync call blocks the
+// main process for a few ms, which is acceptable for source-file sizes.
+function readSnapshotContentSync(filePath: string): { existed: boolean; content: string | null } {
+  try {
+    const buffer = readFileSync(filePath)
+    if (buffer.includes(0)) return { existed: true, content: null }
+    return { existed: true, content: buffer.toString('utf8') }
+  } catch {
+    return { existed: false, content: null }
+  }
+}
+
 function getDisplayPath(filePath: string, workspaceDir?: string): string {
   const resolvedPath = resolve(filePath)
   const resolvedWorkspace = workspaceDir ? resolve(workspaceDir) : ''
@@ -2506,11 +2640,24 @@ function chatCodex(req: ChatRequest): void {
     if (evt.type === 'item.started') {
       const item = evt.item
       if (item?.type === 'file_change' && Array.isArray(item.changes)) {
-        const checkpointPaths = item.changes
-          .map((change: { path?: unknown }) => typeof change?.path === 'string'
-            ? resolveCodexFilePath(change.path, req.workspaceDir)
-            : null)
-          .filter((value: string | null): value is string => Boolean(value))
+        // Snapshot pre-edit content SYNCHRONOUSLY before awaiting anything.
+        // Codex writes the files very shortly after emitting `item.started`;
+        // any `await` here yields the event loop long enough for the write
+        // to land, which makes before == after and produces empty (+0/-0)
+        // diffs in the chat tile. Must happen before createRuntimeCheckpoint.
+        const checkpointPaths: string[] = []
+        for (const change of item.changes) {
+          if (typeof change?.path !== 'string') continue
+          const resolvedPath = resolveCodexFilePath(change.path, req.workspaceDir)
+          checkpointPaths.push(resolvedPath)
+          const snapshot = readSnapshotContentSync(resolvedPath)
+          pendingSnapshots.set(resolvedPath, {
+            displayPath: getDisplayPath(resolvedPath, req.workspaceDir),
+            changeType: changeTypeFromCodexKind(change.kind),
+            existed: snapshot.existed,
+            content: snapshot.content,
+          })
+        }
         const checkpoint = await createRuntimeCheckpoint(req, 'CodexFileChange', checkpointPaths, {
           changeKinds: item.changes.map((change: { kind?: unknown }) => String(change?.kind ?? 'update')),
         })
@@ -2518,17 +2665,6 @@ function chatCodex(req: ChatRequest): void {
           proc.kill('SIGTERM')
           sendStream(req.cardId, { type: 'error', error: `Checkpoint creation failed before Codex file changes: ${checkpoint.error ?? 'unknown error'}` })
           return
-        }
-        for (const change of item.changes) {
-          if (typeof change?.path !== 'string') continue
-          const resolvedPath = resolveCodexFilePath(change.path, req.workspaceDir)
-          const snapshot = await readSnapshotContent(resolvedPath)
-          pendingSnapshots.set(resolvedPath, {
-            displayPath: getDisplayPath(resolvedPath, req.workspaceDir),
-            changeType: changeTypeFromCodexKind(change.kind),
-            existed: snapshot.existed,
-            content: snapshot.content,
-          })
         }
       }
       return
@@ -2764,11 +2900,19 @@ function chatOpencode(req: ChatRequest): void {
       const assistantPartIds = new Set<string>() // part IDs belonging to assistant messages
       const userMessageIds = new Set<string>() // message IDs that are user messages
 
-      // Fire prompt without waiting — response arrives via SSE
+      // Fire prompt without waiting — response arrives via SSE.
+      // On the first turn of a fresh session we prepend the CodeSurf output
+      // convention so OpenCode matches the structured-summary behaviour of
+      // Claude/Codex. On subsequent turns the session already carries the
+      // convention in its running history.
+      const isFirstTurn = !existingSessionId
+      const promptText = isFirstTurn
+        ? `${buildCodeSurfOutputConvention()}\n\n---\n\n${lastUserMsg.content}`
+        : lastUserMsg.content
       const promptPromise = client.session.prompt({
         sessionID,
         model: { providerID, modelID },
-        parts: [{ type: 'text', text: lastUserMsg.content }],
+        parts: [{ type: 'text', text: promptText }],
       }).catch((err: any) => {
         if (!isDone) {
           log('opencode prompt error:', err.message)
@@ -3193,7 +3337,14 @@ function chatOpenclaw(req: ChatRequest): void {
     args.push('--thinking', thinking)
   }
 
-  args.push('--message', lastUserMsg.content)
+  // First-turn injection: OpenClaw has no system-prompt channel on the CLI,
+  // so the CodeSurf output convention rides along with the first user message.
+  // Session history carries it forward on subsequent turns.
+  const openClawIsFirstTurn = !existingSessionId
+  const openClawMessage = openClawIsFirstTurn
+    ? `${buildCodeSurfOutputConvention()}\n\n---\n\n${lastUserMsg.content}`
+    : lastUserMsg.content
+  args.push('--message', openClawMessage)
 
   const proc = spawn(openclawBin, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -3304,18 +3455,6 @@ function chatHermes(req: ChatRequest): void {
     resuming: !!existingSessionId,
   })
 
-  // Hermes requires the `chat` subcommand for non-interactive prompts.
-  // `--quiet` suppresses banners/spinners but still prints the final response.
-  const args = ['chat', '--query', lastUserMsg.content, '--quiet', '--source', 'tool']
-
-  if (req.model) {
-    args.push('--model', req.model)
-  }
-
-  if (existingSessionId) {
-    args.push('--resume', existingSessionId)
-  }
-
   // Map mode to hermes toolsets
   const modeMap: Record<string, string> = {
     'full': 'terminal,file,web,browser',
@@ -3324,9 +3463,26 @@ function chatHermes(req: ChatRequest): void {
     'query': '',
   }
   const toolsets = modeMap[req.mode ?? ''] ?? 'terminal,file,web'
-  if (toolsets) {
-    args.push('--toolsets', toolsets)
-  }
+
+  // Hermes requires the `chat` subcommand for non-interactive prompts.
+  // `--quiet` suppresses banners/spinners but still prints the final response.
+  // Provider-prefixed CodeSurf model ids (for example openai-codex/gpt-5.5)
+  // are split into Hermes' separate --provider / --model flags by the shared
+  // contract helper.
+  //
+  // First-turn injection: Hermes has no system-prompt flag, so the CodeSurf
+  // output convention rides along with the first user message. Session
+  // history carries it forward on subsequent turns.
+  const hermesIsFirstTurn = !existingSessionId
+  const hermesPrompt = hermesIsFirstTurn
+    ? `${buildCodeSurfOutputConvention()}\n\n---\n\n${lastUserMsg.content}`
+    : lastUserMsg.content
+  const args = buildHermesChatArgs({
+    prompt: hermesPrompt,
+    model: req.model,
+    resumeSessionId: existingSessionId,
+    toolsets,
+  })
 
   const proc = spawn(hermesBin, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -3366,7 +3522,7 @@ function chatHermes(req: ChatRequest): void {
     flushHermesOutput('', true)
     activeProcesses.delete(req.cardId)
     if (code !== 0 && stderrBuf.trim()) {
-      sendStream(req.cardId, { type: 'error', error: stderrBuf.trim() })
+      sendStream(req.cardId, { type: 'error', error: sanitizeAgentCliDiagnostic(stderrBuf.trim()) })
     }
     sendStream(req.cardId, { type: 'done' })
   })
@@ -3547,6 +3703,23 @@ export function registerChatIPC(): void {
 
   ipcMain.handle('chat:resumeJob', async (_, req: ChatRequest) => {
     return await resumeChatDaemonJob(req)
+  })
+
+  ipcMain.handle('chat:steer', async (_, payload: { cardId?: string; message?: string }) => {
+    const cardId = String(payload?.cardId ?? '').trim()
+    const message = String(payload?.message ?? '').trim()
+    if (!cardId || !message) return { ok: false, error: 'missing cardId or message' }
+    const q = activeQueries.get(cardId)
+    if (!q) return { ok: false, error: 'no active steerable Claude stream' }
+    try {
+      await q.streamInput(buildClaudeTextInput(message, 'now'))
+      sendStream(cardId, { type: 'steer_sent', text: message })
+      return { ok: true }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      log('chat:steer failed:', msg)
+      return { ok: false, error: msg }
+    }
   })
 
   ipcMain.handle('chat:stop', async (_, cardId: string) => {

@@ -12,8 +12,8 @@ import { dispatchOpenLink, findAnchorFromEventTarget } from '../utils/links'
 import {
   ShieldCheck, ChevronDown, AlertTriangle,
   Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
-  Brain, ChevronRight, Clock, Cog, DollarSign,
-  FileText, Folder, GripVertical, Lock, Paperclip, Pencil, Plus, Sparkles, Trash2, Wrench
+  Brain, ChevronRight, Clock, Cog, CornerDownRight, DollarSign,
+  FileText, Folder, GripVertical, Lock, Paperclip, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
 } from 'lucide-react'
 import { useMCPServers, type MCPServerEntry } from '../hooks/useMCPServers'
 import { useAppFonts } from '../FontContext'
@@ -48,6 +48,7 @@ import {
   type ToolPermissionRequest,
 } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
+import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 
 const CHAT_SLASH_COMMANDS = [
   { value: '/compact', description: 'Compact conversation' },
@@ -342,6 +343,27 @@ interface DiscoveryPeer {
   label?: string
 }
 
+function mergeAttachments(...groups: PendingAttachment[][]): PendingAttachment[] {
+  const seen = new Set<string>()
+  const merged: PendingAttachment[] = []
+  for (const group of groups) {
+    for (const item of group) {
+      const path = item.path.trim()
+      if (!path || seen.has(path)) continue
+      seen.add(path)
+      merged.push({ ...item, path })
+    }
+  }
+  return merged
+}
+
+function getImplicitPeerImageAttachments(peers: DiscoveryPeer[]): PendingAttachment[] {
+  return peers
+    .filter(peer => peer.peerType === 'image' && typeof peer.filePath === 'string' && isImagePath(peer.filePath))
+    .map(peer => ({ path: peer.filePath!.trim(), kind: 'image' as const }))
+    .filter(item => item.path.length > 0)
+}
+
 interface AutocompleteItem {
   key: string
   value: string
@@ -384,6 +406,15 @@ interface AskUserQuestionPayload {
 // Context provides the cardId so ToolBlockView (defined outside ChatTile) can
 // submit answers back to main via IPC without prop-drilling through groups.
 const AskUserQuestionContext = React.createContext<{ cardId: string } | null>(null)
+
+interface CheckpointRestoreContextValue {
+  workspaceId: string | null
+  tileId: string
+  restoringCheckpointId: string | null
+  restoreCheckpoint: (checkpointId: string, sessionEntryId: string, label?: string) => Promise<void>
+}
+
+const CheckpointRestoreContext = React.createContext<CheckpointRestoreContextValue | null>(null)
 
 /**
  * Parses a ToolBlock.input string (streamed JSON, potentially partial) and
@@ -2306,6 +2337,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     () => connectedPeers.map(peer => peer.peerId).sort().join('|'),
     [connectedPeers],
   )
+  const implicitPeerImageAttachments = useMemo(
+    () => getImplicitPeerImageAttachments(connectedPeers),
+    [connectedPeers],
+  )
 
   useEffect(() => {
     if (!workspaceId || connectedPeers.length === 0 || !window.electron?.tileContext) {
@@ -2406,6 +2441,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [openclawAgents, setOpenclawAgents] = useState<ModelOption[]>(DEFAULT_MODELS.openclaw)
   const [modelFilter, setModelFilter] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>(() => initialRuntimeStateRef.current?.attachments ?? [])
+  const hasSendableDraft = input.trim().length > 0 || attachments.length > 0 || implicitPeerImageAttachments.length > 0
   // Chat-surface extensions (e.g. Sketch, Builder) mounted above the composer.
   // Multiple surfaces can stay open as tabs so a sketch can sit beside its
   // enhanced builder output inside the same chat.
@@ -2762,6 +2798,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [latestChangeDrawerExpandedFiles, setLatestChangeDrawerExpandedFiles] = useState<Record<string, boolean>>({})
   const [latestCheckpointId, setLatestCheckpointId] = useState<string | null>(null)
   const [isRestoringLatestCheckpoint, setIsRestoringLatestCheckpoint] = useState(false)
+  const [restoringCheckpointId, setRestoringCheckpointId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!latestChangeDrawer) {
@@ -2842,6 +2879,56 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       setIsRestoringLatestCheckpoint(false)
     }
   }, [workspaceId, tileId, latestCheckpointId, isRestoringLatestCheckpoint, setMessagesSafe])
+
+  const restoreCheckpointFromToolBlock = useCallback(async (checkpointId: string, sessionEntryId: string, label = 'checkpoint') => {
+    if (!workspaceId || !checkpointId || !sessionEntryId || restoringCheckpointId || isRestoringLatestCheckpoint) return
+    setRestoringCheckpointId(checkpointId)
+    try {
+      const result = await window.electron.canvas.restoreCheckpoint(workspaceId, checkpointId, sessionEntryId)
+      if (!result.ok) {
+        const errorText = result.error ?? 'Checkpoint restore failed'
+        setMessagesSafe(prev => [...prev, {
+          id: `msg-restore-checkpoint-error-${Date.now()}`,
+          role: 'assistant',
+          content: `Restore failed: ${errorText}`,
+          timestamp: Date.now(),
+        }])
+        return
+      }
+      const restoredParts: string[] = []
+      if (typeof result.filesRestored === 'number' && result.filesRestored > 0) {
+        restoredParts.push(`${result.filesRestored} restored`)
+      }
+      if (typeof result.filesDeleted === 'number' && result.filesDeleted > 0) {
+        restoredParts.push(`${result.filesDeleted} deleted`)
+      }
+      const suffix = restoredParts.length > 0 ? ` (${restoredParts.join(', ')})` : ''
+      setMessagesSafe(prev => [...prev, {
+        id: `msg-restore-checkpoint-${Date.now()}`,
+        role: 'assistant',
+        content: `Restored checkpoint: ${label}${suffix}.`,
+        timestamp: Date.now(),
+      }])
+      if (latestCheckpointId === checkpointId) setLatestCheckpointId(null)
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error)
+      setMessagesSafe(prev => [...prev, {
+        id: `msg-restore-checkpoint-error-${Date.now()}`,
+        role: 'assistant',
+        content: `Restore failed: ${errorText}`,
+        timestamp: Date.now(),
+      }])
+    } finally {
+      setRestoringCheckpointId(current => current === checkpointId ? null : current)
+    }
+  }, [workspaceId, restoringCheckpointId, isRestoringLatestCheckpoint, latestCheckpointId, setMessagesSafe])
+
+  const checkpointRestoreContextValue = useMemo<CheckpointRestoreContextValue>(() => ({
+    workspaceId: workspaceId ?? null,
+    tileId,
+    restoringCheckpointId,
+    restoreCheckpoint: restoreCheckpointFromToolBlock,
+  }), [workspaceId, tileId, restoringCheckpointId, restoreCheckpointFromToolBlock])
 
   // Clamp index when filtered items change
   useEffect(() => {
@@ -5042,14 +5129,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   }, [queuedTurns, flushQueueStateNow, logQueueEvent])
 
   const queueCurrentDraft = useCallback(() => {
-    const messageContent = buildOutgoingMessageContent(input, attachments)
+    const draftAttachments = mergeAttachments(attachments, implicitPeerImageAttachments)
+    const messageContent = buildOutgoingMessageContent(input, draftAttachments)
     if (!messageContent) return false
 
     const queuedTurn: QueuedChatTurn = {
       id: `queued-${Date.now()}`,
       content: messageContent,
-      preview: buildQueuedTurnPreview(messageContent, attachments.length),
-      attachmentCount: attachments.length,
+      preview: buildQueuedTurnPreview(messageContent, draftAttachments.length),
+      attachmentCount: draftAttachments.length,
       createdAt: Date.now(),
     }
 
@@ -5071,7 +5159,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     focusComposer()
     return true
-  }, [input, attachments, focusComposer, queuedTurns, linkedSessionEntryId, flushQueueStateNow, logQueueEvent])
+  }, [input, attachments, implicitPeerImageAttachments, focusComposer, queuedTurns, linkedSessionEntryId, flushQueueStateNow, logQueueEvent])
 
   const sendMessage = useCallback(async () => {
     if (isStreaming) {
@@ -5083,7 +5171,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     // before composing the outgoing message. When Builder is active we persist
     // its HTML payload as a temporary .html file so the normal attachment path
     // can carry it into the turn just like files dropped from Finder.
-    let flushedAttachments = attachments
+    let flushedAttachments = mergeAttachments(attachments, implicitPeerImageAttachments)
     const surface = activeChatSurfaceRef.current
     if (surface) {
       try {
@@ -5120,7 +5208,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               filenameHint: surface.label.toLowerCase().replace(/\s+/g, '-'),
             })
             if (r.ok) {
-              flushedAttachments = [...attachments, { path: r.path, kind: attachmentKind }]
+              flushedAttachments = mergeAttachments(flushedAttachments, [{ path: r.path, kind: attachmentKind }])
             }
           }
         } catch { /* best-effort */ }
@@ -5162,7 +5250,32 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     await dispatchMessageContent(messageContent)
-  }, [isStreaming, input, attachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, postToChatSurface])
+  }, [isStreaming, input, attachments, implicitPeerImageAttachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, postToChatSurface])
+
+  const insertSteerMessageIntoStream = useCallback((content: string) => {
+    const trimmed = content.trim()
+    if (!trimmed) return
+    const userMsg: ChatMessage = {
+      id: `msg-steer-${Date.now()}`,
+      role: 'user',
+      content: trimmed,
+      timestamp: Date.now(),
+    }
+    setMessagesSafe(prev => {
+      const streamingAssistantIndex = prev.findLastIndex(message => message.role === 'assistant' && message.isStreaming)
+      if (streamingAssistantIndex < 0) return [...prev, userMsg]
+      return [
+        ...prev.slice(0, streamingAssistantIndex),
+        userMsg,
+        ...prev.slice(streamingAssistantIndex),
+      ]
+    })
+    stickToBottomRef.current = true
+    window.electron?.bus?.publish(`tile:${tileId}`, 'activity', `chat:${tileId}`, {
+      message: `User steered: ${trimmed.slice(0, 100)}`,
+      role: 'user',
+    })
+  }, [setMessagesSafe, tileId])
 
   const stopStreaming = useCallback(() => {
     window.electron?.chat?.stop?.(tileId)
@@ -5220,6 +5333,41 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       isFlushingQueuedTurnRef.current = false
     })
   }, [isStreaming, queuedTurns, dispatchMessageContent, flushQueueStateNow, logQueueEvent])
+
+  const handleQueuedTurnSteer = useCallback(async (turn: QueuedChatTurn) => {
+    const content = turn.content.trim()
+    if (!content) return
+
+    if (isStreaming) {
+      const result = await window.electron?.chat?.steer?.({ cardId: tileId, message: content })
+      if (!result?.ok) {
+        setMessagesSafe(prev => [...prev, {
+          id: `msg-steer-error-${Date.now()}`,
+          role: 'assistant',
+          content: `Steer failed: ${result?.error ?? 'No active steerable stream'}`,
+          timestamp: Date.now(),
+          isStreaming: false,
+        }])
+        return
+      }
+
+      const remaining = queuedTurns.filter(item => item.id !== turn.id)
+      setQueuedTurns(remaining)
+      flushQueueStateNow(remaining)
+      logQueueEvent('dispatch', { queueId: turn.id, content: turn.content, preview: turn.preview, attachmentCount: turn.attachmentCount })
+      insertSteerMessageIntoStream(content)
+      return
+    }
+
+    const remaining = queuedTurns.filter(item => item.id !== turn.id)
+    setQueuedTurns(remaining)
+    flushQueueStateNow(remaining)
+    logQueueEvent('dispatch', { queueId: turn.id, content: turn.content, preview: turn.preview, attachmentCount: turn.attachmentCount })
+    const sent = await dispatchMessageContent(content)
+    if (!sent) {
+      setInput(current => current.trim() ? current : content)
+    }
+  }, [isStreaming, tileId, queuedTurns, flushQueueStateNow, logQueueEvent, insertSteerMessageIntoStream, dispatchMessageContent, setMessagesSafe])
 
   const selectAcItem = useCallback((item: AutocompleteItem) => {
     const ta = textareaRef.current
@@ -5337,6 +5485,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     <ChatDispatchCtx.Provider value={chatDispatchValue}>
     <FontCtx.Provider value={fontCtxValue}>
     <AskUserQuestionContext.Provider value={{ cardId: tileId }}>
+    <CheckpointRestoreContext.Provider value={checkpointRestoreContextValue}>
     <ToolPermissionProvider
       cardId={tileId}
       pending={pendingToolPermissions}
@@ -5516,7 +5665,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                     if (tb && shouldRenderToolBlock(tb)) rawTools.push(tb)
                     i++
                   }
-                  const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length))
+                  const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length) && !isCheckpointToolBlock(tb))
                   const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
                   const uniqueNames = new Set(collapsibleTools.map(t => t.name))
                   const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
@@ -5766,8 +5915,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           //   - 3+ collapsible tool blocks all with the same name → "Read x6" chip.
                           //   - 3+ collapsible tool blocks with mixed names → "Called N tools" chip.
                           //   - Otherwise each chip renders inline.
-                          //   - Non-collapsible tools (running / file-change) always stay inline.
-                          const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length))
+                          //   - Non-collapsible tools (running / file-change / checkpoints) always stay inline.
+                          const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length) && !isCheckpointToolBlock(tb))
                           const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
                           const uniqueNames = new Set(collapsibleTools.map(t => t.name))
                           const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
@@ -5798,7 +5947,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                             <div key={`text-${i}`} style={{
                               background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
                               border: msg.role === 'user' ? `1px solid ${theme.chat.userBubbleBorder}` : '0',
-                              borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                              borderRadius: 14,
                               padding: '8px 12px',
                               fontSize, lineHeight: fontLineHeight,
                               wordBreak: 'break-word',
@@ -6439,32 +6588,27 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 <button
                   type="button"
                   onClick={() => {
-                    if (isStreaming) return
-                    const remaining = queuedTurns.filter(item => item.id !== turn.id)
-                    setQueuedTurns(remaining)
-                    flushQueueStateNow(remaining)
-                    logQueueEvent('dispatch', { queueId: turn.id })
-                    void dispatchMessageContent(turn.content)
+                    void handleQueuedTurnSteer(turn)
                   }}
-                  disabled={isStreaming}
                   style={{
                     border: 'none',
                     background: 'transparent',
-                    color: isStreaming ? theme.chat.muted : theme.chat.textSecondary,
+                    color: theme.chat.textSecondary,
                     fontSize: 12,
                     fontFamily: fontSans,
-                    cursor: isStreaming ? 'default' : 'pointer',
+                    cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: 4,
                     padding: 0,
-                    opacity: isStreaming ? 0.45 : 1,
+                    opacity: 1,
                     flexShrink: 0,
                     ...NON_SELECTABLE_UI_STYLE,
                   }}
+                  title={isStreaming ? 'Send this message into the running stream' : 'Send this queued message now'}
                 >
+                  <CornerDownRight size={14} />
                   <span>Steer</span>
-                  <ChevronRight size={13} />
                 </button>
                 <button
                   type="button"
@@ -6963,20 +7107,20 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             <button
               onClick={sendMessage}
               onMouseDown={e => e.preventDefault()}
-              disabled={!input.trim() && attachments.length === 0}
+              disabled={!hasSendableDraft}
               style={{
                 width: 28, height: 28, minWidth: 28, borderRadius: '50%',
-                background: input.trim() || attachments.length > 0 ? theme.accent.base : theme.surface.panelMuted,
+                background: hasSendableDraft ? theme.accent.base : theme.surface.panelMuted,
                 border: 'none',
-                cursor: input.trim() || attachments.length > 0 ? 'pointer' : 'default',
+                cursor: hasSendableDraft ? 'pointer' : 'default',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 padding: 0, transition: 'background 0.15s', flexShrink: 0,
               }}
-              onMouseEnter={e => { if (input.trim() || attachments.length > 0) e.currentTarget.style.background = theme.accent.hover }}
-              onMouseLeave={e => { if (input.trim() || attachments.length > 0) e.currentTarget.style.background = theme.accent.base }}
+              onMouseEnter={e => { if (hasSendableDraft) e.currentTarget.style.background = theme.accent.hover }}
+              onMouseLeave={e => { if (hasSendableDraft) e.currentTarget.style.background = theme.accent.base }}
               title="Send message"
             >
-              <ArrowUp size={16} color="#fff" strokeWidth={2.5} style={{ opacity: input.trim() || attachments.length > 0 ? 1 : 0.3 }} />
+              <ArrowUp size={16} color="#fff" strokeWidth={2.5} style={{ opacity: hasSendableDraft ? 1 : 0.3 }} />
             </button>
           )}
         </div>
@@ -7355,6 +7499,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       </div>
     </div>
     </ToolPermissionProvider>
+    </CheckpointRestoreContext.Provider>
     </AskUserQuestionContext.Provider>
     </FontCtx.Provider>
     </ChatDispatchCtx.Provider>
@@ -7811,6 +7956,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
   const theme = useTheme()
   const codePanelFontSize = Math.max(11, fonts.size - 1)
   const isFileChangeBlock = (block.fileChanges?.length ?? 0) > 0
+  const checkpointRestoreCtx = React.useContext(CheckpointRestoreContext)
 
   // Intercept tool-permission requests — when the agent needs user approval for
   // this tool call, show an inline Allow/Deny prompt instead of (or alongside)
@@ -7869,6 +8015,13 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
   })
   const isRunning = isLive && block.status === 'running'
   const hasNestedData = (block.fileChanges?.length ?? 0) > 0 || (block.commandEntries?.length ?? 0) > 0
+  const checkpointRestoreAction = checkpointRestoreCtx
+    ? getCheckpointRestoreAction(block, checkpointRestoreCtx)
+    : null
+  const isRestoringCheckpoint = Boolean(
+    checkpointRestoreAction
+    && checkpointRestoreCtx?.restoringCheckpointId === checkpointRestoreAction.checkpointId,
+  )
 
   const toggleFile = useCallback((key: string) => {
     setExpandedFiles(prev => {
@@ -8111,7 +8264,69 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
         </div>
       )}
 
-      {expanded && !hasNestedData && block.input && (
+      {expanded && checkpointRestoreAction && (
+        <div style={{
+          padding: '8px 10px',
+          borderTop: `1px solid ${theme.chat.assistantBubbleBorder}`,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}>
+          {block.input && (
+            <ToolInputView
+              toolName={block.name}
+              input={block.input}
+              codePanelFontSize={codePanelFontSize}
+            />
+          )}
+          {block.summary && (
+            <div style={{
+              fontSize: 11,
+              color: theme.chat.muted,
+              fontFamily: fonts.sans,
+              lineHeight: 1.4,
+            }}>
+              {block.summary}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={event => {
+              event.stopPropagation()
+              if (!checkpointRestoreCtx || !checkpointRestoreAction || isRestoringCheckpoint) return
+              void checkpointRestoreCtx.restoreCheckpoint(
+                checkpointRestoreAction.checkpointId,
+                checkpointRestoreAction.sessionEntryId,
+                checkpointRestoreAction.label,
+              )
+            }}
+            disabled={isRestoringCheckpoint || !checkpointRestoreCtx}
+            title="Restore workspace files from this checkpoint"
+            style={{
+              alignSelf: 'flex-start',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              border: `1px solid ${theme.chat.assistantBubbleBorder}`,
+              background: theme.surface.panelMuted,
+              color: isRestoringCheckpoint ? theme.chat.muted : theme.chat.text,
+              borderRadius: 999,
+              padding: '5px 9px',
+              fontSize: 11,
+              fontFamily: fonts.sans,
+              fontWeight: 600,
+              cursor: isRestoringCheckpoint ? 'default' : 'pointer',
+              opacity: isRestoringCheckpoint ? 0.65 : 1,
+              ...NON_SELECTABLE_UI_STYLE,
+            }}
+          >
+            <RotateCcw size={12} />
+            {isRestoringCheckpoint ? 'Restoring…' : 'Restore this checkpoint'}
+          </button>
+        </div>
+      )}
+
+      {expanded && !checkpointRestoreAction && !hasNestedData && block.input && (
         <div style={{
           padding: '4px 10px 8px 10px',
           borderTop: `1px solid ${theme.chat.assistantBubbleBorder}`,
