@@ -1825,6 +1825,116 @@ function InlineJSXPreviewBlock({ jsx, isStreaming = false }: { jsx: string; isSt
   )
 }
 
+// ─── Insight block detection ──────────────────────────────────────────────
+// The model emits "★ Insight" callouts framed by box-drawing horizontal rules
+// (U+2500). Both marker lines are typically wrapped in backticks (so they
+// don't disrupt markdown flow), but the backticks can drop during streaming —
+// be permissive. We detect the open/close pair and lift the body out so we
+// can render it as a single styled block instead of three disjoint inline-code
+// runs interleaved with markdown.
+type ChatBodySegment =
+  | { kind: 'md'; text: string }
+  | { kind: 'insight'; text: string; closed: boolean }
+
+// `★ Insight ─────…` — leading backtick optional, trailing backtick optional.
+const INSIGHT_OPEN_RE = /^[ \t]*`?★ Insight[ \t]*─{5,}[ \t]*`?[ \t]*$/m
+// `─────…` — must be box-drawing rules, optionally backticked. A regular
+// markdown `---` HR doesn't match (intentional — we don't want to swallow them).
+const INSIGHT_CLOSE_RE = /^[ \t]*`?─{5,}`?[ \t]*$/m
+
+function splitInsightSegments(text: string): ChatBodySegment[] {
+  const segments: ChatBodySegment[] = []
+  let cursor = 0
+  while (cursor < text.length) {
+    const slice = text.slice(cursor)
+    const openMatch = slice.match(INSIGHT_OPEN_RE)
+    if (!openMatch || openMatch.index === undefined) {
+      const remaining = text.slice(cursor)
+      if (remaining.trim()) segments.push({ kind: 'md', text: remaining })
+      break
+    }
+    const openStart = cursor + openMatch.index
+    const openEnd = openStart + openMatch[0].length
+    if (openStart > cursor) {
+      const before = text.slice(cursor, openStart)
+      if (before.trim()) segments.push({ kind: 'md', text: before })
+    }
+    const afterOpen = text.slice(openEnd)
+    const closeMatch = afterOpen.match(INSIGHT_CLOSE_RE)
+    if (!closeMatch || closeMatch.index === undefined) {
+      // Unclosed — still streaming. Render the partial body as an open insight.
+      segments.push({ kind: 'insight', text: afterOpen.replace(/^\n+/, ''), closed: false })
+      cursor = text.length
+      break
+    }
+    const bodyEnd = openEnd + closeMatch.index
+    const closeEnd = openEnd + closeMatch.index + closeMatch[0].length
+    segments.push({
+      kind: 'insight',
+      text: text.slice(openEnd, bodyEnd).replace(/^\n+/, '').replace(/\n+$/, ''),
+      closed: true,
+    })
+    cursor = closeEnd
+    // Eat one trailing newline so the next markdown chunk doesn't start blank.
+    if (text[cursor] === '\n') cursor += 1
+  }
+  return segments
+}
+
+// Hex color helper: append an alpha component (00..ff) to a #rrggbb color.
+// Used to derive a subtle accent-tinted background from theme.accent.base.
+// TODO(design): the styling in InsightBlock below is a sensible default —
+// tweak the four marked knobs to match your sketch.
+function withAlpha(hex: string, alphaHex: string): string {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex
+  return hex + alphaHex
+}
+
+interface InsightBlockProps {
+  text: string
+  closed: boolean
+  isStreaming?: boolean
+  accent: string
+  textColor: string
+}
+
+const InsightBlock = React.memo(({ text, closed, isStreaming, accent, textColor }: InsightBlockProps): JSX.Element => {
+  void closed
+  return (
+    <div
+      className="chat-insight"
+      style={{
+        // ── Tunable visual knobs ────────────────────────────────────────
+        borderLeft: `3px solid ${accent}`,            // (1) left rule thickness
+        background: withAlpha(accent, '14'),          // (2) tint alpha (0x14 ≈ 8%)
+        borderRadius: 8,                               // (3) corner radius
+        padding: '10px 14px',                          // (4) inner spacing
+        // ────────────────────────────────────────────────────────────────
+        margin: '8px 0',
+        color: textColor,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: accent,
+          marginBottom: 6,
+          textTransform: 'uppercase',
+          letterSpacing: 0.6,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        <span style={{ fontSize: 13, lineHeight: 1 }}>★</span>
+        <span>Insight</span>
+      </div>
+      <ChatMarkdown text={text} isStreaming={isStreaming} />
+    </div>
+  )
+})
+
 const ChatMessageContent = React.memo(({
   text,
   isStreaming,
@@ -1946,14 +2056,26 @@ const ChatMessageContent = React.memo(({
   ) : null
 
   if (!bodyText) return attachments ?? null
-  if (!attachments) return <ChatMarkdown text={bodyText} isStreaming={isStreaming} className={className} />
 
-  return (
-    <>
-      <ChatMarkdown text={bodyText} isStreaming={isStreaming} className={className} />
-      {attachments}
-    </>
-  )
+  // Split body into markdown / insight segments. Insights become styled
+  // blocks rendered with the active accent color; everything else flows
+  // through the normal markdown pipeline.
+  const accent = theme.accent.base
+  const textColor = theme.text.primary
+  const segments = splitInsightSegments(bodyText)
+  const renderedBody = segments.length === 1 && segments[0].kind === 'md'
+    ? <ChatMarkdown text={segments[0].text} isStreaming={isStreaming} className={className} />
+    : (
+      <div className={className}>
+        {segments.map((seg, i) => seg.kind === 'insight'
+          ? <InsightBlock key={i} text={seg.text} closed={seg.closed} isStreaming={isStreaming} accent={accent} textColor={textColor} />
+          : <ChatMarkdown key={i} text={seg.text} isStreaming={isStreaming} />
+        )}
+      </div>
+    )
+
+  if (!attachments) return renderedBody
+  return <>{renderedBody}{attachments}</>
 })
 
 // --- Provider / Model config -----------------------------------------------------

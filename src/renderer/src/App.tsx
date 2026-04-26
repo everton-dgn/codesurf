@@ -7,6 +7,7 @@ import { withDefaultSettings, DEFAULT_SETTINGS } from '../../shared/types'
 import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
+import { useDiscoveryGraph } from './hooks/useDiscoveryGraph'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
@@ -4016,15 +4017,47 @@ function App(): JSX.Element {
     return findDiscoveryMatch(discoveryFocusTileId, tiles, panelTileIds, gridStep, maxDistance)
   }, [autoConnectionsEnabled, discoveryFocusTileId, panelTileIds, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles])
 
+  // Snapshot the mutable extensionActionRegistry into a serializable Map.
+  // The discovery worker can't access the registry directly; we pass actions
+  // alongside other inputs. extActionsVersion bumps whenever the registry
+  // mutates so this memo re-runs.
+  const extActionsByTileId = React.useMemo(() => {
+    const m = new Map<string, string[]>()
+    for (const [tileId, actions] of extensionActionRegistry) {
+      m.set(tileId, actions.map(a => a.name))
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extActionsVersion])
+
+  const discoveryGridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
+  const discoveryMaxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
+
+  // Off-main-thread O(n²) discovery (n≥10). For n<10 or worker-unavailable,
+  // runs the same code synchronously on main thread.
+  const workerDiscoveryGraph = useDiscoveryGraph({
+    tiles,
+    hiddenTileIds: React.useMemo(() => new Set<string>(), []),
+    gridStep: discoveryGridStep,
+    maxDistance: discoveryMaxDistance,
+    extActionsByTileId,
+    enabled: autoConnectionsEnabled,
+  })
+
   const negotiatedDiscoveryState = React.useMemo(() => {
-    const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
-    const maxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
+    const gridStep = discoveryGridStep
+    const maxDistance = discoveryMaxDistance
     const routes = new Map<string, { key: string; route: { x: number; y: number }[]; distance: number; locked: boolean }>()
 
     // Pass empty set — panel/layout tiles must stay in the graph so peers keep their tools/connections.
     // Visual hiding is handled at ambientDiscoveryRoutes level only.
+    // Clone the worker-returned Set/Map so subsequent mutations (suppressed/
+    // locked/cascade) don't poison the hook's cached reference.
     const connectionGraph = autoConnectionsEnabled
-      ? findDiscoveryConnections(tiles, new Set(), gridStep, maxDistance)
+      ? {
+          connectedTileIds: new Set(workerDiscoveryGraph.connectedTileIds),
+          byTile: new Map(Array.from(workerDiscoveryGraph.byTile.entries()).map(([k, v]) => [k, [...v]])),
+        }
       : { connectedTileIds: new Set<string>(), byTile: new Map<string, DiscoveryCapabilityLink[]>() }
 
     // Remove suppressed connections (deleted by user, cleared when tiles move)
@@ -4132,7 +4165,7 @@ function App(): JSX.Element {
       ambientRoutes: Array.from(routes.values()).map(({ key, route, locked }) => ({ key, route, locked })),
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnectionsEnabled, panelLayout, panelTileIds, groups, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles, lockedConnections, suppressedConnections, extActionsVersion])
+  }, [autoConnectionsEnabled, panelLayout, panelTileIds, groups, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles, lockedConnections, suppressedConnections, extActionsVersion, workerDiscoveryGraph])
 
   useEffect(() => {
     const sourceTileIds = [activeChatTileId, selectedTileId].filter((value): value is string => Boolean(value))
