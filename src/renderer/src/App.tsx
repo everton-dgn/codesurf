@@ -7,6 +7,7 @@ import { withDefaultSettings, DEFAULT_SETTINGS } from '../../shared/types'
 import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
+import { useTitleTooltips } from './hooks/useTitleTooltips'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
@@ -855,6 +856,7 @@ function findDiscoveryMatch(sourceTileId: string, tileList: TileState[], hiddenT
 
 function App(): JSX.Element {
   useAutoHideScrollbars()
+  useTitleTooltips()
 
   const [tiles, setTiles] = useState<TileState[]>([])
   const [groups, setGroups] = useState<GroupState[]>([])
@@ -4249,11 +4251,19 @@ function App(): JSX.Element {
     root.style.setProperty('--color-popover', theme.surface.panel)
     root.style.setProperty('--color-popover-foreground', theme.text.primary)
     root.style.setProperty('--color-sidebar', theme.surface.panelMuted)
+    // Tooltip theme variables — read by useTitleTooltips via getComputedStyle(:root)
+    root.style.setProperty('--tooltip-bg', theme.surface.panelElevated)
+    root.style.setProperty('--tooltip-fg', theme.text.secondary)
+    root.style.setProperty('--tooltip-border', theme.border.default)
+    root.style.setProperty('--tooltip-shadow', theme.mode === 'light'
+      ? '0 4px 14px rgba(15,23,42,0.12)'
+      : '0 2px 8px rgba(0,0,0,0.4)')
   }, [
     theme.accent.base,
     theme.border.default,
     theme.chat.background,
     theme.chat.inputBorder,
+    theme.mode,
     theme.status.danger,
     theme.surface.hover,
     theme.surface.panel,
