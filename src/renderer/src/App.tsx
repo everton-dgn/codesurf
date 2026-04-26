@@ -1611,18 +1611,104 @@ function App(): JSX.Element {
     }
   }, [])
 
+  // ─── Promote single-tile fullscreen → layout-group fullscreen ───────────
+  // When the user is in path-2 (double-clicked a single tile) and the panel
+  // grows beyond one tile (via split / new tab), we materialize the panel as
+  // a real layout-group on the canvas immediately. From that moment on, the
+  // fullscreen panel and the canvas group share the same layout tree —
+  // identical to path 3. This means: no "magic group appears at exit"; the
+  // group exists from the moment a layout becomes a layout.
+  const promoteExpandedTileToLayoutGroup = useCallback(() => {
+    // Already a real layout group (path 3) — nothing to do
+    if (expandLayoutGroupIdRef.current) return
+    // Not in single-tile-expand mode (path 1 or no panel) — skip
+    const anchorTileId = expandedTileIdRef.current
+    if (!anchorTileId) return
+    const layout = panelLayoutRef.current
+    if (!layout) return
+    const tileIds = getAllTileIds(layout)
+    // Single tile = not a layout yet, no promotion
+    if (tileIds.length < 2) return
+
+    const groupId = `group-${Date.now()}`
+    const anchor = tilesRef.current.find(t => t.id === anchorTileId)
+
+    // ── Placement strategy ──────────────────────────────────────────────────
+    // TODO(design): refine where the new layout-group lands on canvas.
+    //   (A) anchor.x/y with a generous default size — keeps originating tile
+    //       visually anchored to its starting spot
+    //   (B) viewport-center, default size — predictable but loses spatial link
+    //   (C) anchor.x/y but size = max(anchor, 800x600) — current
+    // 5–10 line tweak opportunity if you want to try (B) or push neighbors aside.
+    const DEFAULT_W = 800
+    const DEFAULT_H = 600
+    const baseX = anchor?.x ?? (viewportRef.current ? -viewportRef.current.tx / viewportRef.current.zoom : 0)
+    const baseY = anchor?.y ?? (viewportRef.current ? -viewportRef.current.ty / viewportRef.current.zoom : 0)
+    const w = Math.max(anchor?.width ?? 0, DEFAULT_W)
+    const h = Math.max(anchor?.height ?? 0, DEFAULT_H)
+    const layoutBounds = { x: baseX, y: baseY, w, h }
+
+    const newGroup: GroupState = {
+      id: groupId,
+      color: '#4a9eff',
+      layoutMode: true,
+      layout,
+      layoutBounds,
+    }
+
+    const ids = new Set(tileIds)
+    setGroups(prev => {
+      const updatedGroups = [...prev, newGroup]
+      setTiles(tPrev => {
+        const updatedTiles = tPrev.map(t => ids.has(t.id) ? { ...t, groupId } : t)
+        setTimeout(() => persistCanvasStateRef.current?.(updatedTiles, viewportRef.current, nextZIndexRef.current, updatedGroups), 0)
+        return updatedTiles
+      })
+      return updatedGroups
+    })
+
+    // Switch from path-2 mode to path-3 mode — exit/escape now flows through
+    // the existing "save layout back to group" branch.
+    setExpandLayoutGroupId(groupId)
+    expandLayoutGroupIdRef.current = groupId
+    setExpandedTileId(null)
+  }, [])
+
+  // ─── Eager promotion: as soon as a single-tile-expand grows to ≥2 tiles,
+  //     materialize it as a real layout-group on the canvas. From that
+  //     moment on, the fullscreen view is just path-3 (group fullscreen).
+  useEffect(() => {
+    if (!panelLayout) return
+    if (expandLayoutGroupIdRef.current) return  // already a group
+    if (!expandedTileIdRef.current) return       // not path-2
+    const ids = getAllTileIds(panelLayout)
+    if (ids.length >= 2) {
+      promoteExpandedTileToLayoutGroup()
+    }
+  }, [panelLayout, promoteExpandedTileToLayoutGroup])
+
   // ─── Escape to collapse expanded tile ────────────────────────────────────
   const exitExpandedMode = useCallback(() => {
+    // Safety net: if the promotion useEffect hasn't fired yet (shouldn't
+    // happen under normal React scheduling, but defensive), promote now.
+    promoteExpandedTileToLayoutGroup()
+
     const expandingGroup = expandLayoutGroupIdRef.current
     setPanelLayout(prev => {
       if (expandingGroup && prev) {
-        // Save layout back to the group instead of the global savedLayoutRef
+        // Path 3 — fullscreen of an existing layout group (or a freshly-
+        // promoted one from path 2). Save layout back so canvas-side syncs.
         setGroups(grps => {
           const updated = grps.map(g => g.id === expandingGroup ? { ...g, layout: prev } : g)
           setTimeout(() => persistCanvasStateRef.current?.(tilesRef.current, viewportRef.current, nextZIndexRef.current, updated), 0)
           return updated
         })
+      } else if (expandedTileIdRef.current) {
+        // Path 2 with only the original tile (never grew to a layout) —
+        // clean exit, don't touch savedLayoutRef (that belongs to path 1).
       } else if (!expandingGroup) {
+        // Path 1 — toolbar tab toggle. Preserve current "revert to canvas as
+        // it was" semantics by saving the layout for the next toggle restore.
         savedLayoutRef.current = prev
       }
       return null
@@ -1631,12 +1717,14 @@ function App(): JSX.Element {
     setActivePanelId(null)
     setExpandLayoutGroupId(null)
     expandLayoutGroupIdRef.current = null
-  }, [])
+  }, [promoteExpandedTileToLayoutGroup])
 
   const enterExpandedMode = useCallback((tileId: string) => {
-    // All open tiles become tabs, with the expanded tile as the active one
-    const allIds = tilesRef.current.map(t => t.id)
-    const leaf = createLeaf(allIds, tileId)
+    // Single-tile expand: only the double-clicked tile becomes the panel content.
+    // Other canvas tiles stay on canvas. If the user adds more tiles via
+    // splits/tabs in fullscreen, exitExpandedMode() will auto-group them
+    // into a persistent layout-group so the arrangement survives back to canvas.
+    const leaf = createLeaf([tileId], tileId)
     setExpandedTileId(tileId)
     setPanelLayout(leaf)
     setActivePanelId(leaf.id)

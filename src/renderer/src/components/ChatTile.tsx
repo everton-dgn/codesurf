@@ -2088,7 +2088,7 @@ function ensureChatMdStyle(): void {
       background: rgba(128,128,128,0.15); padding: 1px 5px; border-radius: 3px;
       font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.88em;
     }
-    .chat-md pre { margin: 8px 0; border-radius: 6px; overflow: hidden; }
+    .chat-md pre { margin: 8px 0; border-radius: 12px; overflow: hidden; }
     .chat-md pre:first-child { margin-top: 0; }
     .chat-md pre:last-child { margin-bottom: 0; }
     .chat-md [data-streamdown="code-block"] { max-width: 100%; }
