@@ -472,6 +472,26 @@ export interface AppSettings {
   storage: {
     threadIndex: boolean
   }
+  // Voice — STT (input) + TTS (output) configuration. API keys are stored
+  // separately in the encrypted secrets store; this struct holds only the
+  // non-secret configuration (provider choice, voice id, lang, etc.).
+  voice?: VoiceSettings
+}
+
+export interface VoiceSettings {
+  // STT (input) — used by chat-tile mic button and push-to-talk
+  sttProvider: 'openai' | 'deepgram' | 'assemblyai' | 'local'
+  sttLang: string                          // BCP-47 e.g. 'en'
+  sttLocalBaseUrl?: string                 // for 'local' provider
+  // TTS (output) — used by auto-speak and per-message Speak buttons
+  ttsProvider: 'cartesia' | 'deepgram' | 'elevenlabs' | 'voicelab' | 'say'
+  ttsVoice?: string                        // provider-specific voice id
+  ttsVoiceLabBaseUrl?: string              // for 'voicelab' provider
+  // Spokify rewrite (LLM that turns written text into natural narration)
+  spokifyModel: string                     // default 'claude-haiku-4-5-20251001'
+  // Behavior
+  autoSpeak: 'off' | 'last-message'        // when to auto-speak the agent
+  bargeIn: boolean                         // mic activation stops TTS playback
 }
 
 // All possible scopes the user can pick in the permission card.
@@ -645,6 +665,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
   extensionsGalleryEnabled: true,
   storage: {
     threadIndex: true,
+  },
+  voice: {
+    // Deepgram Nova-2 is ~5x faster than Whisper REST for short clips
+    // (~600ms vs ~3s end-to-end). Both keys are required for the full
+    // Deepgram-based stack (STT + TTS Aura) so this default lines up.
+    sttProvider: 'deepgram',
+    sttLang: 'en',
+    ttsProvider: 'cartesia',
+    spokifyModel: 'claude-haiku-4-5-20251001',
+    autoSpeak: 'off',
+    bargeIn: true,
   },
 }
 

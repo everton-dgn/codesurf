@@ -265,6 +265,7 @@ button:focus-visible,
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: transparent;
   border-radius: 3px;

@@ -88,6 +88,8 @@ export default defineConfig({
               'unified',
               'extend',
               'react-jsx-parser',
+              '@ricky0123/vad-web',
+              'onnxruntime-web',
             ],
             exclude: ['@xterm/xterm', '@xterm/addon-fit', '@monaco-editor/react', 'monaco-editor'],
           }

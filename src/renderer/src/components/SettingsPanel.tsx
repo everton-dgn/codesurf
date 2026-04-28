@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback, useRef, lazy } from 'react'
 import type { AppSettings, AutoDreamSettings, ExecutionHostRecord, ExecutionMode, GenerationProviderSettings, ToolPermissionGrant, Workspace } from '../../../shared/types'
 import { DEFAULT_SETTINGS, withDefaultSettings } from '../../../shared/types'
-import { Settings, Type, Monitor, FolderOpen, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, Puzzle, RefreshCw, Star, Wrench, Users, FileText, Globe, Eye, EyeOff, PanelRight, Pin, Shield, KeyRound, Image as ImageIcon, Video } from 'lucide-react'
+import { Settings, Type, Monitor, FolderOpen, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, Puzzle, RefreshCw, Star, Wrench, Users, FileText, Globe, Eye, EyeOff, PanelRight, Pin, Shield, KeyRound, Image as ImageIcon, Video, Mic } from 'lucide-react'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { THEME_OPTIONS, getThemeCanvasDefaults, resolveEffectiveThemeId, getThemeById, type AppearanceMode } from '../theme'
 import { ChromeSyncSection } from './settings/ChromeSyncSection'
 import { DisplaySettingsEditor } from './settings/DisplaySettingsEditor'
+import { VoiceSettingsEditor } from './settings/VoiceSettingsEditor'
 import { ColorSwatch, NumInput, RangeInput, SectionLabel, SettingRow, TextInput, Toggle } from './settings/controls'
 
 const LazyPromptsSection = lazy(() => import('./CustomisationTile').then(m => ({ default: m.PromptsSection })))
@@ -25,7 +26,7 @@ interface Props {
   systemPrefersDark?: boolean
 }
 
-type BuiltinSection = 'general' | 'daemon' | 'canvas' | 'providers' | 'browser' | 'permissions' | 'mcp' | 'extensions' | 'prompts' | 'skills' | 'tools' | 'agents'
+type BuiltinSection = 'general' | 'daemon' | 'canvas' | 'providers' | 'voice' | 'browser' | 'permissions' | 'mcp' | 'extensions' | 'prompts' | 'skills' | 'tools' | 'agents'
 type Section = BuiltinSection | `ext:${string}`
 
 const SECTIONS: { id: Section; label: string; icon: React.ReactNode; description: string; group?: string }[] = [
@@ -34,6 +35,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ReactNode; description
   { id: 'daemon',     label: 'Daemon',     icon: <Settings size={15} />,   description: 'Daemon status, restart controls, execution routing, and remote hosts', group: 'app' },
   { id: 'canvas',     label: 'Canvas',     icon: <Monitor size={15} />,    description: 'Background, grid and snap settings', group: 'app' },
   { id: 'providers',  label: 'Providers',  icon: <KeyRound size={15} />,   description: 'Image and video generation providers, keys, and default models', group: 'app' },
+  { id: 'voice',      label: 'Voice',      icon: <Mic size={15} />,        description: 'Speech-to-text, text-to-speech, auto-speak, and provider API keys', group: 'app' },
 
 
   { id: 'browser',    label: 'Browser',    icon: <Globe size={15} />,      description: 'Chrome data sync — cookies, bookmarks, history', group: 'app' },
@@ -1538,6 +1540,25 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
 
 
 
+      case 'voice':
+        return (
+          <>
+            <SectionLabel label="Voice — STT, TTS, spokify, API keys" />
+            <VoiceSettingsEditor
+              settings={settings}
+              onChange={(next) => updateSettingsPatch({ voice: next.voice })}
+            />
+          </>
+        )
+
+      case 'voice':
+        return (
+          <>
+            <SectionLabel label="Voice — speech in, voice out" />
+            <VoiceSettingsEditor settings={settings} onChange={onSettingsChange} />
+          </>
+        )
+
       case 'browser':
         return (
           <>
@@ -2241,7 +2262,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
           </div>
 
           {/* Content */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '4px 28px 28px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', scrollbarGutter: 'stable', padding: '4px 28px 28px' }}>
             {renderContent()}
           </div>
         </div>

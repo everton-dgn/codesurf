@@ -60,7 +60,7 @@ async function sttOpenAI(audio: Buffer, mimeType: string, lang: string, model: s
   if (!apiKey) return { ok: false, error: 'No OpenAI API key set.' }
 
   const form = new FormData()
-  const blob = new Blob([audio], { type: mimeType })
+  const blob = new Blob([new Uint8Array(audio)], { type: mimeType })
   form.append('file', blob, mimeToFilename(mimeType))
   form.append('model', model)
   if (lang) form.append('language', lang)
@@ -97,7 +97,7 @@ async function sttDeepgram(audio: Buffer, mimeType: string, lang: string, model:
       'Authorization': `Token ${apiKey}`,
       'Content-Type': mimeType,
     },
-    body: audio,
+    body: new Uint8Array(audio),
   })
 
   if (!resp.ok) {
@@ -123,7 +123,7 @@ async function sttAssemblyAI(audio: Buffer, _mimeType: string, lang: string): Pr
       'Authorization': apiKey,
       'Content-Type': 'application/octet-stream',
     },
-    body: audio,
+    body: new Uint8Array(audio),
   })
   if (!uploadResp.ok) {
     const errText = await uploadResp.text().catch(() => '')
@@ -170,7 +170,7 @@ async function sttAssemblyAI(audio: Buffer, _mimeType: string, lang: string): Pr
 async function sttLocal(audio: Buffer, mimeType: string, lang: string, baseUrl: string | undefined): Promise<TranscribeResult> {
   const base = (baseUrl || DEFAULTS.localBaseUrl).replace(/\/+$/, '')
   const form = new FormData()
-  const blob = new Blob([audio], { type: mimeType })
+  const blob = new Blob([new Uint8Array(audio)], { type: mimeType })
   form.append('file', blob, mimeToFilename(mimeType))
   form.append('model', 'whisper-1')
   if (lang) form.append('language', lang)

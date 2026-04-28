@@ -16,6 +16,9 @@ import {
   FileText, Folder, GripVertical, History, Lock, Mic, Paperclip, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
 } from 'lucide-react'
 import { useMCPServers, type MCPServerEntry } from '../hooks/useMCPServers'
+import { useAutoSpeak, speakMessage, bargeIn } from '../hooks/useAutoSpeak'
+import { ttsPlayer, type TtsPlayerState } from '../utils/ttsPlayer'
+import { useVoiceActivityDetector, float32ToWav } from '../hooks/useVoiceActivityDetector'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { ensureShimmerStyles, ShimmerText, WorkingDots, ChatMarkdown } from './shared/streamdown-utils'
@@ -2681,10 +2684,66 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const requestedProviderOptionsRef = useRef<{ opencode: boolean; openclaw: boolean }>({ opencode: false, openclaw: false })
   const isFlushingQueuedTurnRef = useRef(false)
 
-  // Voice dictation state
+  // Voice dictation state.
+  // `isDictating` here means "VAD listening mode is on" — the mic is open
+  // and we're auto-detecting utterances. `isSpeaking` (from the VAD hook)
+  // means "an utterance is currently in progress". Together they drive the
+  // visual indicator: muted when off, pulsing red while speaking, soft
+  // accent while listening but silent.
   const [isDictating, setIsDictating] = useState(false)
   const [dictationText, setDictationText] = useState('')
+  const [dictationError, setDictationError] = useState<string | null>(null)
+  // Kept around for the legacy MediaRecorder fallback path; not used when
+  // the VAD path is active (which is the new default).
   const recognitionRef = useRef<any>(null)
+  // Most-recent transcription job id, so concurrent VAD-triggered
+  // transcriptions don't append out of order.
+  const transcribeJobRef = useRef(0)
+
+  // ─── TTS auto-speak (last-message-only, sentence-streamed) ──────────
+  // Voice config comes from the persisted AppSettings.voice block (edited
+  // via Settings → Voice). The ChatTile receives `settings` as a prop, so
+  // any update from the settings panel re-flows here automatically.
+  const voiceSettings = settings?.voice ?? {
+    sttProvider: 'openai' as const,
+    sttLang: 'en',
+    ttsProvider: 'cartesia' as const,
+    spokifyModel: 'claude-haiku-4-5-20251001',
+    autoSpeak: 'off' as const,
+    bargeIn: true,
+  }
+  // Ref so memoized callbacks (toggleDictation) always read the current
+  // voice settings without needing them in their dep array (settings change
+  // mid-dictation is rare but should be honored on next press).
+  const voiceSettingsRef = useRef(voiceSettings)
+  voiceSettingsRef.current = voiceSettings
+  const autoSpeakEnabled = voiceSettings.autoSpeak === 'last-message'
+  // Track the most recent assistant message id + final text for auto-speak.
+  // We need its id (for deduping in the hook) and its text (after stream
+  // completion). isStreaming gates: don't speak until the agent has finished.
+  // ─── Subscribe to TTS player state for the visual indicator ─────────
+  const [ttsState, setTtsState] = useState<TtsPlayerState>(() => ttsPlayer.state)
+  useEffect(() => ttsPlayer.subscribe(setTtsState), [])
+
+  // Find the most-recent assistant message (excluding streaming-in-progress).
+  // This is what auto-speak watches.
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === 'assistant') return m
+    }
+    return null
+  }, [messages])
+
+  useAutoSpeak({
+    enabled: autoSpeakEnabled,
+    messageId: lastAssistantMessage?.id ?? null,
+    text: lastAssistantMessage?.content ?? null,
+    isStreaming: Boolean(lastAssistantMessage?.isStreaming) || isStreaming,
+    ttsProvider: voiceSettings.ttsProvider,
+    ttsVoice: voiceSettings.ttsVoice,
+    spokifyModel: voiceSettings.spokifyModel,
+  })
 
   // Plan pane (right-docked inline plan panel). Subscribes to the per-tile
   // todos store so the pane, the composer chip, and the transcript's inline
@@ -4086,38 +4145,73 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setShowContextMenu(prev => which === 'context' ? !prev : false)
   }, [])
 
-  // Voice dictation via Web Speech API (Chromium in Electron)
+  // ─── Silero VAD: hands-free dictation ───────────────────────────────
+  // The VAD hook owns the microphone while listening mode is on. It fires
+  // onSpeechEnd with a Float32 PCM buffer each time the user finishes an
+  // utterance (~700ms after they stop talking). We pack it into a WAV and
+  // send to the configured STT provider — no manual stop required.
+  //
+  // Listening stays on across multiple utterances until the user clicks
+  // mic again. Voice-initiated barge-in (the audio steer): when speech
+  // starts mid-TTS-playback, we stop the player so the user's voice cuts
+  // through cleanly.
+  const vad = useVoiceActivityDetector({
+    onSpeechStart: () => {
+      // Voice-initiated barge-in: speaking interrupts the AI talking.
+      bargeIn()
+    },
+    onSpeechEnd: async (audio) => {
+      const v = voiceSettingsRef.current
+      const jobId = ++transcribeJobRef.current
+      try {
+        const wav = float32ToWav(audio, 16000)
+        const result = await window.electron.transcribe.run({
+          audio: wav,
+          mimeType: 'audio/wav',
+          provider: v.sttProvider ?? 'deepgram',
+          lang: v.sttLang ?? 'en',
+          localBaseUrl: v.sttLocalBaseUrl,
+        })
+        if (jobId !== transcribeJobRef.current) return  // stale; user moved on
+        if (result.ok && result.text) {
+          setInput(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + result.text!)
+          setDictationError(null)
+        } else if (result.error) {
+          // eslint-disable-next-line no-console
+          console.warn('[dictation] transcribe error:', result.error)
+          setDictationError(result.error)
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[dictation] transcribe pipeline failed:', err)
+        setDictationError(err instanceof Error ? err.message : String(err))
+      }
+    },
+  })
+
+  // Reflect the VAD lifecycle into the existing isDictating / dictationText
+  // state so the indicator UI doesn't need to know which engine is driving it.
+  useEffect(() => {
+    setIsDictating(vad.isListening)
+    if (!vad.isListening) setDictationText('')
+    else if (vad.isSpeaking) setDictationText('Listening — speaking…')
+    else setDictationText('Listening — say something')
+  }, [vad.isListening, vad.isSpeaking])
+  useEffect(() => {
+    if (vad.error) setDictationError(vad.error)
+  }, [vad.error])
+
+  // Click mic / hold space toggles VAD listening mode (not single-shot
+  // recording). Holding space briefly is functionally equivalent to a
+  // click — both flip listening on or off.
   const toggleDictation = useCallback(() => {
-    if (isDictating) {
-      recognitionRef.current?.stop()
-      setIsDictating(false)
-      return
+    if (vad.isListening) {
+      void vad.stop()
+    } else {
+      bargeIn()  // any active TTS audio is silenced when we start listening
+      void vad.start()
     }
-    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition
-    if (!SpeechRecognition) return
-    const recognition = new SpeechRecognition()
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.lang = 'en-US'
-    recognition.onresult = (e: any) => {
-      let final = '', interim = ''
-      for (let i = 0; i < e.results.length; i++) {
-        const r = e.results[i]
-        if (r.isFinal) final += r[0].transcript
-        else interim += r[0].transcript
-      }
-      setDictationText(interim)
-      if (final) {
-        setInput(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + final)
-        setDictationText('')
-      }
-    }
-    recognition.onerror = () => { setIsDictating(false); setDictationText('') }
-    recognition.onend = () => { setIsDictating(false); setDictationText('') }
-    recognitionRef.current = recognition
-    recognition.start()
-    setIsDictating(true)
-  }, [isDictating])
+  }, [vad])
 
   const isNearLatest = useCallback((el: HTMLDivElement) => {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_AUTO_SCROLL_THRESHOLD
@@ -6304,6 +6398,36 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                       <span>{msg.turns} turn{msg.turns !== 1 ? 's' : ''}</span>
                     )}
                     <span>{relativeTime(msg.timestamp)}</span>
+                    {/* Per-message speak / stop button — appears on every
+                        completed assistant message. Click speaks (or
+                        re-speaks) this message; if it's currently being
+                        spoken, click stops just that message. */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (ttsState.currentMessageId === msg.id) {
+                          ttsPlayer.stopMessage(msg.id)
+                        } else {
+                          void speakMessage({
+                            messageId: msg.id,
+                            text: msg.content,
+                            ttsProvider: voiceSettings.ttsProvider,
+                            ttsVoice: voiceSettings.ttsVoice,
+                            spokifyModel: voiceSettings.spokifyModel,
+                            force: true,
+                          })
+                        }
+                      }}
+                      onMouseDown={e => e.preventDefault()}
+                      title={ttsState.currentMessageId === msg.id ? 'Stop speaking' : 'Speak this message'}
+                      style={{
+                        marginLeft: 'auto', background: 'transparent', border: 'none',
+                        cursor: 'pointer', padding: 2, display: 'flex',
+                        color: ttsState.currentMessageId === msg.id ? theme.accent.base : theme.chat.subtle,
+                      }}
+                    >
+                      <Mic size={10} strokeWidth={2.2} />
+                    </button>
                   </div>
                 )}
                 {/* User message time footer */}
@@ -7001,18 +7125,59 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           </div>
         )}
 
-        {/* Dictation indicator */}
-        {isDictating && (
+        {/* Dictation indicator + error surface */}
+        {(isDictating || dictationError) && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6,
-            padding: '4px 14px 0 14px', fontSize: 11, color: theme.status.danger,
+            padding: '4px 14px 0 14px', fontSize: 11,
+            color: dictationError ? theme.status.warning : theme.status.danger,
           }}>
             <span style={{
-              width: 6, height: 6, borderRadius: '50%', background: theme.status.danger,
-              animation: 'chat-pulse 1s ease-in-out infinite',
+              width: 6, height: 6, borderRadius: '50%',
+              background: dictationError ? theme.status.warning : theme.status.danger,
+              animation: isDictating ? 'chat-pulse 1s ease-in-out infinite' : 'none',
             }} />
-            <span>Recording{dictationText ? ': ' : ''}</span>
-            {dictationText && <span style={{ color: theme.chat.muted, fontStyle: 'italic' }}>{dictationText}</span>}
+            {dictationError ? (
+              <span style={{ color: theme.chat.muted }}>
+                Voice: <span style={{ color: theme.status.warning }}>{dictationError}</span>
+              </span>
+            ) : (
+              <>
+                <span>Recording{dictationText ? ': ' : ''}</span>
+                {dictationText && <span style={{ color: theme.chat.muted, fontStyle: 'italic' }}>{dictationText}</span>}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* TTS playback indicator — small banner showing the player is speaking
+            a particular message. Subtle, accent-tinted, dismissible by mic
+            barge-in. The per-message bubble also marks "currently speaking"
+            via ttsState.currentMessageId. */}
+        {ttsState.isPlaying && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '4px 14px 0 14px', fontSize: 11, color: theme.accent.base,
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%', background: theme.accent.base,
+              animation: 'chat-pulse 1.4s ease-in-out infinite',
+            }} />
+            <span>Speaking…</span>
+            {ttsState.queueLength > 0 && (
+              <span style={{ color: theme.chat.muted, marginLeft: 4 }}>+{ttsState.queueLength} queued</span>
+            )}
+            <button
+              onClick={() => bargeIn()}
+              onMouseDown={e => e.preventDefault()}
+              style={{
+                marginLeft: 'auto', background: 'transparent', border: 'none',
+                color: theme.chat.muted, cursor: 'pointer', fontSize: 11, padding: '2px 6px',
+              }}
+              title="Stop voice playback"
+            >
+              stop
+            </button>
           </div>
         )}
 
