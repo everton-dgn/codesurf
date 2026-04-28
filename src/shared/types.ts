@@ -831,6 +831,10 @@ export interface CanvasState {
   activePanelId?: string | null
   tabViewActive?: boolean
   expandedTileId?: string | null
+  /** A non-layout group expanded as a fullscreen sub-canvas. Members remain freely positioned. */
+  expandedCanvasGroupId?: string | null
+  /** Viewport snapshot to restore when exiting expandedCanvasGroupId. */
+  expandedCanvasPriorViewport?: { tx: number; ty: number; zoom: number } | null
   lockedConnections?: LockedConnection[]
 }
 

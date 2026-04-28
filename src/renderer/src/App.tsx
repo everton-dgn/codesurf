@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
-import { Ungroup, Grid2x2X, Scissors, ClipboardPaste, Maximize2, LayoutGrid, Plus, Package, Link2 } from 'lucide-react'
+import { Ungroup, Grid2x2X, Scissors, ClipboardPaste, Maximize2, LayoutGrid, Plus, Package, Link2, X } from 'lucide-react'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
 import { TileColorProvider } from './TileColorContext'
@@ -991,6 +991,13 @@ function App(): JSX.Element {
   const [activePanelId, setActivePanelId] = useState<string | null>(null)
   const [expandLayoutGroupId, setExpandLayoutGroupId] = useState<string | null>(null)
   const expandLayoutGroupIdRef = useRef<string | null>(null)
+  // Non-layout group expanded as a fullscreen sub-canvas. Members stay free-floating.
+  const [expandedCanvasGroupId, setExpandedCanvasGroupId] = useState<string | null>(null)
+  const expandedCanvasGroupIdRef = useRef<string | null>(null)
+  const expandedCanvasPriorViewportRef = useRef<{ tx: number; ty: number; zoom: number } | null>(null)
+  // Forward ref so early-defined effects (e.g. Esc handler) can call the
+  // canvas-expand exit before its useCallback is declared further down.
+  const exitCanvasExpandedRef = useRef<() => void>(() => {})
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const persistCanvasStateRef = useRef<((...args: any[]) => void) | null>(null)
   const savedLayoutRef = useRef<PanelNode | null>(null)
@@ -1049,6 +1056,7 @@ function App(): JSX.Element {
   useEffect(() => { panelLayoutRef.current = panelLayout }, [panelLayout])
   useEffect(() => { activePanelIdRef.current = activePanelId }, [activePanelId])
   useEffect(() => { expandedTileIdRef.current = expandedTileId }, [expandedTileId])
+  useEffect(() => { expandedCanvasGroupIdRef.current = expandedCanvasGroupId }, [expandedCanvasGroupId])
   const currentWorkspaceIdRef = useRef<string | null>(workspace?.id ?? null)
   useEffect(() => { currentWorkspaceIdRef.current = workspace?.id ?? null }, [workspace?.id])
   const workspaceTabsHydratedRef = useRef(false)
@@ -1563,6 +1571,9 @@ function App(): JSX.Element {
           setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
           setActivePanelId(saved.tabViewActive ? nextActivePanelId : null)
           setExpandedTileId(saved.expandedTileId ?? null)
+          setExpandedCanvasGroupId(saved.expandedCanvasGroupId ?? null)
+          expandedCanvasGroupIdRef.current = saved.expandedCanvasGroupId ?? null
+          expandedCanvasPriorViewportRef.current = saved.expandedCanvasPriorViewport ?? null
         } else {
           showEmptyLayoutPage({ preserveOpenTabs: true })
         }
@@ -1774,7 +1785,13 @@ function App(): JSX.Element {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') exitExpandedMode()
+      if (e.key !== 'Escape') return
+      // Canvas-expanded group takes precedence over panel-layout expanded mode
+      if (expandedCanvasGroupIdRef.current) {
+        exitCanvasExpandedRef.current()
+        return
+      }
+      exitExpandedMode()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1841,6 +1858,8 @@ function App(): JSX.Element {
         activePanelId: activePanelIdRef.current,
         tabViewActive: Boolean(panelLayoutRef.current),
         expandedTileId: expandedTileIdRef.current,
+        expandedCanvasGroupId: expandedCanvasGroupIdRef.current,
+        expandedCanvasPriorViewport: expandedCanvasPriorViewportRef.current,
         lockedConnections: lockedConnectionsRef.current.length > 0 ? lockedConnectionsRef.current : undefined,
       }
       window.electron.canvas.save(workspace.id, state)
@@ -2862,6 +2881,9 @@ function App(): JSX.Element {
         setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
         setActivePanelId(saved.tabViewActive ? nextActivePanelId : null)
         setExpandedTileId(saved.expandedTileId ?? null)
+        setExpandedCanvasGroupId(saved.expandedCanvasGroupId ?? null)
+        expandedCanvasGroupIdRef.current = saved.expandedCanvasGroupId ?? null
+        expandedCanvasPriorViewportRef.current = saved.expandedCanvasPriorViewport ?? null
       } else {
         setTiles([])
         setGroups([])
@@ -3682,6 +3704,60 @@ function App(): JSX.Element {
     setExpandedTileId(null)
   }, [])
 
+  // ─── Canvas-expand a non-layout group ────────────────────────────────────
+  // Collect the recursive set of group ids (the expanded group + every descendant).
+  const collectGroupIdsRecursive = useCallback((groupId: string): string[] => {
+    const childGroups = groupsRef.current.filter(g => g.parentGroupId === groupId)
+    return [groupId, ...childGroups.flatMap(g => collectGroupIdsRecursive(g.id))]
+  }, [])
+
+  /**
+   * Compute the viewport that fits the expanded group's bounds to the canvas
+   * area. Returns { tx, ty, zoom }.
+   *
+   * USER-AUTHORED DECISION POINT — see request below.
+   */
+  const computeFitViewport = useCallback((bounds: { x: number; y: number; w: number; h: number }, screen: { w: number; h: number }): { tx: number; ty: number; zoom: number } => {
+    // TODO(user): tune feel. See request in chat.
+    const PAD_PX = 48              // screen-space padding around the group
+    const MAX_ZOOM = 1.5            // never zoom in past this
+    const availW = Math.max(1, screen.w - PAD_PX * 2)
+    const availH = Math.max(1, screen.h - PAD_PX * 2)
+    const zoom = Math.min(MAX_ZOOM, availW / bounds.w, availH / bounds.h)
+    const tx = (screen.w - bounds.w * zoom) / 2 - bounds.x * zoom
+    const ty = (screen.h - bounds.h * zoom) / 2 - bounds.y * zoom
+    return { tx, ty, zoom }
+  }, [])
+
+  const enterCanvasExpanded = useCallback((groupId: string) => {
+    const g = groupsRef.current.find(gr => gr.id === groupId)
+    if (!g || g.layoutMode) return
+    const bounds = groupBounds(groupId)
+    if (!bounds) return
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    expandedCanvasPriorViewportRef.current = { ...viewportRef.current }
+    const fit = computeFitViewport(bounds, { w: rect.width, h: rect.height })
+    setViewport(fit)
+    viewportRef.current = fit
+    setExpandedCanvasGroupId(groupId)
+    expandedCanvasGroupIdRef.current = groupId
+    // Mutually exclusive with single-tile expand
+    setExpandedTileId(null)
+  }, [groupBounds, computeFitViewport])
+
+  const exitCanvasExpanded = useCallback(() => {
+    const prior = expandedCanvasPriorViewportRef.current
+    setExpandedCanvasGroupId(null)
+    expandedCanvasGroupIdRef.current = null
+    if (prior) {
+      setViewport(prior)
+      viewportRef.current = prior
+    }
+    expandedCanvasPriorViewportRef.current = null
+  }, [])
+  exitCanvasExpandedRef.current = exitCanvasExpanded
+
   // Keep action refs in sync so early-defined callbacks can call them safely
   pasteTilesRef.current = pasteTiles
   duplicateTilesRef.current = duplicateTiles
@@ -4002,6 +4078,23 @@ function App(): JSX.Element {
   }, [panelTileIds])
 
   const tileByIdMap = React.useMemo(() => new Map(tiles.map(tile => [tile.id, tile])), [tiles])
+
+  // ─── Canvas-expand membership ─────────────────────────────────────────────
+  // When a non-layout group is expanded as a fullscreen sub-canvas, only its
+  // members (recursively) are visible. Mirrors `groupBounds`/`collectGroupTileIds`
+  // recursion semantics — descendants via parentGroupId chain count as members.
+  const expandedCanvasMembership = React.useMemo<{ tileIds: Set<string>; groupIds: Set<string> } | null>(() => {
+    if (!expandedCanvasGroupId) return null
+    const groupIds = new Set<string>()
+    const walk = (gid: string) => {
+      if (groupIds.has(gid)) return
+      groupIds.add(gid)
+      for (const child of groups) if (child.parentGroupId === gid) walk(child.id)
+    }
+    walk(expandedCanvasGroupId)
+    const tileIds = new Set(tiles.filter(t => t.groupId && groupIds.has(t.groupId)).map(t => t.id))
+    return { tileIds, groupIds }
+  }, [expandedCanvasGroupId, tiles, groups])
 
   const discoveryFocusTileId = React.useMemo(() => {
     if (dragState.type === 'tile' || dragState.type === 'resize') return dragState.tileId
@@ -5567,6 +5660,52 @@ function App(): JSX.Element {
             transition: 'opacity 0.3s ease',
             pointerEvents: panelLayout ? 'none' : 'auto',
           }}>
+          {/* Canvas-expanded group banner — pinned to screen, NOT world-transformed */}
+          {expandedCanvasGroupId && (() => {
+            const eg = groups.find(gr => gr.id === expandedCanvasGroupId)
+            if (!eg) return null
+            const bannerColor = eg.color ?? '#4a9eff'
+            return (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '6px 10px 6px 12px',
+                  background: theme.surface.panel,
+                  border: `1px solid ${bannerColor}aa`,
+                  borderRadius: 999,
+                  boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
+                  zIndex: 99996,
+                  fontSize: appFonts.secondarySize,
+                  color: theme.text.primary,
+                  userSelect: 'none',
+                }}
+                onMouseDown={e => e.stopPropagation()}
+              >
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: bannerColor }} />
+                <span style={{ fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>{eg.label ?? 'group'}</span>
+                <span style={{ opacity: 0.5, fontSize: appFonts.secondarySize - 1 }}>· canvas</span>
+                <button
+                  title="Exit (Esc)"
+                  onClick={e => { e.stopPropagation(); exitCanvasExpanded() }}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, borderRadius: 999,
+                    border: 'none', background: 'transparent',
+                    color: theme.text.secondary, cursor: 'pointer',
+                    marginLeft: 4,
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = theme.surface.app }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )
+          })()}
           {/* Dot grid - small */}
           <div
             className="absolute inset-0 pointer-events-none"
@@ -5629,6 +5768,13 @@ function App(): JSX.Element {
               .map(g => {
                 const b = groupBounds(g.id)
                 if (!b) return null
+                // Canvas-expanded mode: hide non-member groups entirely, and
+                // hide the expanded group's OWN chrome (border + label bar)
+                // since the whole canvas now represents that group.
+                if (expandedCanvasMembership) {
+                  if (!expandedCanvasMembership.groupIds.has(g.id)) return null
+                  if (g.id === expandedCanvasGroupId) return null
+                }
 
                 // ── Layout-mode group: embedded PanelLayout ──────────────────
                 if (g.layoutMode && g.layout) {
@@ -5953,7 +6099,9 @@ function App(): JSX.Element {
                           setSelectedTileId(null)
                           setTimeout(() => copyTilesRef.current(true), 0)
                         }},
-                        ...(clipboard.current.length > 0 ? [{ icon: <ClipboardPaste size={14} />, label: 'Paste in', action: () => pasteTilesRef.current(undefined, g.id) }] : [])
+                        ...(clipboard.current.length > 0 ? [{ icon: <ClipboardPaste size={14} />, label: 'Paste in', action: () => pasteTilesRef.current(undefined, g.id) }] : []),
+                        // Expand this group as a fullscreen sub-canvas (tiles remain freely positioned)
+                        { icon: <Maximize2 size={14} />, label: 'Expand as canvas', action: () => enterCanvasExpanded(g.id) },
                       ] as { icon: React.ReactNode; label: string; action: () => void }[]).map(btn => (
                         <div
                           key={btn.label}
@@ -6114,7 +6262,7 @@ function App(): JSX.Element {
               </div>
             )}
 
-            {tiles.filter(tile => !panelTileIds.has(tile.id)).map(tile => {
+            {tiles.filter(tile => !panelTileIds.has(tile.id)).filter(tile => !expandedCanvasMembership || expandedCanvasMembership.tileIds.has(tile.id)).map(tile => {
               // Tile being dragged (or part of a group being dragged) gets max z-index
               const isActiveDrag =
                 (dragState.type === 'tile' && (dragState.tileId === tile.id || dragState.groupSnapshots.some(s => s.id === tile.id))) ||
