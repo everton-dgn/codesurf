@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 17:50:05 BST
+Generated: 2026-05-01 18:08:03 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -225,9 +225,24 @@ Moved the footer project path / switch-folder button into the composer module:
 
 The next safe extraction point is likely one of the remaining footer clusters: location menu, branch menu, mode chip, or context usage dial.
 
+### 15. Composer context usage dial extraction
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposer.tsx`
+
+Moved the footer context-window dial and popup into the composer module:
+- Added `ChatComposerContextUsageDial`.
+- Preserved the 28×28 hit-box, 18×18 conic-gradient dial, inner dot, portal anchoring, context percentage/tokens copy, system-overhead note, compacting note, typography, and theme styling.
+- Kept the context menu ref and menu-open state in `ChatTile.tsx`, so outside-click/Escape handling still uses the same shared menu ref array.
+- Passed `NON_SELECTABLE_UI_STYLE` into the extracted component to avoid moving the broader chat UI constant.
+- Fixed the extracted ref prop as `React.RefObject<HTMLDivElement | null>` after independent review caught React 19 ref nullability.
+
+The next safe extraction point is likely one of the remaining footer clusters: location menu, branch menu, or mode chip.
+
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer project path control extraction:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer context usage dial extraction:
 
 ```bash
 npm run build
@@ -239,7 +254,7 @@ Results:
 - `npm test`: passed, 177 tests, 0 failures.
 - `git diff --cached --check`: passed before committing the code extraction.
 - Static scan of added lines for common secret/injection patterns: no findings.
-- Independent review: passed; no security concerns or logic errors for the `ChatComposerProjectPathButton` extraction.
+- Independent review: passed; no security concerns or logic errors for the `ChatComposerContextUsageDial` extraction. First review caught a React 19 ref nullability issue; fixed and re-reviewed successfully.
 
 ## Git state notes
 
@@ -262,6 +277,8 @@ The implementation work has been committed locally in small controlled bursts:
 - `2fa4048 refactor: extract chat surface host`
 - `df14ceb docs: note chat surface host extraction`
 - `00b9296 refactor: extract chat project path control`
+- `72d0a93 docs: note chat project path extraction`
+- `4fe26f3 refactor: extract chat context usage dial`
 
 Upstream check:
 - Ran `git fetch origin` after the mini-window/sidebar commit.
@@ -279,8 +296,8 @@ Outstanding unrelated local files still present in the working tree:
 
 ## Recommended next burst
 
-1. Dogfood the extracted attachment/shell/menu/voice/autocomplete/chat-surface host/project-path path in the running app: type `/`, type `@`, use arrow keys/Enter/Escape, click autocomplete rows, attach/remove files, open the `+` menu, toggle MCP, open a chat surface, switch/close surface tabs, verify `Enhance → Builder`, switch project folder from the footer path button, use provider/model/thinking/location/branch/context menus, trigger dictation/TTS banners, and send/stop a message.
-2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: location menu, branch menu, mode chip, or context usage dial are safer than one giant stateful `ChatComposer` props object.
+1. Dogfood the extracted attachment/shell/menu/voice/autocomplete/chat-surface host/project-path/context-dial path in the running app: type `/`, type `@`, use arrow keys/Enter/Escape, click autocomplete rows, attach/remove files, open the `+` menu, toggle MCP, open a chat surface, switch/close surface tabs, verify `Enhance → Builder`, switch project folder from the footer path button, open the context dial popup, use provider/model/thinking/location/branch menus, trigger dictation/TTS banners, and send/stop a message.
+2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: location menu, branch menu, or mode chip are safer than one giant stateful `ChatComposer` props object.
 3. After extraction seams are stable, improve the prompt/drawer UX: denser command surface, clearer collapse/expand behavior, and preserved advanced controls behind compact menus.
 4. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
 5. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
