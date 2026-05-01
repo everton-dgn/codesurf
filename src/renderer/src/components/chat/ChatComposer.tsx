@@ -1,5 +1,5 @@
 import React from 'react'
-import { FileText, Trash2 } from 'lucide-react'
+import { FileText, Folder, Trash2 } from 'lucide-react'
 import { useTheme } from '../../ThemeContext'
 import { basename } from '../../utils/dnd'
 import type { TtsPlayerState } from '../../utils/ttsPlayer'
@@ -384,6 +384,58 @@ export function ChatComposerVoiceStatus({
         </div>
       )}
     </>
+  )
+}
+
+export function ChatComposerProjectPathButton({
+  title,
+  disabled,
+  label,
+  fontSans,
+  onClick,
+}: {
+  title: string
+  disabled: boolean
+  label: string
+  fontSans: string
+  onClick: () => void | Promise<void>
+}): JSX.Element {
+  const theme = useTheme()
+
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={() => { void onClick() }}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+        color: theme.chat.muted,
+        fontSize: 11,
+        fontFamily: fontSans,
+        lineHeight: 1.2,
+        paddingLeft: 2,
+        background: 'transparent',
+        border: 'none',
+        cursor: disabled ? 'default' : 'pointer',
+        textAlign: 'left',
+      }}
+      onMouseEnter={e => { if (!disabled) e.currentTarget.style.color = theme.chat.text }}
+      onMouseLeave={e => { e.currentTarget.style.color = theme.chat.muted }}
+    >
+      <Folder size={12} strokeWidth={1.9} style={{ flexShrink: 0 }} />
+      <span className="cs-composer-path-label" style={{
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}>
+        {label}
+      </span>
+    </button>
   )
 }
 

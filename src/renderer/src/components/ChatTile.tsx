@@ -12,7 +12,7 @@ import {
   ShieldCheck, ChevronDown, AlertTriangle,
   Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
   Brain, ChevronRight, Clock, Cog, CornerDownRight, DollarSign,
-  FileText, Folder, GripVertical, History, Maximize2, Mic, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
+  FileText, GripVertical, History, Maximize2, Mic, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
 } from 'lucide-react'
 import { useMCPServers } from '../hooks/useMCPServers'
 import { useAutoSpeak, speakMessage, bargeIn } from '../hooks/useAutoSpeak'
@@ -52,7 +52,7 @@ import {
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
-import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerCard, ChatComposerPrimaryToolbar, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
+import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerCard, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
 import { FooterPill, ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 
@@ -4036,6 +4036,33 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     ? (activeCloudHost?.url ?? (remoteHosts.length > 0 ? 'Cloud workspace' : 'No remote daemon configured'))
     : (normalizedRepoRoot || 'No project')
 
+  const handleProjectFolderSwitch = useCallback(async () => {
+    try {
+      const newPath = await window.electron?.workspace?.openFolder?.()
+      if (!newPath) return
+      const previousPath = normalizedRepoRoot || ''
+      if (newPath === previousPath) return
+      if (workspaceId) {
+        try {
+          await window.electron?.workspace?.addProjectFolder?.(workspaceId, newPath)
+        } catch (err) {
+          console.warn('[ChatTile] addProjectFolder failed:', err)
+        }
+      }
+      const switchMsg: ChatMessage = {
+        id: `msg-folder-switch-${Date.now()}`,
+        role: 'assistant',
+        content: previousPath
+          ? `Switched project folder from \`${previousPath}\` to \`${newPath}\`.`
+          : `Switched project folder to \`${newPath}\`.`,
+        timestamp: Date.now(),
+      }
+      setMessages(prev => [...prev, switchMsg])
+    } catch (err) {
+      console.warn('[ChatTile] folder switch failed:', err)
+    }
+  }, [normalizedRepoRoot, workspaceId])
+
   const filteredBranches = useMemo(() => {
     const query = branchFilter.trim().toLowerCase()
     if (!query) return gitBranches.branches
@@ -7524,64 +7551,13 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               )}
             </div>
 
-            <button
-              type="button"
+            <ChatComposerProjectPathButton
               title={executionTarget === 'cloud' ? activeProjectPathLabel : `${activeProjectPathLabel} — click to switch folder`}
               disabled={executionTarget === 'cloud'}
-              onClick={async () => {
-                try {
-                  const newPath = await window.electron?.workspace?.openFolder?.()
-                  if (!newPath) return
-                  const previousPath = normalizedRepoRoot || ''
-                  if (newPath === previousPath) return
-                  if (workspaceId) {
-                    try {
-                      await window.electron?.workspace?.addProjectFolder?.(workspaceId, newPath)
-                    } catch (err) {
-                      console.warn('[ChatTile] addProjectFolder failed:', err)
-                    }
-                  }
-                  const switchMsg: ChatMessage = {
-                    id: `msg-folder-switch-${Date.now()}`,
-                    role: 'assistant',
-                    content: previousPath
-                      ? `Switched project folder from \`${previousPath}\` to \`${newPath}\`.`
-                      : `Switched project folder to \`${newPath}\`.`,
-                    timestamp: Date.now(),
-                  }
-                  setMessages(prev => [...prev, switchMsg])
-                } catch (err) {
-                  console.warn('[ChatTile] folder switch failed:', err)
-                }
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                minWidth: 0,
-                color: theme.chat.muted,
-                fontSize: 11,
-                fontFamily: fontSans,
-                lineHeight: 1.2,
-                paddingLeft: 2,
-                background: 'transparent',
-                border: 'none',
-                cursor: executionTarget === 'cloud' ? 'default' : 'pointer',
-                textAlign: 'left',
-              }}
-              onMouseEnter={e => { if (executionTarget !== 'cloud') e.currentTarget.style.color = theme.chat.text }}
-              onMouseLeave={e => { e.currentTarget.style.color = theme.chat.muted }}
-            >
-              <Folder size={12} strokeWidth={1.9} style={{ flexShrink: 0 }} />
-              <span className="cs-composer-path-label" style={{
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {activeProjectPathLabel}
-              </span>
-            </button>
+              label={activeProjectPathLabel}
+              fontSans={fontSans}
+              onClick={handleProjectFolderSwitch}
+            />
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
