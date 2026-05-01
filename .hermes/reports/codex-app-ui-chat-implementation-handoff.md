@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 11:43:45 BST
+Generated: 2026-05-01 11:58:24 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -122,13 +122,28 @@ Continued the behavior-preserving `ChatTile` breakup by moving menu/dropdown pri
 - Moved `MenuPortal`, `Dropdown`, `DropdownItem`, and `ModelDropdown` out of `ChatTile.tsx`.
 - Kept existing JSX call sites in `ChatTile.tsx` intact by importing the extracted components.
 - Preserved menu portal positioning, click/mousedown propagation stops, model filtering, active/hover states, and selection handlers.
-- Kept chat-local typography by using the existing `--ct-font-sans` and `--ct-font-mono` CSS variables in the extracted module rather than exporting `ChatTile`'s private font context.
+- Kept menu typography on the same app font context as the extracted toolbar/footer controls via `useAppFonts()`; this also avoids relying on chat-root CSS variable inheritance for portaled menu DOM.
 
-This remains a refactor-only step. `ComposerInsertMenu` and the prompt/drawer behavior still live in `ChatTile.tsx` for the next controlled burst.
+This remains a refactor-only step. Prompt/drawer behavior was not redesigned.
+
+### 8. Composer insert menu extraction
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposerMenus.tsx`
+
+Moved the `+` insert menu into the same composer menu module:
+- Moved `ComposerInsertMenu` and its local `MCPIcon` out of `ChatTile.tsx`.
+- Moved the `ChatSurfaceMenuEntry` type into `ChatComposerMenus.tsx` and imported it back into `ChatTile.tsx`.
+- Kept the existing attachment action, MCP enable/disable action, per-server enable/disable list, peer-tool read-only rows, chat-surface rows, hover styling, and submenu open/close behavior intact.
+- Passed `renderChatSurfaceIcon` into the extracted component so the broader chat-surface icon mapping stays centralized in `ChatTile.tsx` and the menu extraction does not drag unrelated icon logic with it.
+- Removed now-unused `Paperclip` and `MCPServerEntry` imports from `ChatTile.tsx`.
+
+This is still a foundation/refactor burst, not a UX redesign. The next safe extraction point is the actual composer prompt/footer shell.
 
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-menu extraction:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-insert-menu extraction:
 
 ```bash
 npm run build
@@ -140,7 +155,7 @@ Results:
 - `npm test`: passed, 177 tests, 0 failures.
 - `git diff --cached --check`: passed before committing the code extraction.
 - Static scan of added lines for common secret/injection patterns: no findings.
-- Independent review: passed; no security concerns or logic errors. Non-blocking suggestion was to keep font fallbacks/render coverage in mind if these menu primitives are ever mounted outside the chat root that defines the `--ct-font-*` variables.
+- Independent review: passed; no security concerns or logic errors for the `ComposerInsertMenu` extraction.
 
 ## Git state notes
 
@@ -149,6 +164,8 @@ The implementation work has been committed locally in small controlled bursts:
 - `dd07bc5 refactor: extract chat composer controls`
 - `f7d5ea5 docs: update Codex-inspired implementation handoff`
 - `ecf9b7f refactor: extract chat composer menus`
+- `7e895e6 docs: note chat composer menu extraction`
+- `656fafb refactor: extract chat insert menu`
 
 Upstream check:
 - Ran `git fetch origin` after the mini-window/sidebar commit.
@@ -161,8 +178,8 @@ Outstanding unrelated local files still present in the working tree:
 
 ## Recommended next burst
 
-1. Dogfood the extracted menu/dropdown path in the running app: open provider/model/thinking/location/branch/context menus and verify positioning, filtering, and active marks still feel identical.
-2. Continue extracting composer internals from `ChatTile.tsx`, next with `ComposerInsertMenu` and its MCP/chat-surface submenu handling, still without changing prompt behavior.
+1. Dogfood the extracted insert/menu path in the running app: open the `+` menu, attach files, toggle MCP, toggle an MCP server, and open a chat surface to verify behavior is unchanged.
+2. Continue extracting composer internals from `ChatTile.tsx`, next with the actual composer prompt/footer shell around the textarea and action rows, still without changing prompt behavior.
 3. After extraction seams are stable, improve the prompt/drawer UX: denser command surface, clearer collapse/expand behavior, and preserved advanced controls behind compact menus.
 4. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
 5. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
