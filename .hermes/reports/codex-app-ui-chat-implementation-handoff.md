@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 20:02:56 BST
+Generated: 2026-05-01 20:46:36 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -283,9 +283,25 @@ Moved the footer mode chip/menu into the composer module:
 
 This completes the low-risk footer-cluster extraction sequence: project path, context dial, location menu, branch menu, and mode menu are now all out of `ChatTile.tsx` while their state/refs remain owned by `ChatTile.tsx`.
 
+### 19. Composer drawer frame and first prompt polish
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposer.tsx`
+- `src/renderer/src/index.css`
+
+Started the actual Codex-inspired prompt/drawer polish pass with the safest shared chrome seam:
+- Added `ChatComposerDrawerFrame` to centralize the drawer shell used by the latest-changes drawer and queued-message drawer.
+- Replaced duplicated inline drawer chrome in `ChatTile.tsx` while preserving drawer widths, stacking, expanded/collapsed queue behavior, latest-change expansion, file rows, queued-turn actions, and existing state ownership.
+- Added joined/collapsed drawer classes so stacked drawers can share one visual language without changing the queue/change logic.
+- Added subtle Codex-like drawer blur/top highlight and composer focus/placeholder CSS under the existing `.cs-chat-composer-*` class hooks.
+- Kept all prompt controls, provider/model/thinking menus, insert menu, footer controls, dictation/TTS, chat surfaces, attachments, send/stop behavior, and drawer actions intact.
+
+This is intentionally a first polish seam, not a broad prompt rewrite. The next visual step can tighten the command surface/control density now that the drawer frame is centralized.
+
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer mode menu extraction:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer drawer frame / prompt polish burst:
 
 ```bash
 npm run build
@@ -299,8 +315,9 @@ Results:
 - `npm test`: passed, 177 tests, 0 failures.
 - `git diff --check`: passed.
 - `git diff --cached --check`: passed before committing the code extraction.
+- Static source dogfood assertions for drawer-frame wiring and composer CSS hooks: passed.
 - Static scan of added lines for common secret/injection patterns: no findings.
-- Independent review: passed; no security concerns or logic errors for the `ChatComposerModeMenu` extraction.
+- Independent review: passed; no security concerns or logic errors for the `ChatComposerDrawerFrame` / prompt polish burst.
 
 ## Git state notes
 
@@ -331,6 +348,8 @@ The implementation work has been committed locally in small controlled bursts:
 - `967ec93 refactor: extract chat branch menu`
 - `7813a8f docs: note chat branch menu extraction`
 - `70908ff refactor: extract chat mode menu`
+- `1931256 docs: note chat mode menu extraction`
+- `1892ce5 refactor: extract chat composer drawer frame`
 
 Upstream check:
 - Ran `git fetch origin` after the mini-window/sidebar commit.
@@ -348,7 +367,7 @@ Outstanding unrelated local files still present in the working tree:
 
 ## Recommended next burst
 
-1. Dogfood the extracted attachment/shell/menu/voice/autocomplete/chat-surface host/project-path/context-dial/location-menu/branch-menu/mode-menu path in the running app: type `/`, type `@`, use arrow keys/Enter/Escape, click autocomplete rows, attach/remove files, open the `+` menu, toggle MCP, open a chat surface, switch/close surface tabs, verify `Enhance → Builder`, switch project folder from the footer path button, open the context dial popup, switch local/cloud/remote execution target from the location menu, use provider/model/thinking/branch/mode menus, trigger dictation/TTS banners, and send/stop a message.
-2. Start actual Codex-inspired prompt/drawer UX polish now that the low-risk composer/footer extraction seams are stable: denser command surface, clearer collapse/expand behavior, compact advanced controls, and no feature removals.
+1. Live dogfood the extracted attachment/shell/menu/voice/autocomplete/chat-surface host/project-path/context-dial/location-menu/branch-menu/mode-menu/drawer path in the running app: type `/`, type `@`, use arrow keys/Enter/Escape, click autocomplete rows, attach/remove files, open the `+` menu, toggle MCP, open a chat surface, switch/close surface tabs, verify `Enhance → Builder`, switch project folder from the footer path button, open the context dial popup, switch local/cloud/remote execution target from the location menu, use provider/model/thinking/branch/mode menus, trigger dictation/TTS banners, expand/collapse queued messages and latest-change drawers, and send/stop a message.
+2. Continue Codex-inspired prompt/drawer UX polish in another controlled burst: tighten primary command-surface density, clarify advanced-control grouping, and keep all existing controls/features available.
 3. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
 4. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
