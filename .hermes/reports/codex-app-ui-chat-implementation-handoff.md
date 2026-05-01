@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 15:45:03 BST
+Generated: 2026-05-01 16:29:46 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -155,9 +155,23 @@ Moved the presentational composer frame into a dedicated module:
 
 The next safe extraction point is to move one content section at a time, starting with the autocomplete/draft-status surfaces or attachment strip, rather than passing the entire composer state into one giant new component.
 
+### 10. Composer attachment strip extraction
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposer.tsx`
+
+Moved the attachment preview strip into the composer module:
+- Added `ChatComposerAttachment` and `ChatComposerAttachments`.
+- Preserved image/file preview layout, basename display, remove button behavior, theme colors, and exact monospace font selection by passing `fontMono` from `ChatTile.tsx`.
+- Kept attachment state and `removeAttachment` ownership in `ChatTile.tsx`; the extracted component is presentational plus one callback.
+- Left message-render attachment UI in `ChatTile.tsx` untouched; this extraction is only for pending composer attachments.
+
+The next safe extraction point is likely the autocomplete popup or dictation/TTS composer banners.
+
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-shell extraction:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-attachment extraction:
 
 ```bash
 npm run build
@@ -169,7 +183,7 @@ Results:
 - `npm test`: passed, 177 tests, 0 failures.
 - `git diff --cached --check`: passed before committing the code extraction.
 - Static scan of added lines for common secret/injection patterns: no findings.
-- Independent review: passed; no security concerns or logic errors for the `ChatComposer` shell extraction.
+- Independent review: passed; no security concerns or logic errors for the `ChatComposerAttachments` extraction. Non-blocking suggestion: consider sharing/exporting an attachment type to avoid future shape drift.
 
 ## Git state notes
 
@@ -182,6 +196,8 @@ The implementation work has been committed locally in small controlled bursts:
 - `656fafb refactor: extract chat insert menu`
 - `e88b6f5 docs: note chat insert menu extraction`
 - `0141c91 refactor: extract chat composer shell`
+- `5135c2b docs: note chat composer shell extraction`
+- `5dd605c refactor: extract chat composer attachments`
 
 Upstream check:
 - Ran `git fetch origin` after the mini-window/sidebar commit.
@@ -194,8 +210,8 @@ Outstanding unrelated local files still present in the working tree:
 
 ## Recommended next burst
 
-1. Dogfood the extracted shell/menu path in the running app: type into the composer, resize/scroll chat, open the `+` menu, attach files, toggle MCP, use provider/model/thinking/location/branch/context menus, and send/stop a message.
-2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: autocomplete popup, dictation/TTS banners, chat-surface host strip, and attachment strip are safer than one giant stateful `ChatComposer` props object.
+1. Dogfood the extracted attachment/shell/menu path in the running app: attach an image and a file, remove them, type into the composer, open the `+` menu, toggle MCP, use provider/model/thinking/location/branch/context menus, and send/stop a message.
+2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: autocomplete popup, dictation/TTS banners, and chat-surface host strip are safer than one giant stateful `ChatComposer` props object.
 3. After extraction seams are stable, improve the prompt/drawer UX: denser command surface, clearer collapse/expand behavior, and preserved advanced controls behind compact menus.
 4. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
 5. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
