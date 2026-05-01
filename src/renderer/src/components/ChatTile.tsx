@@ -13,7 +13,7 @@ import {
   ShieldCheck, ChevronDown, AlertTriangle,
   Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
   Brain, ChevronRight, Clock, Cog, CornerDownRight, DollarSign,
-  FileText, Folder, GripVertical, History, Lock, Maximize2, Mic, Paperclip, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
+  FileText, Folder, GripVertical, History, Maximize2, Mic, Paperclip, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
 } from 'lucide-react'
 import { useMCPServers, type MCPServerEntry } from '../hooks/useMCPServers'
 import { useAutoSpeak, speakMessage, bargeIn } from '../hooks/useAutoSpeak'
@@ -53,6 +53,7 @@ import {
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
+import { FooterPill, ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 
 const CHAT_SLASH_COMMANDS = [
   { value: '/compact', description: 'Compact conversation' },
@@ -828,11 +829,8 @@ const CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT = 56
 const CHAT_AUTO_SCROLL_THRESHOLD = 48
 const TOOLBAR_ICON_SIZE = 16
 const TOOLBAR_PILL_ICON_SIZE = 14
-const TOOLBAR_TEXT_SIZE = 12
-const CHAT_FOOTER_TEXT_SIZE = 12
 const TOOL_BLOCK_MAX_WIDTH = 420
 const LIVE_TOOL_COLLAPSE_GRACE_MS = 5000
-const TOOLBAR_CHEVRON_SIZE = 12
 const GIT_STATE_CACHE_TTL_MS = 15_000
 const NON_SELECTABLE_UI_STYLE = {
   userSelect: 'none' as const,
@@ -9239,130 +9237,7 @@ function ToolInputView({ toolName, input, codePanelFontSize }: {
   )
 }
 
-// --- Toolbar sub-components ------------------------------------------------------
-
-function ToolbarBtn({ icon, tooltip, color, onClick }: {
-  icon: React.ReactNode; tooltip: string; color?: string; onClick: () => void
-}): JSX.Element {
-  const theme = useTheme()
-  const [h, setH] = useState(false)
-  return (
-    <button
-      onClick={onClick}
-      title={tooltip}
-      style={{
-        background: h ? theme.surface.hover : 'none',
-        border: 'none', cursor: 'pointer',
-        padding: '5px 7px', borderRadius: 6,
-        color: color ?? (h ? theme.chat.text : theme.chat.muted),
-        transition: 'color 0.1s, background 0.1s',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        ...NON_SELECTABLE_UI_STYLE,
-      }}
-      onMouseEnter={() => setH(true)}
-      onMouseLeave={() => setH(false)}
-    >
-      {icon}
-    </button>
-  )
-}
-
-function ToolbarPill({ prefix, label, color, active, onClick, disabled, title }: {
-  prefix?: React.ReactNode
-  label: string
-  color?: string
-  active: boolean
-  onClick: () => void
-  disabled?: boolean
-  title?: string
-}): JSX.Element {
-  const fonts = useFonts()
-  const theme = useTheme()
-  const [h, setH] = useState(false)
-  return (
-    <button
-      onClick={disabled ? undefined : onClick}
-      title={title}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 4,
-        background: !disabled && active ? theme.surface.hover : (!disabled && h ? theme.surface.panelMuted : 'transparent'),
-        border: 'none',
-        borderRadius: 6, padding: '4px 9px', cursor: disabled ? 'not-allowed' : 'pointer',
-        fontSize: TOOLBAR_TEXT_SIZE, fontFamily: fonts.sans,
-        color: color ?? (disabled ? theme.chat.muted : h ? theme.chat.text : theme.chat.textSecondary),
-        transition: 'color 0.1s, background 0.1s',
-        whiteSpace: 'nowrap',
-        maxWidth: 180,
-        overflow: 'hidden',
-        opacity: disabled ? 0.6 : 1,
-        ...NON_SELECTABLE_UI_STYLE,
-      }}
-      onMouseEnter={() => setH(true)}
-      onMouseLeave={() => setH(false)}
-    >
-      {prefix && <span style={{ display: 'flex', opacity: 0.8 }}>{prefix}</span>}
-      <span className="cs-toolbar-pill-label" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-      {disabled
-        ? <Lock size={TOOLBAR_CHEVRON_SIZE - 1} style={{ marginLeft: 1, opacity: 0.55, flexShrink: 0 }} />
-        : <ChevronDown size={TOOLBAR_CHEVRON_SIZE} style={{ marginLeft: 1, opacity: 0.4, flexShrink: 0 }} />}
-    </button>
-  )
-}
-
-// Mode-pill accent colours are tuned for dark backgrounds. On light surfaces
-// the bright tokens (especially green) wash out and read as pastel — map them
-// to denser, WCAG-friendly variants when the theme is in light mode.
-const FOOTER_PILL_LIGHT_COLOR: Record<string, string> = {
-  '#3fb950': '#1f883d', // green  → deeper moss
-  '#58a6ff': '#1f6feb', // blue   → deeper cobalt
-  '#ffb432': '#a66300', // amber  → darker ochre
-  '#e54d2e': '#c3361c', // red    → darker crimson
-}
-
-function FooterPill({ prefix, label, color, active, onClick }: {
-  prefix?: React.ReactNode
-  label: string
-  color?: string
-  active: boolean
-  onClick: () => void
-}): JSX.Element {
-  const fonts = useFonts()
-  const theme = useTheme()
-  const [h, setH] = useState(false)
-  const isLight = theme.mode === 'light'
-  const resolvedColor = color
-    ? (isLight ? (FOOTER_PILL_LIGHT_COLOR[color.toLowerCase()] ?? color) : color)
-    : undefined
-
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        background: 'transparent',
-        border: 'none',
-        borderRadius: 999,
-        padding: '3px 10px',
-        cursor: 'pointer',
-        fontSize: CHAT_FOOTER_TEXT_SIZE,
-        fontFamily: fonts.sans,
-        color: resolvedColor ?? (active || h ? theme.chat.text : theme.chat.textSecondary),
-        transition: 'color 0.1s',
-        whiteSpace: 'nowrap',
-        minHeight: 24,
-        ...NON_SELECTABLE_UI_STYLE,
-      }}
-      onMouseEnter={() => setH(true)}
-      onMouseLeave={() => setH(false)}
-    >
-      {prefix && <span style={{ display: 'flex', opacity: 0.9 }}>{prefix}</span>}
-      <span className="cs-footer-pill-label">{label}</span>
-      <ChevronDown size={TOOLBAR_CHEVRON_SIZE} style={{ opacity: 0.5, flexShrink: 0 }} />
-    </button>
-  )
-}
+// --- Composer sub-components -----------------------------------------------------
 
 // Renders children in a portal at document.body so they escape tile overflow:hidden clipping.
 // Positions above the anchor element, right-aligned so menus don't overflow off the right edge.
