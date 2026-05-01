@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 10:43:20 BST
+Generated: 2026-05-01 11:25:01 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -98,9 +98,23 @@ Added the next Codex-inspired mini-window burst after dogfooding confirmed the c
 
 Intentional constraint: sidebar mini-window opening is currently limited to sessions that already have a concrete `tileId`. That keeps the pass safe and avoids silently creating layout tiles for historical/external sessions just to pop them out. A future burst can add a deliberate "open into chat, then pop out" path if desired.
 
+### 6. Composer controls extraction
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposerControls.tsx`
+
+Started the behavior-preserving `ChatTile` breakup with the lowest-risk composer seam:
+- Moved `ToolbarBtn`, `ToolbarPill`, and `FooterPill` out of the ~9k-line `ChatTile.tsx` file.
+- Kept the public JSX usage and props unchanged.
+- Preserved the Codex-style CSS class hooks on toolbar/footer pill labels.
+- Removed now-unused toolbar text/chevron constants and the no-longer-needed `Lock` icon import from `ChatTile.tsx`.
+
+This is intentionally not a composer redesign yet. It is the first safe extraction layer so the prompt area, menus, drawer controls, and footer can be split in later small commits without changing behavior.
+
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest sidebar-mini burst:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-controls extraction:
 
 ```bash
 npm run build
@@ -113,28 +127,23 @@ Results:
 
 ## Git state notes
 
-Observed status after verification:
-- Branch: `main`
-- Status: `main...origin/main [ahead 24]`
-- Diffstat: 12 files changed, 683 insertions(+), 57 deletions(-).
-- Source/test files modified by the implementation pass:
-  - `src/electrobun/browser/electron-facade.ts`
-  - `src/main/index.ts`
-  - `src/preload/index.ts`
-  - `src/renderer/src/App.tsx`
-  - `src/renderer/src/components/ChatTile.tsx`
-  - `src/renderer/src/components/Sidebar.tsx`
-  - `src/renderer/src/components/sidebar/session-actions.ts`
-  - `src/renderer/src/env.d.ts`
-  - `src/renderer/src/index.css`
-  - `test/sidebar/session-actions.test.mjs`
-- Report artifacts in `.hermes/reports/` are untracked.
-- `.codesurf/DREAMING.md` is also modified in the working tree, but it was already modified before this implementation pass and should be reviewed separately before any commit.
-- `.mcp.json` is modified in the working tree. This was observed during this continuation pass and should be reviewed separately before any commit.
+The implementation work has been committed locally in small controlled bursts:
+- `939cf61 feat: add Codex-inspired chat mini window polish`
+- `dd07bc5 refactor: extract chat composer controls`
+
+Upstream check:
+- Ran `git fetch origin` after the mini-window/sidebar commit.
+- Current branch is `main` and was observed as ahead of `origin/main` with no behind marker.
+- No push was performed.
+
+Outstanding unrelated local files still present in the working tree:
+- `.codesurf/DREAMING.md` — modified before this pass; review separately before committing.
+- `.mcp.json` — local environment/config change; review separately before committing.
 
 ## Recommended next burst
 
 1. Dogfood the new sidebar hover/context-menu mini-window actions on tile-backed sessions.
-2. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
-3. Extract the composer block from `ChatTile.tsx` into a dedicated component now that class/token seams exist.
-4. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
+2. Continue extracting composer internals from `ChatTile.tsx`, next with the menu/dropdown primitives (`MenuPortal`, `Dropdown`, `DropdownItem`, `ModelDropdown`) before touching prompt behavior.
+3. After the extraction seam is stable, improve the prompt/drawer UX: denser command surface, clearer collapse/expand behavior, and preserved advanced controls behind compact menus.
+4. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
+5. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
