@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 16:49:27 BST
+Generated: 2026-05-01 17:15:09 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -183,9 +183,23 @@ Moved the dictation/TTS status banners into the composer module:
 
 The next safe extraction point is likely the autocomplete popup or chat-surface host strip.
 
+### 12. Composer autocomplete extraction
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposer.tsx`
+
+Moved the `/` and `@` autocomplete popup into the composer module:
+- Added `ChatComposerAutocompleteItem` and `ChatComposerAutocompletePopup`.
+- Preserved the mention helper text, active-row highlighting, hover selection, mouse-down selection, popup ref wiring, and item value/description typography.
+- Kept autocomplete state, filtering, keyboard navigation, text replacement, connected-file attachment behavior, and textarea focus/cursor restoration in `ChatTile.tsx`.
+- Removed now-unused local dropdown color aliases from `ChatTile.tsx`; extracted popup reads the same theme values directly.
+
+The next safe extraction point is likely the chat-surface host strip.
+
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-voice-status extraction:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-autocomplete extraction:
 
 ```bash
 npm run build
@@ -197,7 +211,7 @@ Results:
 - `npm test`: passed, 177 tests, 0 failures.
 - `git diff --cached --check`: passed before committing the code extraction.
 - Static scan of added lines for common secret/injection patterns: no findings.
-- Independent review: passed; no security concerns or logic errors for the `ChatComposerVoiceStatus` extraction.
+- Independent review: passed; no security concerns or logic errors for the `ChatComposerAutocompletePopup` extraction.
 
 ## Git state notes
 
@@ -214,6 +228,8 @@ The implementation work has been committed locally in small controlled bursts:
 - `5dd605c refactor: extract chat composer attachments`
 - `ffb1280 docs: note chat composer attachment extraction`
 - `56784a0 refactor: extract chat composer voice status`
+- `e661874 docs: note chat composer voice status extraction`
+- `2bb022a refactor: extract chat composer autocomplete`
 
 Upstream check:
 - Ran `git fetch origin` after the mini-window/sidebar commit.
@@ -226,8 +242,8 @@ Outstanding unrelated local files still present in the working tree:
 
 ## Recommended next burst
 
-1. Dogfood the extracted attachment/shell/menu/voice-status path in the running app: attach an image and a file, remove them, type into the composer, open the `+` menu, toggle MCP, use provider/model/thinking/location/branch/context menus, trigger dictation/TTS banners, and send/stop a message.
-2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: autocomplete popup and chat-surface host strip are safer than one giant stateful `ChatComposer` props object.
+1. Dogfood the extracted attachment/shell/menu/voice/autocomplete path in the running app: type `/`, type `@`, use arrow keys/Enter/Escape, click autocomplete rows, attach/remove files, open the `+` menu, toggle MCP, use provider/model/thinking/location/branch/context menus, trigger dictation/TTS banners, and send/stop a message.
+2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: chat-surface host strip is safer than one giant stateful `ChatComposer` props object.
 3. After extraction seams are stable, improve the prompt/drawer UX: denser command surface, clearer collapse/expand behavior, and preserved advanced controls behind compact menus.
 4. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
 5. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
