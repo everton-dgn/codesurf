@@ -52,7 +52,7 @@ import {
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
-import { ChatComposerAttachments, ChatComposerCard, ChatComposerPrimaryToolbar, ChatComposerSecondaryToolbar, ChatComposerWrap } from './chat/ChatComposer'
+import { ChatComposerAttachments, ChatComposerCard, ChatComposerPrimaryToolbar, ChatComposerSecondaryToolbar, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
 import { FooterPill, ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 
@@ -7110,61 +7110,13 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           </div>
         )}
 
-        {/* Dictation indicator + error surface */}
-        {(isDictating || dictationError) && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '4px 14px 0 14px', fontSize: 11,
-            color: dictationError ? theme.status.warning : theme.status.danger,
-          }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: '50%',
-              background: dictationError ? theme.status.warning : theme.status.danger,
-              animation: isDictating ? 'chat-pulse 1s ease-in-out infinite' : 'none',
-            }} />
-            {dictationError ? (
-              <span style={{ color: theme.chat.muted }}>
-                Voice: <span style={{ color: theme.status.warning }}>{dictationError}</span>
-              </span>
-            ) : (
-              <>
-                <span>Recording{dictationText ? ': ' : ''}</span>
-                {dictationText && <span style={{ color: theme.chat.muted, fontStyle: 'italic' }}>{dictationText}</span>}
-              </>
-            )}
-          </div>
-        )}
-
-        {/* TTS playback indicator — small banner showing the player is speaking
-            a particular message. Subtle, accent-tinted, dismissible by mic
-            barge-in. The per-message bubble also marks "currently speaking"
-            via ttsState.currentMessageId. */}
-        {ttsState.isPlaying && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '4px 14px 0 14px', fontSize: 11, color: theme.accent.base,
-          }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: '50%', background: theme.accent.base,
-              animation: 'chat-pulse 1.4s ease-in-out infinite',
-            }} />
-            <span>Speaking…</span>
-            {ttsState.queueLength > 0 && (
-              <span style={{ color: theme.chat.muted, marginLeft: 4 }}>+{ttsState.queueLength} queued</span>
-            )}
-            <button
-              onClick={() => bargeIn()}
-              onMouseDown={e => e.preventDefault()}
-              style={{
-                marginLeft: 'auto', background: 'transparent', border: 'none',
-                color: theme.chat.muted, cursor: 'pointer', fontSize: 11, padding: '2px 6px',
-              }}
-              title="Stop voice playback"
-            >
-              stop
-            </button>
-          </div>
-        )}
+        <ChatComposerVoiceStatus
+          isDictating={isDictating}
+          dictationText={dictationText}
+          dictationError={dictationError}
+          ttsState={ttsState}
+          onStopVoicePlayback={() => bargeIn()}
+        />
 
         {openChatSurfaces.length > 0 && activeChatSurface && (
           <div style={{

@@ -2,6 +2,7 @@ import React from 'react'
 import { FileText, Trash2 } from 'lucide-react'
 import { useTheme } from '../../ThemeContext'
 import { basename } from '../../utils/dnd'
+import type { TtsPlayerState } from '../../utils/ttsPlayer'
 
 export interface ChatComposerAttachment {
   path: string
@@ -60,6 +61,80 @@ export function ChatComposerSecondaryToolbar({ children }: { children: React.Rea
     }}>
       {children}
     </div>
+  )
+}
+
+export function ChatComposerVoiceStatus({
+  isDictating,
+  dictationText,
+  dictationError,
+  ttsState,
+  onStopVoicePlayback,
+}: {
+  isDictating: boolean
+  dictationText: string
+  dictationError: string | null
+  ttsState: TtsPlayerState
+  onStopVoicePlayback: () => void
+}): JSX.Element | null {
+  const theme = useTheme()
+  const showDictationStatus = isDictating || Boolean(dictationError)
+
+  if (!showDictationStatus && !ttsState.isPlaying) return null
+
+  return (
+    <>
+      {showDictationStatus && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 14px 0 14px', fontSize: 11,
+          color: dictationError ? theme.status.warning : theme.status.danger,
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: dictationError ? theme.status.warning : theme.status.danger,
+            animation: isDictating ? 'chat-pulse 1s ease-in-out infinite' : 'none',
+          }} />
+          {dictationError ? (
+            <span style={{ color: theme.chat.muted }}>
+              Voice: <span style={{ color: theme.status.warning }}>{dictationError}</span>
+            </span>
+          ) : (
+            <>
+              <span>Recording{dictationText ? ': ' : ''}</span>
+              {dictationText && <span style={{ color: theme.chat.muted, fontStyle: 'italic' }}>{dictationText}</span>}
+            </>
+          )}
+        </div>
+      )}
+
+      {ttsState.isPlaying && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 14px 0 14px', fontSize: 11, color: theme.accent.base,
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%', background: theme.accent.base,
+            animation: 'chat-pulse 1.4s ease-in-out infinite',
+          }} />
+          <span>Speaking…</span>
+          {ttsState.queueLength > 0 && (
+            <span style={{ color: theme.chat.muted, marginLeft: 4 }}>+{ttsState.queueLength} queued</span>
+          )}
+          <button
+            onClick={onStopVoicePlayback}
+            onMouseDown={e => e.preventDefault()}
+            style={{
+              marginLeft: 'auto', background: 'transparent', border: 'none',
+              color: theme.chat.muted, cursor: 'pointer', fontSize: 11, padding: '2px 6px',
+            }}
+            title="Stop voice playback"
+          >
+            stop
+          </button>
+        </div>
+      )}
+    </>
   )
 }
 
