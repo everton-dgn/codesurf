@@ -3,6 +3,7 @@ import { FileText, Folder, Trash2 } from 'lucide-react'
 import { useTheme } from '../../ThemeContext'
 import { basename } from '../../utils/dnd'
 import type { TtsPlayerState } from '../../utils/ttsPlayer'
+import { MenuPortal } from './ChatComposerMenus'
 
 export interface ChatComposerAutocompleteItem {
   key: string
@@ -436,6 +437,97 @@ export function ChatComposerProjectPathButton({
         {label}
       </span>
     </button>
+  )
+}
+
+export function ChatComposerContextUsageDial({
+  anchorRef,
+  showMenu,
+  contextUsageRatio,
+  contextUsagePercent,
+  estimatedContextTokens,
+  contextWindowLimit,
+  systemOverheadTokens,
+  composerBackground,
+  fontSans,
+  nonSelectableStyle,
+  onToggleMenu,
+}: {
+  anchorRef: React.RefObject<HTMLDivElement | null>
+  showMenu: boolean
+  contextUsageRatio: number
+  contextUsagePercent: number
+  estimatedContextTokens: number
+  contextWindowLimit: number
+  systemOverheadTokens: number
+  composerBackground: string
+  fontSans: string
+  nonSelectableStyle: React.CSSProperties
+  onToggleMenu: () => void
+}): JSX.Element {
+  const theme = useTheme()
+
+  return (
+    <div ref={anchorRef} style={{ position: 'relative', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <button
+        type="button"
+        title="Context window"
+        onClick={onToggleMenu}
+        style={{
+          width: 18,
+          height: 18,
+          minWidth: 18,
+          borderRadius: '50%',
+          border: 'none',
+          background: `conic-gradient(${theme.chat.text} ${contextUsageRatio * 360}deg, ${theme.border.strong} 0deg)`,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
+          ...nonSelectableStyle,
+        }}
+      >
+        <span style={{
+          width: 13,
+          height: 13,
+          borderRadius: '50%',
+          background: composerBackground,
+          border: `0.5px solid ${theme.border.default}`,
+          display: 'block',
+        }} />
+      </button>
+      {showMenu && (
+        <MenuPortal anchorRef={anchorRef}>
+          <div style={{
+            minWidth: 220,
+            background: theme.chat.dropdownBackground,
+            border: `1px solid ${theme.chat.dropdownBorder}`,
+            borderRadius: 16,
+            padding: '14px 16px',
+            boxShadow: theme.shadow.panel,
+            textAlign: 'center',
+            ...nonSelectableStyle,
+          }}>
+            <div style={{ fontSize: 12, color: theme.chat.muted, fontFamily: fontSans, marginBottom: 6 }}>
+              Context window:
+            </div>
+            <div style={{ fontSize: 13, color: theme.chat.text, fontFamily: fontSans, fontWeight: 600, marginBottom: 4 }}>
+              {contextUsagePercent}% full
+            </div>
+            <div style={{ fontSize: 12, color: theme.chat.textSecondary, fontFamily: fontSans, marginBottom: 10 }}>
+              {estimatedContextTokens.toLocaleString()} / {contextWindowLimit.toLocaleString()} tokens used
+            </div>
+            <div style={{ fontSize: 11, lineHeight: 1.5, color: theme.chat.muted, fontFamily: fontSans, marginBottom: 8 }}>
+              Includes ~{systemOverheadTokens.toLocaleString()} tokens of system&nbsp;prompt&nbsp;+&nbsp;tool&nbsp;schemas.
+            </div>
+            <div style={{ fontSize: 11, lineHeight: 1.5, color: theme.chat.muted, fontFamily: fontSans }}>
+              CodeSurf automatically compacts its context.
+            </div>
+          </div>
+        </MenuPortal>
+      )}
+    </div>
   )
 }
 

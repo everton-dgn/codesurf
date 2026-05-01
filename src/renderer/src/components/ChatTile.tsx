@@ -52,7 +52,7 @@ import {
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
-import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerCard, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
+import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
 import { FooterPill, ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 
@@ -7602,66 +7602,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 (both buttons are now 28px wide with matching 8px container
                 padding → same centre X). The 18×18 visible dial is centred
                 inside via flex alignment. */}
-            <div ref={contextMenuRef} style={{ position: 'relative', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <button
-                type="button"
-                title="Context window"
-                onClick={() => toggleMenu('context')}
-                style={{
-                  width: 18,
-                  height: 18,
-                  minWidth: 18,
-                  borderRadius: '50%',
-                  border: 'none',
-                  background: `conic-gradient(${theme.chat.text} ${contextUsageRatio * 360}deg, ${theme.border.strong} 0deg)`,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                  ...NON_SELECTABLE_UI_STYLE,
-                }}
-              >
-                <span style={{
-                  width: 13,
-                  height: 13,
-                  borderRadius: '50%',
-                  background: composerBackground,
-                  border: `0.5px solid ${theme.border.default}`,
-                  display: 'block',
-                }} />
-              </button>
-              {showContextMenu && (
-                <MenuPortal anchorRef={contextMenuRef}>
-                  <div style={{
-                    minWidth: 220,
-                    background: theme.chat.dropdownBackground,
-                    border: `1px solid ${theme.chat.dropdownBorder}`,
-                    borderRadius: 16,
-                    padding: '14px 16px',
-                    boxShadow: theme.shadow.panel,
-                    textAlign: 'center',
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}>
-                    <div style={{ fontSize: 12, color: theme.chat.muted, fontFamily: fontSans, marginBottom: 6 }}>
-                      Context window:
-                    </div>
-                    <div style={{ fontSize: 13, color: theme.chat.text, fontFamily: fontSans, fontWeight: 600, marginBottom: 4 }}>
-                      {contextUsagePercent}% full
-                    </div>
-                    <div style={{ fontSize: 12, color: theme.chat.textSecondary, fontFamily: fontSans, marginBottom: 10 }}>
-                      {estimatedContextTokens.toLocaleString()} / {contextWindowLimit.toLocaleString()} tokens used
-                    </div>
-                    <div style={{ fontSize: 11, lineHeight: 1.5, color: theme.chat.muted, fontFamily: fontSans, marginBottom: 8 }}>
-                      Includes ~{systemOverheadTokens.toLocaleString()} tokens of system&nbsp;prompt&nbsp;+&nbsp;tool&nbsp;schemas.
-                    </div>
-                    <div style={{ fontSize: 11, lineHeight: 1.5, color: theme.chat.muted, fontFamily: fontSans }}>
-                      CodeSurf automatically compacts its context.
-                    </div>
-                  </div>
-                </MenuPortal>
-              )}
-            </div>
+            <ChatComposerContextUsageDial
+              anchorRef={contextMenuRef}
+              showMenu={showContextMenu}
+              contextUsageRatio={contextUsageRatio}
+              contextUsagePercent={contextUsagePercent}
+              estimatedContextTokens={estimatedContextTokens}
+              contextWindowLimit={contextWindowLimit}
+              systemOverheadTokens={systemOverheadTokens}
+              composerBackground={composerBackground}
+              fontSans={fontSans}
+              nonSelectableStyle={NON_SELECTABLE_UI_STYLE}
+              onToggleMenu={() => toggleMenu('context')}
+            />
           </div>
         </ChatComposerSecondaryToolbar>
         </ChatComposerWrap>
