@@ -242,6 +242,7 @@ interface ElectronAPI {
     setTitle(title: string): Promise<void>
     focusById(id: number): Promise<void>
     closeById(id: number): Promise<void>
+    openMiniChat(opts: { workspaceId: string; tileId: string; title?: string }): Promise<{ ok: boolean; id?: number; error?: string }>
     setSidebarCollapsed(collapsed: boolean): Promise<boolean>
     onListChanged(cb: (list: { id: number; title: string; focused: boolean }[]) => void): () => void
   }

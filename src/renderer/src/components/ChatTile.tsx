@@ -13,7 +13,7 @@ import {
   ShieldCheck, ChevronDown, AlertTriangle,
   Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
   Brain, ChevronRight, Clock, Cog, CornerDownRight, DollarSign,
-  FileText, Folder, GripVertical, History, Lock, Mic, Paperclip, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
+  FileText, Folder, GripVertical, History, Lock, Maximize2, Mic, Paperclip, Pencil, Plus, RotateCcw, Sparkles, Trash2, Wrench
 } from 'lucide-react'
 import { useMCPServers, type MCPServerEntry } from '../hooks/useMCPServers'
 import { useAutoSpeak, speakMessage, bargeIn } from '../hooks/useAutoSpeak'
@@ -231,10 +231,9 @@ interface PendingAttachment {
 }
 
 /**
- * Chat-surface extension mounted above the composer (e.g. Sketch).
- * Only one active at a time per chat tile. The host caches the latest
- * payload via an RPC message from the extension and flushes it to a
- * temp file on send.
+ * Chat-surface extension mounted above the composer (e.g. Sketch/Builder).
+ * Multiple surfaces can stay resident as tabs; the host caches the latest
+ * payload via RPC and flushes the active/dirty payloads to temp files on send.
  */
 interface ActiveChatSurface {
   extId: string
@@ -790,7 +789,7 @@ const FONT_SANS = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
 const FONT_MONO = '"JetBrains Mono", "Menlo", "Monaco", "SF Mono", "Fira Code", monospace'
 const FONT_SIZE_DEFAULT = 13
 const MONO_SIZE_DEFAULT = 13
-const CHAT_MESSAGE_MAX_WIDTH = 800
+const CHAT_MESSAGE_MAX_WIDTH = 'var(--cs-thread-content-max-width)'
 const CHAT_CHIP_ROW_STYLE: React.CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
@@ -820,10 +819,10 @@ const CHAT_MEMORY_CONTENT_BLOCK_LIMIT = 8_000
 const CHAT_MEMORY_CONTENT_BLOCK_LIMIT_AGGRESSIVE = 1_500
 const CHAT_TRIM_NOTICE_PREFIX = '[CodeSurf memory guard]'
 const CHAT_COMPOSER_MAX_WIDTH = CHAT_MESSAGE_MAX_WIDTH
-const CHAT_COMPOSER_MIN_WIDTH = 400
-const CHAT_COMPOSER_SIDE_INSET = 24
-const CHAT_COMPOSER_WIDTH = `min(calc(100% - ${CHAT_COMPOSER_SIDE_INSET * 2}px), ${CHAT_COMPOSER_MAX_WIDTH}px)`
-const CHAT_COMPOSER_MIN_WIDTH_STYLE = `min(${CHAT_COMPOSER_MIN_WIDTH}px, calc(100% - ${CHAT_COMPOSER_SIDE_INSET * 2}px))`
+const CHAT_COMPOSER_MIN_WIDTH = 'var(--cs-chat-composer-min-width)'
+const CHAT_COMPOSER_SIDE_INSET = 'var(--cs-chat-composer-side-inset)'
+const CHAT_COMPOSER_WIDTH = `min(calc(100% - calc(${CHAT_COMPOSER_SIDE_INSET} * 2)), ${CHAT_COMPOSER_MAX_WIDTH})`
+const CHAT_COMPOSER_MIN_WIDTH_STYLE = `min(${CHAT_COMPOSER_MIN_WIDTH}, calc(100% - calc(${CHAT_COMPOSER_SIDE_INSET} * 2)))`
 const CHAT_COMPOSER_MIN_HEIGHT = 105
 const CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT = 56
 const CHAT_AUTO_SCROLL_THRESHOLD = 48
@@ -5830,6 +5829,17 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
   const isStartScreen = messages.length === 0 && !isStreaming
 
+  const openMiniChat = useCallback(() => {
+    if (!workspaceId) return
+    void window.electron?.window?.openMiniChat?.({
+      workspaceId,
+      tileId,
+      title: messages[0]?.content?.trim().slice(0, 80) || 'CodeSurf chat',
+    }).catch(error => {
+      console.warn('[ChatTile] failed to open mini chat window:', error)
+    })
+  }, [messages, tileId, workspaceId])
+
   const fontCtxValue = useMemo(() => ({ sans: fontSans, secondary: fontSecondary, mono: fontMono, size: fontSize, monoSize, lineHeight: fontLineHeight, weight: fontWeight, monoLineHeight, monoWeight, secondarySize, secondaryLineHeight, secondaryWeight }), [fontSans, fontSecondary, fontMono, fontSize, monoSize, fontLineHeight, fontWeight, monoLineHeight, monoWeight, secondarySize, secondaryLineHeight, secondaryWeight])
 
   const chatDispatchValue = useMemo<ChatDispatchValue>(() => ({
@@ -5850,6 +5860,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       onDecide={handleToolPermissionDecision}
     >
     <div
+      className="cs-chat-shell"
       onDragOver={handleTileDragOver}
       onDragLeave={handleTileDragLeave}
       onDrop={handleTileDrop}
@@ -5904,9 +5915,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           overflowAnchor: 'none',
         }}
       >
-        <div style={{
+        <div className="cs-chat-message-stack" style={{
           width: '100%',
-          maxWidth: CHAT_MESSAGE_MAX_WIDTH,
           margin: '0 auto',
           display: 'flex',
           flexDirection: 'column',
@@ -7053,7 +7063,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         })()}
 
         {/* Input bar */}
-        <div style={{
+        <div className="cs-chat-composer-wrap" style={{
           flexShrink: 0,
           width: CHAT_COMPOSER_WIDTH,
           minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
@@ -7062,7 +7072,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           flexDirection: 'column',
           gap: 6,
         }}>
-        <div style={{
+        <div className="cs-chat-composer-card" style={{
         minHeight: CHAT_COMPOSER_MIN_HEIGHT,
         border: isDropTarget ? `1px solid ${theme.accent.base}` : `1px solid ${composerBorder}`, borderRadius: 14,
         // Resting fill matches the border so the composer reads as one solid
@@ -7393,7 +7403,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         />
 
         {/* Primary toolbar */}
-        <div style={{
+        <div className="cs-chat-composer-primary-toolbar" style={{
           display: 'flex', alignItems: 'center',
           padding: '4px 8px 4px 8px', gap: 2,
         }}>
@@ -7534,6 +7544,13 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
           <div style={{ flex: 1 }} />
 
+          <ToolbarBtn
+            icon={<Maximize2 size={TOOLBAR_ICON_SIZE - 1} />}
+            tooltip="Open this chat in a mini window"
+            color={theme.chat.textSecondary}
+            onClick={openMiniChat}
+          />
+
           {/* Subtle liveness indicator — a breathing dot that sits next to the
               Stop button while streaming. If the server has been quiet for
               >2.5s we also surface a tiny "Xs" counter so the user knows the
@@ -7617,7 +7634,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         </div>
 
         {/* Secondary toolbar */}
-        <div style={{
+        <div className="cs-chat-composer-secondary-toolbar" style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -7861,7 +7878,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               onMouseLeave={e => { e.currentTarget.style.color = theme.chat.muted }}
             >
               <Folder size={12} strokeWidth={1.9} style={{ flexShrink: 0 }} />
-              <span style={{
+              <span className="cs-composer-path-label" style={{
                 minWidth: 0,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -9284,7 +9301,7 @@ function ToolbarPill({ prefix, label, color, active, onClick, disabled, title }:
       onMouseLeave={() => setH(false)}
     >
       {prefix && <span style={{ display: 'flex', opacity: 0.8 }}>{prefix}</span>}
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+      <span className="cs-toolbar-pill-label" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
       {disabled
         ? <Lock size={TOOLBAR_CHEVRON_SIZE - 1} style={{ marginLeft: 1, opacity: 0.55, flexShrink: 0 }} />
         : <ChevronDown size={TOOLBAR_CHEVRON_SIZE} style={{ marginLeft: 1, opacity: 0.4, flexShrink: 0 }} />}
@@ -9341,7 +9358,7 @@ function FooterPill({ prefix, label, color, active, onClick }: {
       onMouseLeave={() => setH(false)}
     >
       {prefix && <span style={{ display: 'flex', opacity: 0.9 }}>{prefix}</span>}
-      <span>{label}</span>
+      <span className="cs-footer-pill-label">{label}</span>
       <ChevronDown size={TOOLBAR_CHEVRON_SIZE} style={{ opacity: 0.5, flexShrink: 0 }} />
     </button>
   )

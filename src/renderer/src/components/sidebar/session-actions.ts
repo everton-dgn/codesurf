@@ -4,15 +4,20 @@ const SESSION_CHECKPOINT_PILL_WIDTH = 36
 const SESSION_CHECKPOINT_RESTORE_BUTTON_WIDTH = 18
 const SESSION_ROW_EXTRA_GAP = 6
 
-export function getSessionRowExtraWidth(checkpointCount: number | null | undefined): number {
+export function getSessionRowExtraWidth(checkpointCount: number | null | undefined, hasMiniWindowAction = false): number {
+  const miniWindowActionWidth = hasMiniWindowAction
+    ? SESSION_ROW_EXTRA_GAP + SESSION_ACTION_BUTTON_SIZE
+    : 0
+
   if ((checkpointCount ?? 0) > 0) {
     return SESSION_CHECKPOINT_PILL_WIDTH
       + SESSION_ROW_EXTRA_GAP
       + SESSION_CHECKPOINT_RESTORE_BUTTON_WIDTH
       + SESSION_ROW_EXTRA_GAP
+      + miniWindowActionWidth
       + SESSION_ACTION_BUTTON_SIZE
   }
-  return SESSION_ACTION_BUTTON_SIZE
+  return miniWindowActionWidth + SESSION_ACTION_BUTTON_SIZE
 }
 
 export function getSessionArchiveActionLabel(isArchived: boolean): string {

@@ -301,6 +301,7 @@ contextBridge.exposeInMainWorld('electron', {
     setTitle: (title: string) => ipcRenderer.invoke('window:setTitle', title),
     focusById: (id: number) => ipcRenderer.invoke('window:focusById', id),
     closeById: (id: number) => ipcRenderer.invoke('window:closeById', id),
+    openMiniChat: (opts: { workspaceId: string; tileId: string; title?: string }) => ipcRenderer.invoke('window:openMiniChat', opts),
     setSidebarCollapsed: (collapsed: boolean) => ipcRenderer.invoke('window:setSidebarCollapsed', collapsed),
     onListChanged: (cb: (list: { id: number; title: string; focused: boolean }[]) => void) => {
       const handler = (_: unknown, list: { id: number; title: string; focused: boolean }[]) => cb(list)

@@ -252,6 +252,7 @@ function SessionSidebarRow({
 
   return (
     <div
+      className={`cs-thread-row${active ? ' cs-thread-row-active' : ''}`}
       title={title}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
@@ -265,17 +266,18 @@ function SessionSidebarRow({
         columnGap: leading ? 6 : 0,
         paddingTop: meta ? 6 : 4,
         paddingBottom: meta ? 6 : 4,
-        paddingLeft: 8 + indent * indentUnit,
+        paddingLeft: `calc(var(--cs-sidebar-row-pad-x) + ${indent * indentUnit}px)`,
         paddingRight: 0,
         minHeight: meta ? 40 : 28,
         cursor: 'pointer',
         userSelect: 'none',
         WebkitUserSelect: 'none',
-        borderRadius: 8,
+        borderRadius: 'var(--cs-sidebar-row-radius)',
         margin: '0',
         background: active ? theme.surface.selection : hovered ? theme.surface.hover : 'transparent',
-        transition: 'background 0.1s ease',
+        transition: 'background 0.1s ease, box-shadow 0.1s ease',
         position: 'relative',
+        ...({ '--cs-thread-row-accent': active ? theme.accent.base : theme.text.muted } as React.CSSProperties),
       }}
     >
       <span
@@ -1485,6 +1487,7 @@ export function Sidebar({
 
   const openSessionFromSidebar = useCallback((session: SessionEntry, options?: { persist?: boolean }) => {
     markSessionRead(session)
+    promoteSession(session)
     const intent = getSessionOpenIntent(session, options)
     if (intent.kind === 'chat') {
       onOpenSessionInChat(session, { persist: intent.persist })
@@ -1497,7 +1500,25 @@ export function Sidebar({
     if (intent.kind === 'file' && session.filePath) {
       onOpenFile(session.filePath, { persist: intent.persist })
     }
-  }, [markSessionRead, onOpenFile, onOpenSessionInApp, onOpenSessionInChat])
+  }, [markSessionRead, onOpenFile, onOpenSessionInApp, onOpenSessionInChat, promoteSession])
+
+  const openSessionMiniFromSidebar = useCallback((session: SessionEntry) => {
+    const tileId = typeof session.tileId === 'string' ? session.tileId.trim() : ''
+    if (!tileId) {
+      openSessionFromSidebar(session)
+      return
+    }
+    markSessionRead(session)
+    promoteSession(session)
+    void window.electron.window.openMiniChat({
+      workspaceId: session.workspaceId,
+      tileId,
+      title: session.title,
+    }).catch(error => {
+      console.warn('[sidebar] failed to open mini chat window', error)
+      openSessionFromSidebar(session)
+    })
+  }, [markSessionRead, openSessionFromSidebar, promoteSession])
 
   const sessionContextMenuItems = useCallback((session: SessionEntry): MenuItem[] => {
     const items: MenuItem[] = []
@@ -1506,6 +1527,9 @@ export function Sidebar({
     if (session.canOpenInChat !== false) {
       items.push({ label: 'Open in Chat', action: () => onOpenSessionInChat(session) })
       items.push({ label: 'Open in Pinned Tab', action: () => onOpenSessionInChat(session, { persist: true }) })
+      if (typeof session.tileId === 'string' && session.tileId.trim().length > 0) {
+        items.push({ label: 'Open Mini Window', action: () => openSessionMiniFromSidebar(session) })
+      }
     }
     if (session.canOpenInApp) {
       items.push({ label: `Open in ${session.sourceLabel}`, action: () => onOpenSessionInApp(session) })
@@ -1605,7 +1629,7 @@ export function Sidebar({
     })
 
     return items.length > 0 ? items : [{ label: 'No actions available', action: () => {} }]
-  }, [generatingSessionTitleIds, loadWorkspaceSessions, onOpenFile, onOpenSessionInApp, onOpenSessionInChat, setSessionArchived, workspaceById])
+  }, [generatingSessionTitleIds, loadWorkspaceSessions, onOpenFile, onOpenSessionInApp, onOpenSessionInChat, openSessionMiniFromSidebar, setSessionArchived, workspaceById])
 
   const handleOpenProjectFromSidebar = useCallback(() => {
     onOpenFolder()
@@ -1730,6 +1754,7 @@ export function Sidebar({
     const muted = session.isArchived === true && !isSelected
     const relativeTime = formatSessionSidebarRelativeTime(session.updatedAt)
     const scheduled = isCronSession(session)
+    const canOpenMiniWindow = typeof session.tileId === 'string' && session.tileId.trim().length > 0
 
     return (
       <SessionSidebarRow
@@ -1792,7 +1817,7 @@ export function Sidebar({
         }
         indent={Math.max(0, session.displayIndent)}
         indentUnit={6}
-        extraWidth={getSessionRowExtraWidth(session.checkpointCount)}
+        extraWidth={getSessionRowExtraWidth(session.checkpointCount, canOpenMiniWindow)}
         title={`${session.title}${sessionMeta ? `\n${sessionMeta}` : ''}\n${session.sourceLabel}${session.messageCount > 0 ? ` · ${session.messageCount} msg` : ''}${(session.checkpointCount ?? 0) > 0 ? ` · ${session.checkpointCount} checkpoint${session.checkpointCount === 1 ? '' : 's'}` : ''}${session.isArchived ? ' · archived' : ''}${titleGeneration.rowTitleSuffix}`}
         active={isSelected}
         muted={muted}
@@ -1871,6 +1896,31 @@ export function Sidebar({
                 </button>
               </>
             )}
+            {canOpenMiniWindow && (
+              <button
+                title="Open mini window"
+                aria-label={`Open mini window for ${session.title}`}
+                onClick={e => {
+                  e.stopPropagation()
+                  openSessionMiniFromSidebar(session)
+                }}
+                style={{
+                  width: SESSION_ACTION_BUTTON_SIZE,
+                  height: SESSION_ACTION_BUTTON_SIZE,
+                  borderRadius: 7,
+                  border: 'none',
+                  background: 'transparent',
+                  color: theme.text.disabled,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Maximize2 size={SESSION_ACTION_ICON_SIZE} strokeWidth={1.7} />
+              </button>
+            )}
             <button
               title={getSessionArchiveActionLabel(session.isArchived === true)}
               onClick={e => {
@@ -1914,6 +1964,7 @@ export function Sidebar({
     loadWorkspaceSessions,
     onOpenSessionInChat,
     openSessionFromSidebar,
+    openSessionMiniFromSidebar,
     pinnedSessionKeys,
     sessionReadWatermarks,
     streamingSnapshot.entryIds,

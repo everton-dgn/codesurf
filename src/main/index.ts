@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, Menu, nativeTheme, nativeImage, session, systemPreferences, desktopCapturer } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, Menu, nativeTheme, nativeImage, session, systemPreferences, desktopCapturer, screen } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
@@ -107,7 +107,36 @@ if (!gotSingleInstanceLock) {
 // Per-window display titles (webContents.id → label set by renderer via workspace name)
 const windowTitles = new Map<number, string>()
 const freshWindowIds = new Set<number>()
+const miniChatWindows = new Map<string, BrowserWindow>()
 let extensionRegistry: ExtensionRegistry | null = null
+
+interface MiniChatWindowRequest {
+  workspaceId?: unknown
+  tileId?: unknown
+  title?: unknown
+}
+
+function getMiniChatWindowKey(workspaceId: string, tileId: string): string {
+  return `${workspaceId}:${tileId}`
+}
+
+function getRendererQuery(params?: Record<string, string>): Record<string, string> | undefined {
+  if (!params) return undefined
+  return Object.fromEntries(Object.entries(params).filter(([, value]) => value.trim().length > 0))
+}
+
+function loadRenderer(win: BrowserWindow, query?: Record<string, string>): void {
+  const cleanQuery = getRendererQuery(query)
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    const url = new URL(process.env['ELECTRON_RENDERER_URL'])
+    if (cleanQuery) {
+      for (const [key, value] of Object.entries(cleanQuery)) url.searchParams.set(key, value)
+    }
+    win.loadURL(url.toString())
+  } else {
+    win.loadFile(join(__dirname, '../renderer/index.html'), cleanQuery ? { query: cleanQuery } : undefined)
+  }
+}
 
 function resolveBundledExtensionDirs(): string[] {
   const envDir = process.env.CODESURF_BUNDLED_EXTENSIONS_DIR
@@ -326,13 +355,128 @@ function createWindow(opts?: { fresh?: boolean }): BrowserWindow {
     freshWindowIds.add(win.webContents.id)
   }
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  loadRenderer(win)
 
   return win
+}
+
+function createMiniChatWindow(owner: BrowserWindow | null, request: MiniChatWindowRequest): { ok: boolean; id?: number; error?: string } {
+  const workspaceId = typeof request.workspaceId === 'string' ? request.workspaceId.trim() : ''
+  const tileId = typeof request.tileId === 'string' ? request.tileId.trim() : ''
+  if (!workspaceId || !tileId) return { ok: false, error: 'workspaceId and tileId are required' }
+
+  const key = getMiniChatWindowKey(workspaceId, tileId)
+  const existing = miniChatWindows.get(key)
+  if (existing && !existing.isDestroyed() && !existing.webContents.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore()
+    existing.show()
+    existing.focus()
+    return { ok: true, id: existing.webContents.id }
+  }
+
+  const iconPath = resolveAppIconPath()
+  const ownerBounds = owner && !owner.isDestroyed()
+    ? owner.getBounds()
+    : screen.getPrimaryDisplay().workArea
+  const display = screen.getDisplayMatching(ownerBounds)
+  const width = 520
+  const height = 720
+  const x = Math.max(
+    display.workArea.x + 12,
+    Math.min(ownerBounds.x + ownerBounds.width - width - 28, display.workArea.x + display.workArea.width - width - 12),
+  )
+  const y = Math.max(
+    display.workArea.y + 12,
+    Math.min(ownerBounds.y + 68, display.workArea.y + display.workArea.height - height - 12),
+  )
+
+  const win = new BrowserWindow({
+    width,
+    height,
+    minWidth: 380,
+    minHeight: 420,
+    x,
+    y,
+    show: false,
+    autoHideMenuBar: true,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    frame: false,
+    resizable: true,
+    minimizable: true,
+    maximizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    ...(iconPath ? { icon: iconPath } : {}),
+    ...getWindowAppearanceOptions(),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true,
+    },
+  })
+
+  miniChatWindows.set(key, win)
+  windowTitles.set(win.webContents.id, typeof request.title === 'string' && request.title.trim() ? request.title.trim() : 'Mini Chat')
+
+  const closeWithOwner = () => {
+    if (!win.isDestroyed()) win.close()
+  }
+  const hideWithOwner = () => {
+    if (!win.isDestroyed()) win.hide()
+  }
+  const showWithOwner = () => {
+    if (!win.isDestroyed()) win.showInactive()
+  }
+  const liftWithOwner = () => {
+    if (!win.isDestroyed() && win.isVisible()) win.moveTop()
+  }
+
+  if (owner && !owner.isDestroyed()) {
+    owner.once('closed', closeWithOwner)
+    owner.on('minimize', hideWithOwner)
+    owner.on('restore', showWithOwner)
+    owner.on('focus', liftWithOwner)
+  }
+
+  win.on('ready-to-show', () => {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return
+    applyWindowAppearance(win)
+    win.show()
+    win.focus()
+    broadcastWindowList()
+  })
+  win.on('closed', () => {
+    miniChatWindows.delete(key)
+    windowTitles.delete(win.webContents.id)
+    if (owner && !owner.isDestroyed()) {
+      owner.off('closed', closeWithOwner)
+      owner.off('minimize', hideWithOwner)
+      owner.off('restore', showWithOwner)
+      owner.off('focus', liftWithOwner)
+    }
+    broadcastWindowList()
+  })
+  win.webContents.setWindowOpenHandler((details) => {
+    void openExternalIfSafe(details.url, 'window')
+    return { action: 'deny' }
+  })
+  win.webContents.on('did-finish-load', async () => {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return
+    const level = await getSavedZoomLevel()
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return
+    win.webContents.setZoomLevel(level)
+  })
+
+  loadRenderer(win, {
+    miniChat: '1',
+    workspaceId,
+    tileId,
+    title: typeof request.title === 'string' ? request.title : '',
+  })
+
+  return { ok: true, id: win.webContents.id }
 }
 
 async function openExternalIfSafe(rawUrl: string, source: 'window' | 'ipc'): Promise<boolean> {
@@ -717,6 +861,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('window:closeById', (_, id: number) => {
     const win = getLiveWindows().find(w => w.webContents.id === id)
     win?.close()
+  })
+
+  ipcMain.handle('window:openMiniChat', (event, request: MiniChatWindowRequest) => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    return createMiniChatWindow(owner, request ?? {})
   })
 
   ipcMain.handle('window:setSidebarCollapsed', (event, collapsed: boolean) => {

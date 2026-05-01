@@ -21,7 +21,9 @@ test('conversation archive action is not tiny', () => {
   assert.ok(SESSION_ACTION_BUTTON_SIZE >= 24)
   assert.ok(SESSION_ACTION_ICON_SIZE >= 14)
   assert.equal(getSessionRowExtraWidth(0), SESSION_ACTION_BUTTON_SIZE)
+  assert.equal(getSessionRowExtraWidth(0, true), SESSION_ACTION_BUTTON_SIZE * 2 + 6)
   assert.ok(getSessionRowExtraWidth(1) >= 64)
+  assert.ok(getSessionRowExtraWidth(1, true) > getSessionRowExtraWidth(1))
 })
 
 test('Sidebar declares archive mutation callback before menu actions that capture it', async () => {

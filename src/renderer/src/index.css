@@ -147,6 +147,27 @@
   --radius: 0.5rem;
 }
 
+:root {
+  /* Codex-inspired layout tokens. Keep these central so the chat, sidebar,
+     drawers, and any future mini-window share one density model instead of
+     scattering one-off inline dimensions through React components. */
+  --cs-sidebar-width-default: 300px;
+  --cs-sidebar-width-min: 270px;
+  --cs-sidebar-width-max: min(520px, calc(100vw - 320px));
+  --cs-sidebar-row-radius: 10px;
+  --cs-sidebar-row-pad-x: 8px;
+  --cs-thread-content-max-width: 800px;
+  --cs-chat-composer-side-inset: 24px;
+  --cs-chat-composer-min-width: 400px;
+  --cs-chat-composer-control-size: 28px;
+  --cs-chat-composer-radius: 14px;
+  --cs-chat-composer-footer-gap: 8px;
+  --cs-chat-mini-width: 520px;
+  --cs-chat-mini-height: 720px;
+  --cs-accent: #3b82f6;
+  --cs-surface-hover: rgba(255, 255, 255, 0.06);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -282,4 +303,117 @@ button:focus-visible,
 }
 .scrollbar-visible::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+/* Codex-style chat density and collapse primitives. React still owns dynamic
+   colors, but these selectors centralize layout behavior and keep compact
+   windows from feeling cramped. */
+.cs-chat-shell {
+  --cs-chat-content-width: var(--cs-thread-content-max-width);
+}
+
+.cs-chat-message-stack {
+  max-width: var(--cs-chat-content-width);
+}
+
+.cs-chat-composer-wrap {
+  container: cs-chat-composer / inline-size;
+}
+
+.cs-chat-composer-card {
+  backdrop-filter: saturate(120%);
+}
+
+.cs-chat-composer-primary-toolbar,
+.cs-chat-composer-secondary-toolbar {
+  container-type: inline-size;
+}
+
+.cs-chat-composer-primary-toolbar {
+  container-name: cs-composer-primary;
+}
+
+.cs-chat-composer-secondary-toolbar {
+  container-name: cs-composer-secondary;
+}
+
+.cs-toolbar-pill-label,
+.cs-footer-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cs-toolbar-pill-label {
+  max-width: 132px;
+}
+
+.cs-footer-pill-label {
+  max-width: 150px;
+}
+
+@container cs-composer-primary (max-width: 640px) {
+  .cs-toolbar-pill-label {
+    max-width: 92px;
+  }
+}
+
+@container cs-composer-primary (max-width: 540px) {
+  .cs-toolbar-pill-label {
+    display: none;
+  }
+}
+
+@container cs-composer-secondary (max-width: 680px) {
+  .cs-footer-pill-label,
+  .cs-composer-path-label {
+    max-width: 96px;
+  }
+}
+
+@container cs-composer-secondary (max-width: 560px) {
+  .cs-footer-optional,
+  .cs-composer-path-label {
+    display: none !important;
+  }
+}
+
+.cs-thread-row {
+  isolation: isolate;
+}
+
+.cs-thread-row::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--cs-thread-row-accent, var(--cs-accent));
+  opacity: 0;
+  transform: scaleY(0.72);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.cs-thread-row-active::before,
+.cs-thread-row:hover::before {
+  opacity: 0.9;
+  transform: scaleY(1);
+}
+
+.cs-thread-row:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cs-thread-row-accent, var(--cs-accent)) 18%, transparent);
+}
+
+.cs-mini-chat-window {
+  -webkit-app-region: drag;
+}
+
+.cs-mini-chat-window button,
+.cs-mini-chat-window textarea,
+.cs-mini-chat-window input,
+.cs-mini-chat-window [role="button"] {
+  -webkit-app-region: no-drag;
 }

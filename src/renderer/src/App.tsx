@@ -29,6 +29,21 @@ type PendingSessionOpen =
 
 type SessionTargetEntry = AggregatedSessionEntry | WorkspaceSessionEntry
 type FocusOpenOptions = { persist?: boolean; sourceTileId?: string }
+type MiniChatOptions = { workspaceId: string; tileId: string; title: string }
+
+function readMiniChatOptions(): MiniChatOptions | null {
+  if (typeof window === 'undefined') return null
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('miniChat') !== '1') return null
+  const workspaceId = params.get('workspaceId')?.trim() ?? ''
+  const tileId = params.get('tileId')?.trim() ?? ''
+  if (!workspaceId || !tileId) return null
+  return {
+    workspaceId,
+    tileId,
+    title: params.get('title')?.trim() || 'Mini Chat',
+  }
+}
 
 const INITIAL_EXTERNAL_SESSION_TAIL_LOAD = 20
 
@@ -965,6 +980,7 @@ function findDiscoveryMatch(sourceTileId: string, tileList: TileState[], hiddenT
 
 function App(): JSX.Element {
   useAutoHideScrollbars()
+  const miniChatOptions = useMemo(() => readMiniChatOptions(), [])
 
   const [tiles, setTiles] = useState<TileState[]>([])
   const [groups, setGroups] = useState<GroupState[]>([])
@@ -1006,7 +1022,7 @@ function App(): JSX.Element {
   const expandedTileIdRef = useRef<string | null>(null)
   const [settings, setSettings] = useState<AppSettings>(() => readCachedSettings())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [sidebarWidth, setSidebarWidth] = useState(280)
+  const [sidebarWidth, setSidebarWidth] = useState(300)
   const [sidebarResizing, setSidebarResizing] = useState(false)
   const [sidebarPillVisible, setSidebarPillVisible] = useState(true)
   const [sidebarSelectedPath, setSidebarSelectedPath] = useState<string | null>(null)
@@ -1122,9 +1138,11 @@ function App(): JSX.Element {
   // Workspace pill tabs — open workspace ids within this window
   const [openWorkspaceIds, setOpenWorkspaceIds] = useState<string[]>([])
   useEffect(() => {
+    if (miniChatOptions) return
     if (workspace?.id) setOpenWorkspaceIds(prev => prev.includes(workspace.id) ? prev : [...prev, workspace.id])
-  }, [workspace?.id])
+  }, [workspace?.id, miniChatOptions])
   useEffect(() => {
+    if (miniChatOptions) return
     const canonicalCurrentWorkspaceId = getCanonicalWorkspaceId(workspaces, workspace?.id)
     if (workspace?.id && canonicalCurrentWorkspaceId && canonicalCurrentWorkspaceId !== workspace.id) return
 
@@ -1137,9 +1155,10 @@ function App(): JSX.Element {
       if (next.length === prev.length && next.every((id, index) => id === prev[index])) return prev
       return next
     })
-  }, [workspace?.id, workspaces])
+  }, [workspace?.id, workspaces, miniChatOptions])
 
   useEffect(() => {
+    if (miniChatOptions) return
     if (!workspaceTabsHydratedRef.current) return
     const canonicalWorkspaceId = getCanonicalWorkspaceId(workspaces, workspace?.id) ?? workspace?.id ?? null
     const canonicalWorkspacePickerReturnId = getCanonicalWorkspaceId(workspaces, workspacePickerReturnWorkspaceId) ?? workspacePickerReturnWorkspaceId ?? null
@@ -1147,11 +1166,12 @@ function App(): JSX.Element {
       openWorkspaceIds,
       currentWorkspaceId: canonicalWorkspaceId ?? canonicalWorkspacePickerReturnId ?? openWorkspaceIds[0] ?? null,
     })
-  }, [openWorkspaceIds, workspace?.id, workspacePickerReturnWorkspaceId, workspaces])
+  }, [openWorkspaceIds, workspace?.id, workspacePickerReturnWorkspaceId, workspaces, miniChatOptions])
 
   // ─── Auto Agent Mode Effect ───────────────────────────────────────────────
   // Automatically enables agentMode on chat tiles when they get close to compatible tiles
   useEffect(() => {
+    if (miniChatOptions) return
     if (!workspace?.id) return
     if (!autoConnectionsEnabled) return
     // Skip during drag operations to avoid lag
@@ -1252,7 +1272,7 @@ function App(): JSX.Element {
         window.clearTimeout(proximityDebounceTimerRef.current)
       }
     }
-  }, [autoConnectionsEnabled, tiles, dragState.type, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, workspace?.id])
+  }, [autoConnectionsEnabled, tiles, dragState.type, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, workspace?.id, miniChatOptions])
 
   // Internal clipboard — stores tile snapshots (not OS clipboard)
   const clipboard = useRef<TileState[]>([])
@@ -1522,13 +1542,18 @@ function App(): JSX.Element {
       if (savedSettings) setSettings(withDefaultSettings(savedSettings))
       setWorkspaces(wsList)
       const workspaceById = new Map(wsList.map(entry => [entry.id, entry]))
+      const miniWorkspaceId = getCanonicalWorkspaceId(wsList, miniChatOptions?.workspaceId ?? null)
       const restoredWorkspaceId = getCanonicalWorkspaceId(wsList, persistedWorkspaceTabs.currentWorkspaceId)
       const activeWorkspaceId = getCanonicalWorkspaceId(wsList, active?.id ?? null)
       const fallbackWorkspaceId = getCanonicalWorkspaceId(wsList, wsList[0]?.id ?? null)
+      const miniWorkspace = miniWorkspaceId
+        ? (workspaceById.get(miniWorkspaceId) ?? null)
+        : null
       const restoredWorkspace = restoredWorkspaceId
         ? (workspaceById.get(restoredWorkspaceId) ?? null)
         : null
-      const targetWorkspace = restoredWorkspace
+      const targetWorkspace = miniWorkspace
+        ?? restoredWorkspace
         ?? (activeWorkspaceId ? (workspaceById.get(activeWorkspaceId) ?? null) : null)
         ?? (fallbackWorkspaceId ? (workspaceById.get(fallbackWorkspaceId) ?? null) : null)
       const restoredOpenWorkspaceIds = persistedWorkspaceTabs.openWorkspaceIds
@@ -1543,7 +1568,7 @@ function App(): JSX.Element {
       setWorkspace(targetWorkspace)
       workspaceTabsHydratedRef.current = true
 
-      if (targetWorkspace && active?.id !== targetWorkspace.id) {
+      if (targetWorkspace && !miniChatOptions && active?.id !== targetWorkspace.id) {
         await window.electron.workspace.setActive(targetWorkspace.id).catch(() => {})
       }
 
@@ -1584,14 +1609,16 @@ function App(): JSX.Element {
     // Check if agent setup is needed (first run or paths not confirmed)
     // Force with: CONTEX_SHOW_SETUP=1 npm run dev
     const forceSetup = import.meta.env.VITE_SHOW_SETUP === '1'
-    if (forceSetup) {
-      setShowAgentSetup(true)
-    } else {
-      window.electron?.agentPaths?.needsSetup?.().then((needs: boolean) => {
-        if (needs) setShowAgentSetup(true)
-      }).catch(() => {})
+    if (!miniChatOptions) {
+      if (forceSetup) {
+        setShowAgentSetup(true)
+      } else {
+        window.electron?.agentPaths?.needsSetup?.().then((needs: boolean) => {
+          if (needs) setShowAgentSetup(true)
+        }).catch(() => {})
+      }
     }
-  }, [showEmptyLayoutPage])
+  }, [showEmptyLayoutPage, miniChatOptions?.workspaceId])
 
   // ─── Subscribe to custom theme registrations from extensions ─────────────
   useEffect(() => {
@@ -4878,6 +4905,143 @@ function App(): JSX.Element {
     theme.text.primary,
     theme.text.secondary,
   ])
+
+  useEffect(() => {
+    if (!miniChatOptions) return
+    void window.electron?.window?.setTitle?.(miniChatOptions.title)
+  }, [miniChatOptions])
+
+  const miniChatTile = miniChatOptions
+    ? tiles.find(tile => tile.id === miniChatOptions.tileId && tile.type === 'chat')
+    : null
+  const miniChatPeers = miniChatTile
+    ? (negotiatedDiscoveryState.byTileConnections.get(miniChatTile.id) ?? []).map(peer => {
+      const extActions = extensionActionRegistry.get(peer.peerId)
+      const peerTile = tileByIdMap.get(peer.peerId)
+      return {
+        ...peer,
+        actions: extActions,
+        filePath: peerTile?.filePath,
+        label: peerTile?.label,
+      }
+    })
+    : []
+
+  if (miniChatOptions) {
+    return (
+      <ThemeProvider value={theme}>
+      <FontTokenProvider value={fontTokens}>
+      <FontProvider value={appFonts}>
+      <div
+        className="cs-mini-chat-window"
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          color: theme.text.primary,
+          fontFamily: appFonts.primary,
+          fontSize: appFonts.size,
+          background: theme.surface.app,
+        }}
+      >
+        <div
+          className="cs-mini-window-titlebar"
+          style={{
+            height: 34,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '0 10px 0 14px',
+            borderBottom: `1px solid ${theme.border.subtle}`,
+            background: theme.mode === 'light' ? 'rgba(250,250,252,0.92)' : 'rgba(14,16,20,0.88)',
+            backdropFilter: 'blur(18px)',
+            WebkitBackdropFilter: 'blur(18px)',
+            ...({ WebkitAppRegion: 'drag' } as React.CSSProperties),
+            userSelect: 'none',
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: theme.accent.base,
+              boxShadow: `0 0 14px ${theme.accent.base}`,
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {miniChatOptions.title}
+            </div>
+            <div style={{ fontSize: 10, color: theme.text.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              Floating CodeSurf chat · {workspace?.name ?? 'loading workspace'}
+            </div>
+          </div>
+          <button
+            type="button"
+            title="Close mini chat"
+            onClick={async () => {
+              try {
+                const id = await window.electron?.window?.getCurrentId?.()
+                if (id !== undefined) await window.electron?.window?.closeById?.(id)
+                else window.close()
+              } catch {
+                window.close()
+              }
+            }}
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 999,
+              border: `1px solid ${theme.border.subtle}`,
+              background: theme.surface.panelMuted,
+              color: theme.text.secondary,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              ...({ WebkitAppRegion: 'no-drag' } as React.CSSProperties),
+            }}
+          >
+            <X size={13} />
+          </button>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, background: theme.chat.background }}>
+          <Suspense fallback={<div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12 }}>Loading chat…</div>}>
+            {miniChatTile ? (
+              <LazyChatTile
+                tileId={miniChatTile.id}
+                workspaceId={workspace?.id ?? miniChatOptions.workspaceId}
+                workspaceDir={workspace?.path ?? ''}
+                width={Math.max(360, window.innerWidth)}
+                height={Math.max(360, window.innerHeight - 34)}
+                reloadToken={chatReloadTokens[miniChatTile.id] ?? 0}
+                settings={settings}
+                isConnected={negotiatedDiscoveryState.connectedTileIds.has(miniChatTile.id)}
+                isAutoConnected={miniChatTile.autoAgentMode && negotiatedDiscoveryState.connectedTileIds.has(miniChatTile.id)}
+                connectedPeers={miniChatPeers}
+              />
+            ) : (
+              <div style={{ height: '100%', display: 'grid', placeItems: 'center', padding: 24, textAlign: 'center', color: theme.text.secondary }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 650, color: theme.text.primary, marginBottom: 6 }}>Chat unavailable</div>
+                  <div style={{ fontSize: 12, lineHeight: 1.5 }}>The source chat tile could not be found in this workspace.</div>
+                </div>
+              </div>
+            )}
+          </Suspense>
+        </div>
+      </div>
+      </FontProvider>
+      </FontTokenProvider>
+      </ThemeProvider>
+    )
+  }
 
   return (
     <ThemeProvider value={theme}>

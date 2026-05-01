@@ -332,6 +332,7 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       setTitle: makeInvoker(invoke, 'window:setTitle'),
       focusById: makeInvoker(invoke, 'window:focusById'),
       closeById: makeInvoker(invoke, 'window:closeById'),
+      openMiniChat: makeInvoker(invoke, 'window:openMiniChat'),
       setSidebarCollapsed: makeInvoker(invoke, 'window:setSidebarCollapsed'),
       onListChanged: makeEventListener(eventHub, 'window:list-changed'),
       isFresh: makeInvoker(invoke, 'window:isFresh'),
