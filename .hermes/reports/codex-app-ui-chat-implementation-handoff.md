@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 11:58:24 BST
+Generated: 2026-05-01 15:45:03 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -139,11 +139,25 @@ Moved the `+` insert menu into the same composer menu module:
 - Passed `renderChatSurfaceIcon` into the extracted component so the broader chat-surface icon mapping stays centralized in `ChatTile.tsx` and the menu extraction does not drag unrelated icon logic with it.
 - Removed now-unused `Paperclip` and `MCPServerEntry` imports from `ChatTile.tsx`.
 
-This is still a foundation/refactor burst, not a UX redesign. The next safe extraction point is the actual composer prompt/footer shell.
+This is still a foundation/refactor burst, not a UX redesign.
+
+### 9. Composer shell extraction
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposer.tsx`
+
+Moved the presentational composer frame into a dedicated module:
+- Added `ChatComposerWrap`, `ChatComposerCard`, `ChatComposerPrimaryToolbar`, and `ChatComposerSecondaryToolbar`.
+- Preserved the existing DOM class hooks: `.cs-chat-composer-wrap`, `.cs-chat-composer-card`, `.cs-chat-composer-primary-toolbar`, and `.cs-chat-composer-secondary-toolbar`.
+- Preserved inline layout styles, child order, JSX nesting, menu refs, textarea handlers, attachment/chat-surface slots, and footer/action controls.
+- Kept state ownership in `ChatTile.tsx`; this was a shell/frame extraction only, not a prompt behavior redesign.
+
+The next safe extraction point is to move one content section at a time, starting with the autocomplete/draft-status surfaces or attachment strip, rather than passing the entire composer state into one giant new component.
 
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-insert-menu extraction:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer-shell extraction:
 
 ```bash
 npm run build
@@ -155,7 +169,7 @@ Results:
 - `npm test`: passed, 177 tests, 0 failures.
 - `git diff --cached --check`: passed before committing the code extraction.
 - Static scan of added lines for common secret/injection patterns: no findings.
-- Independent review: passed; no security concerns or logic errors for the `ComposerInsertMenu` extraction.
+- Independent review: passed; no security concerns or logic errors for the `ChatComposer` shell extraction.
 
 ## Git state notes
 
@@ -166,6 +180,8 @@ The implementation work has been committed locally in small controlled bursts:
 - `ecf9b7f refactor: extract chat composer menus`
 - `7e895e6 docs: note chat composer menu extraction`
 - `656fafb refactor: extract chat insert menu`
+- `e88b6f5 docs: note chat insert menu extraction`
+- `0141c91 refactor: extract chat composer shell`
 
 Upstream check:
 - Ran `git fetch origin` after the mini-window/sidebar commit.
@@ -178,8 +194,8 @@ Outstanding unrelated local files still present in the working tree:
 
 ## Recommended next burst
 
-1. Dogfood the extracted insert/menu path in the running app: open the `+` menu, attach files, toggle MCP, toggle an MCP server, and open a chat surface to verify behavior is unchanged.
-2. Continue extracting composer internals from `ChatTile.tsx`, next with the actual composer prompt/footer shell around the textarea and action rows, still without changing prompt behavior.
+1. Dogfood the extracted shell/menu path in the running app: type into the composer, resize/scroll chat, open the `+` menu, attach files, toggle MCP, use provider/model/thinking/location/branch/context menus, and send/stop a message.
+2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: autocomplete popup, dictation/TTS banners, chat-surface host strip, and attachment strip are safer than one giant stateful `ChatComposer` props object.
 3. After extraction seams are stable, improve the prompt/drawer UX: denser command surface, clearer collapse/expand behavior, and preserved advanced controls behind compact menus.
 4. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
 5. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
