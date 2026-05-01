@@ -97,6 +97,62 @@ export function ChatComposerSecondaryToolbar({ children }: { children: React.Rea
   )
 }
 
+export function ChatComposerInput({
+  textareaRef,
+  value,
+  placeholder,
+  fontSize,
+  fontFamily,
+  lineHeight,
+  minHeight,
+  textColor,
+  onChange,
+  onKeyDown,
+  onKeyUp,
+}: {
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>
+  value: string
+  placeholder: string
+  fontSize: React.CSSProperties['fontSize']
+  fontFamily: string
+  lineHeight: React.CSSProperties['lineHeight']
+  minHeight: React.CSSProperties['minHeight']
+  textColor: string
+  onChange: React.ChangeEventHandler<HTMLTextAreaElement>
+  onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>
+  onKeyUp: React.KeyboardEventHandler<HTMLTextAreaElement>
+}): JSX.Element {
+  return (
+    <textarea
+      ref={textareaRef}
+      className="cs-chat-composer-input"
+      value={value}
+      onChange={onChange}
+      onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
+      placeholder={placeholder}
+      rows={1}
+      style={{
+        width: '100%',
+        boxSizing: 'border-box',
+        flex: 1,
+        background: 'transparent',
+        color: textColor,
+        border: 'none',
+        padding: '10px 14px 2px 14px',
+        fontSize,
+        fontFamily,
+        lineHeight,
+        resize: 'none',
+        outline: 'none',
+        overflow: 'hidden',
+        minHeight,
+        opacity: 1,
+      }}
+    />
+  )
+}
+
 export function ChatComposerDrawerFrame({
   children,
   joinedToPrevious = false,

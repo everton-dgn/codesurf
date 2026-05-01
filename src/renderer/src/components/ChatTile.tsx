@@ -52,7 +52,7 @@ import {
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
-import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
+import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
 import { ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 
@@ -7067,22 +7067,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           onRemoveAttachment={removeAttachment}
         />
 
-        <textarea
-          ref={textareaRef}
+        <ChatComposerInput
+          textareaRef={textareaRef}
           value={input}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
           placeholder={isDictating ? 'Listening...' : 'Message the agent, or use /commands and /skills'}
-          rows={1}
-          style={{
-            width: '100%', boxSizing: 'border-box', flex: 1,
-            background: 'transparent', color: theme.chat.text,
-            border: 'none', padding: '10px 14px 2px 14px',
-            fontSize, fontFamily: fontSans, lineHeight: fontLineHeight,
-            resize: 'none', outline: 'none', overflow: 'hidden',
-            minHeight: CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT, opacity: 1,
-          }}
+          fontSize={fontSize}
+          fontFamily={fontSans}
+          lineHeight={fontLineHeight}
+          minHeight={CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT}
+          textColor={theme.chat.text}
         />
 
         {/* Primary toolbar */}

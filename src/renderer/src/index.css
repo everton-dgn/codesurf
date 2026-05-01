@@ -336,6 +336,15 @@ button:focus-visible,
   color: rgba(170, 170, 170, 0.58);
 }
 
+.cs-chat-composer-input {
+  caret-color: var(--cs-accent, currentColor);
+  scrollbar-width: thin;
+}
+
+.cs-chat-composer-input::selection {
+  background: rgba(88, 166, 255, 0.22);
+}
+
 .cs-chat-composer-drawer {
   backdrop-filter: saturate(130%) blur(10px);
 }
@@ -366,6 +375,18 @@ button:focus-visible,
 
 .cs-chat-composer-primary-toolbar {
   container-name: cs-composer-primary;
+  position: relative;
+}
+
+.cs-chat-composer-primary-toolbar::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.075), transparent);
+  pointer-events: none;
 }
 
 .cs-chat-composer-secondary-toolbar {
