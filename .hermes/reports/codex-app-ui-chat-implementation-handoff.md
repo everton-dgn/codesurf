@@ -1,6 +1,6 @@
 # Codex-inspired CodeSurf implementation handoff
 
-Generated: 2026-05-01 19:38:29 BST
+Generated: 2026-05-01 20:02:56 BST
 
 Scope:
 - Target repo: `/Users/jkneen/clawd/collaborator-clone`
@@ -267,26 +267,40 @@ Moved the footer git branch menu into the composer module:
 - Preserved the footer pill, current-branch/project fallback label, branch search input, Enter-to-create behavior, repository path header, branches section, current-branch active state, uncommitted-file sublabel, no-git/no-match empty states, create-and-checkout button, portal anchoring, hover styling, and theme styling.
 - Kept git state, branch filtering, branch creation, branch checkout, refresh behavior, and `branchMenuRef` ownership in `ChatTile.tsx`, so shared outside-click/Escape handling still uses the same `menuRefs` array.
 
-The next safe extraction point is likely the remaining footer mode chip.
+The footer extraction pass is now effectively complete; the next safe step is live dogfooding before starting prompt/drawer UX polish.
+
+### 18. Composer mode menu extraction
+
+Files:
+- `src/renderer/src/components/ChatTile.tsx`
+- `src/renderer/src/components/chat/ChatComposer.tsx`
+
+Moved the footer mode chip/menu into the composer module:
+- Added `ChatComposerModeOption` and `ChatComposerModeMenu`.
+- Moved the visual footer pill + mode dropdown rendering into `ChatComposer.tsx`.
+- Preserved the ShieldCheck icon, mode label/color, active menu state, dropdown rows, row sublabels, active-mode highlighting, portal anchoring, and selection/close behavior.
+- Kept mode state, `modeMenuRef`, `toggleMenu('mode')`, and `setMode(...)` ownership in `ChatTile.tsx`, so shared outside-click/Escape handling still uses the same `menuRefs` array.
+
+This completes the low-risk footer-cluster extraction sequence: project path, context dial, location menu, branch menu, and mode menu are now all out of `ChatTile.tsx` while their state/refs remain owned by `ChatTile.tsx`.
 
 ## Verification
 
-Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer branch menu extraction:
+Commands run from `/Users/jkneen/clawd/collaborator-clone` after the latest composer mode menu extraction:
 
 ```bash
 npm run build
-node --test test/daemon/checkpoints.test.mjs
-node --test --test-concurrency=1 test/*.test.ts test/*.test.mjs test/main/*.test.mjs test/sidebar/*.test.mjs test/daemon/*.test.mjs
+npm test
+git diff --check
+git diff --cached --check
 ```
 
 Results:
 - `npm run build`: passed.
-- Targeted daemon checkpoint test after cleanup: passed, 2 tests, 0 failures.
-- Full Node test suite run serially with `--test-concurrency=1`: passed, 177 tests, 0 failures.
-- Note: the default parallel `npm test` command hit daemon startup timeouts in `test/daemon/checkpoints.test.mjs` in this busy local environment before cleanup; the targeted checkpoint test and the serial run of the same full suite both passed.
+- `npm test`: passed, 177 tests, 0 failures.
+- `git diff --check`: passed.
 - `git diff --cached --check`: passed before committing the code extraction.
 - Static scan of added lines for common secret/injection patterns: no findings.
-- Independent review: passed; no security concerns or logic errors for the `ChatComposerBranchMenu` extraction.
+- Independent review: passed; no security concerns or logic errors for the `ChatComposerModeMenu` extraction.
 
 ## Git state notes
 
@@ -315,6 +329,8 @@ The implementation work has been committed locally in small controlled bursts:
 - `664daf1 refactor: extract chat location menu`
 - `0dd504c docs: note chat location menu extraction`
 - `967ec93 refactor: extract chat branch menu`
+- `7813a8f docs: note chat branch menu extraction`
+- `70908ff refactor: extract chat mode menu`
 
 Upstream check:
 - Ran `git fetch origin` after the mini-window/sidebar commit.
@@ -332,8 +348,7 @@ Outstanding unrelated local files still present in the working tree:
 
 ## Recommended next burst
 
-1. Dogfood the extracted attachment/shell/menu/voice/autocomplete/chat-surface host/project-path/context-dial/location-menu/branch-menu path in the running app: type `/`, type `@`, use arrow keys/Enter/Escape, click autocomplete rows, attach/remove files, open the `+` menu, toggle MCP, open a chat surface, switch/close surface tabs, verify `Enhance → Builder`, switch project folder from the footer path button, open the context dial popup, switch local/cloud/remote execution target from the location menu, use provider/model/thinking/branch menus, trigger dictation/TTS banners, and send/stop a message.
-2. Continue extracting composer internals from `ChatTile.tsx` one slot at a time: the mode chip is now the safest remaining footer seam.
-3. After extraction seams are stable, improve the prompt/drawer UX: denser command surface, clearer collapse/expand behavior, and preserved advanced controls behind compact menus.
-4. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
-5. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
+1. Dogfood the extracted attachment/shell/menu/voice/autocomplete/chat-surface host/project-path/context-dial/location-menu/branch-menu/mode-menu path in the running app: type `/`, type `@`, use arrow keys/Enter/Escape, click autocomplete rows, attach/remove files, open the `+` menu, toggle MCP, open a chat surface, switch/close surface tabs, verify `Enhance → Builder`, switch project folder from the footer path button, open the context dial popup, switch local/cloud/remote execution target from the location menu, use provider/model/thinking/branch/mode menus, trigger dictation/TTS banners, and send/stop a message.
+2. Start actual Codex-inspired prompt/drawer UX polish now that the low-risk composer/footer extraction seams are stable: denser command surface, clearer collapse/expand behavior, compact advanced controls, and no feature removals.
+3. Add a deliberate "open historical/external session into chat, then pop out" flow only if the sidebar mini action should work for sessions with no `tileId`.
+4. Start the Git Review extension/diff virtualization pass from the reference report as a separate burst.
