@@ -52,6 +52,7 @@ import {
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
+import { ChatComposerCard, ChatComposerPrimaryToolbar, ChatComposerSecondaryToolbar, ChatComposerWrap } from './chat/ChatComposer'
 import { FooterPill, ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 
@@ -7036,7 +7037,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         })()}
 
         {/* Input bar */}
-        <div className="cs-chat-composer-wrap" style={{
+        <ChatComposerWrap style={{
           flexShrink: 0,
           width: CHAT_COMPOSER_WIDTH,
           minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
@@ -7045,7 +7046,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           flexDirection: 'column',
           gap: 6,
         }}>
-        <div className="cs-chat-composer-card" style={{
+        <ChatComposerCard style={{
         minHeight: CHAT_COMPOSER_MIN_HEIGHT,
         border: isDropTarget ? `1px solid ${theme.accent.base}` : `1px solid ${composerBorder}`, borderRadius: 14,
         // Resting fill matches the border so the composer reads as one solid
@@ -7376,10 +7377,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         />
 
         {/* Primary toolbar */}
-        <div className="cs-chat-composer-primary-toolbar" style={{
-          display: 'flex', alignItems: 'center',
-          padding: '4px 8px 4px 8px', gap: 2,
-        }}>
+        <ChatComposerPrimaryToolbar>
           {/* Insert menu */}
           <div ref={insertMenuRef} style={{ position: 'relative' }}>
             <button
@@ -7604,17 +7602,11 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               <ArrowUp size={16} color="#fff" strokeWidth={2.5} style={{ opacity: hasSendableDraft ? 1 : 0.3 }} />
             </button>
           )}
-        </div>
-        </div>
+        </ChatComposerPrimaryToolbar>
+        </ChatComposerCard>
 
         {/* Secondary toolbar */}
-        <div className="cs-chat-composer-secondary-toolbar" style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 10,
-          padding: '0 8px',
-        }}>
+        <ChatComposerSecondaryToolbar>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <div ref={locationMenuRef} style={{ position: 'relative' }}>
               <FooterPill
@@ -7966,8 +7958,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               )}
             </div>
           </div>
-        </div>
-        </div>
+        </ChatComposerSecondaryToolbar>
+        </ChatComposerWrap>
       </div>
       </div>
       {isPlanOpen && planTodos && planTodos.length > 0 && (
