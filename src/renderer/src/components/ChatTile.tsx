@@ -52,8 +52,8 @@ import {
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
-import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerLocationMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
-import { FooterPill, ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
+import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
+import { ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 
 const CHAT_SLASH_COMMANDS = [
@@ -7393,31 +7393,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            <div ref={modeMenuRef} style={{ position: 'relative' }}>
-              <FooterPill
-                prefix={<ShieldCheck size={13} />}
-                label={currentMode.label}
-                color={currentMode.color}
-                active={showModeMenu}
-                onClick={() => toggleMenu('mode')}
-              />
-              {showModeMenu && (
-                <MenuPortal anchorRef={modeMenuRef}>
-                  <Dropdown>
-                    {modeOptions.map(m => (
-                      <DropdownItem
-                        key={m.id}
-                        icon={<ShieldCheck size={11} />}
-                        label={m.label}
-                        sublabel={m.description}
-                        active={mode === m.id}
-                        onClick={() => { setMode(m.id); setShowModeMenu(false) }}
-                      />
-                    ))}
-                  </Dropdown>
-                </MenuPortal>
-              )}
-            </div>
+            <ChatComposerModeMenu
+              anchorRef={modeMenuRef}
+              showMenu={showModeMenu}
+              mode={mode}
+              currentMode={currentMode}
+              modeOptions={modeOptions}
+              onToggleMenu={() => toggleMenu('mode')}
+              onSelectMode={modeId => {
+                setMode(modeId)
+                setShowModeMenu(false)
+              }}
+            />
 
             {/* Plan / Tasks chip — only visible when the agent has emitted a
                 TodoWrite block. Toggles the right-docked PlanPane. */}

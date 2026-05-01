@@ -1,5 +1,5 @@
 import React from 'react'
-import { FileText, Folder, Plus, Trash2 } from 'lucide-react'
+import { FileText, Folder, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { useTheme } from '../../ThemeContext'
 import { basename } from '../../utils/dnd'
 import type { ExecutionHostRecord } from '../../../../shared/types'
@@ -23,6 +23,13 @@ export interface ChatComposerAttachment {
 export interface ChatComposerBranch {
   name: string
   current: boolean
+}
+
+export interface ChatComposerModeOption {
+  id: string
+  label: string
+  description?: string
+  color?: string
 }
 
 export interface ChatComposerSurface {
@@ -724,6 +731,52 @@ export function ChatComposerProjectPathButton({
         {label}
       </span>
     </button>
+  )
+}
+
+export function ChatComposerModeMenu({
+  anchorRef,
+  showMenu,
+  mode,
+  currentMode,
+  modeOptions,
+  onToggleMenu,
+  onSelectMode,
+}: {
+  anchorRef: React.RefObject<HTMLDivElement | null>
+  showMenu: boolean
+  mode: string
+  currentMode: ChatComposerModeOption
+  modeOptions: ChatComposerModeOption[]
+  onToggleMenu: () => void
+  onSelectMode: (modeId: string) => void
+}): JSX.Element {
+  return (
+    <div ref={anchorRef} style={{ position: 'relative' }}>
+      <FooterPill
+        prefix={<ShieldCheck size={13} />}
+        label={currentMode.label}
+        color={currentMode.color}
+        active={showMenu}
+        onClick={onToggleMenu}
+      />
+      {showMenu && (
+        <MenuPortal anchorRef={anchorRef}>
+          <Dropdown>
+            {modeOptions.map(item => (
+              <DropdownItem
+                key={item.id}
+                icon={<ShieldCheck size={11} />}
+                label={item.label}
+                sublabel={item.description}
+                active={mode === item.id}
+                onClick={() => onSelectMode(item.id)}
+              />
+            ))}
+          </Dropdown>
+        </MenuPortal>
+      )}
+    </div>
   )
 }
 
