@@ -1,0 +1,35 @@
+{
+  "id": "code-index",
+  "name": "Code Index",
+  "version": "0.1.0",
+  "description": "Per-workspace activity + symbol index built from Claude Code tool-use. MCP tools for find/hot/related queries.",
+  "author": "contex",
+  "tier": "power",
+  "main": "main.js",
+  "contributes": {
+    "tiles": [
+      {
+        "type": "code-index-dashboard",
+        "label": "Code Index",
+        "entry": "tiles/dashboard/index.html",
+        "defaultSize": { "w": 400, "h": 500 },
+        "minSize": { "w": 320, "h": 360 }
+      }
+    ],
+    "contextMenu": [
+      { "label": "New Code Index", "action": "createTile", "tileType": "ext:code-index-dashboard" }
+    ],
+    "context": {
+      "produces": ["ctx:code-index:open-file", "ctx:code-index:activity"],
+      "consumes": []
+    },
+    "actions": [
+      { "name": "find", "description": "Find symbol by name. Params: { name: string, kind?: string, limit?: number }" },
+      { "name": "hot", "description": "Top hot files or top symbols in a file. Params: { path?: string, limit?: number }" },
+      { "name": "related", "description": "Files co-touched with this one. Params: { path: string, limit?: number }" },
+      { "name": "stats", "description": "Index health and counts. No params." },
+      { "name": "backfill", "description": "Replay transcripts into index. Params: { transcriptPath?: string, days?: number }" }
+    ]
+  },
+  "permissions": ["network", "fs", "os:read"]
+}
