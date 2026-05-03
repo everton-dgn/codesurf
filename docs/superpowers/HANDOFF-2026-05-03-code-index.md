@@ -1,7 +1,41 @@
 # Code Index — Implementation Handoff
 
+## READ THIS FIRST: This is a CodeSurf extension, not a standalone app
+
+We are building a **plugin** that drops into the CodeSurf host (the
+`collaborator-clone` Electron app). The extension is fully sandboxed inside its
+own directory and is loaded by the host at runtime. **You are NOT building or
+modifying the host app.**
+
+Concretely:
+
+- **All source code lives under one directory:**
+  `examples/extensions/code-index/`
+- **The host loads it from a runtime directory:**
+  `~/.codesurf/extensions/code-index/` (we copy there as the install step)
+- **The host's source (`src/`, root `package.json`, `electron.vite.config.ts`,
+  any other `examples/extensions/<other>/`) is OFF-LIMITS.** Touching it will
+  break the host for everyone.
+- **The extension's own `package.json` and deps are isolated** — the host has
+  its own dep tree, ours has another. They do not share node_modules.
+- **The extension talks to the host via a documented bridge** (`ctx.mcp`,
+  `ctx.bus`, `ctx.ipc`, etc.) — we do not import host modules, ever.
+- **The "extension dev workspace" rules** are formally documented at
+  `examples/extensions/CLAUDE.md` in this same worktree. Re-read it if in
+  doubt.
+
+If a task description ever appears to require touching host code, **stop and
+escalate.** It almost certainly means the task should be solved inside the
+extension via the bridge, or the plan is wrong.
+
+---
+
 **Date paused:** 2026-05-03
-**Worktree:** `/Users/jkneen/clawd/collaborator-clone-code-index/`
+**Worktree:** `/Users/jkneen/clawd/collaborator-clone-code-index/` — this is a
+git **worktree of the codesurf-host repo** (`collaborator-clone`), used purely
+as the dev environment for this extension. The worktree directory name
+includes `code-index` only because that's the feature branch — it is **not**
+a standalone repo for the extension.
 **Branch:** `feat/code-index` (off `main` of `collaborator-clone`)
 **Last commit:** `0200d1e` — indexer core
 **Tests:** 27/27 passing across 4 unit suites
@@ -94,16 +128,28 @@ In a fresh session:
 
 ## Hard rules to carry forward
 
-These come from the user's CLAUDE.md (cursorbuddy-derived but project-applicable) and the codesurf-extension skill:
+These come from the user's CLAUDE.md and the codesurf-extension skill:
 
-1. **Cross-platform always.** No native deps. Tree-sitter via WASM only. Hook snippets must work on macOS, Linux, Windows (PowerShell).
-2. **Self-contained extension.** All code under `examples/extensions/code-index/`. **NEVER** edit `src/`, root `package.json`, vite/electron config, or any other extension. The host is off-limits.
-3. **Privacy.** File paths, symbol names, line numbers, counters only. Never file contents.
-4. **TDD.** Each task has a failing-test step before implementation. Skip at your peril.
-5. **Frequent commits.** One logical change per commit. Use the commit messages from the plan.
+1. **This is a CodeSurf extension.** See the "READ THIS FIRST" section at the
+   top of this doc. All code lives in `examples/extensions/code-index/`.
+   The host (`src/`, root configs, other extensions) is off-limits. The
+   extension communicates with the host only via the documented bridge.
+2. **Cross-platform always.** No native deps. Tree-sitter via WASM only. Hook
+   snippets must work on macOS, Linux, Windows (PowerShell).
+3. **Privacy.** File paths, symbol names, line numbers, counters only. Never
+   file contents.
+4. **TDD.** Each task has a failing-test step before implementation. Skip at
+   your peril.
+5. **Frequent commits.** One logical change per commit. Use the commit
+   messages from the plan.
 6. **No emoji** in tile UI or anywhere else unless the user explicitly asks.
-7. **No `prefers-color-scheme`** in tile CSS. Dark mode comes from `--ct-*` vars injected by the host.
+7. **No `prefers-color-scheme`** in tile CSS. Dark mode comes from `--ct-*`
+   vars injected by the host.
 8. **One in_progress task at a time** in TodoWrite.
+9. **Two deliverable surfaces beyond the extension:** the companion Claude
+   skill (installs to `~/.claude/skills/code-index/`) and the eval suite
+   (lives inside the extension dir at `examples/extensions/code-index/evals/`).
+   Both are part of "ship" — the extension alone is not done.
 
 ---
 
