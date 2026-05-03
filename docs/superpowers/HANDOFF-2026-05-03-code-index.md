@@ -1,11 +1,29 @@
 # Code Index — Implementation Handoff
 
-## READ THIS FIRST: This is a CodeSurf extension, not a standalone app
+## STOP — WRONG TARGET. SEE PIVOT.md FIRST.
 
-We are building a **plugin** that drops into the CodeSurf host (the
-`collaborator-clone` Electron app). The extension is fully sandboxed inside its
-own directory and is loaded by the host at runtime. **You are NOT building or
-modifying the host app.**
+This work was started in the wrong repo. The corrected target is the **CodeSurf
+CLI** at `/Users/jkneen/Documents/GitHub/grok-cli/`, not the CodeSurf desktop
+app (`collaborator-clone`).
+
+**Read `PIVOT-2026-05-03-code-index.md` (same directory) before doing
+anything else.** It explains:
+- Why the target is wrong
+- The long-term architecture (grok-cli will absorb the desktop daemon)
+- What survives the pivot (~600 LOC of platform-agnostic Node modules)
+- What dies (tiles, manifest, bridge wiring)
+- The corrected `grok-cli/src/code-index/` layout
+- The order of operations for the resuming session
+
+Everything below this banner describes the wrong-target work that was done
+before the pivot. It is preserved as a reference for what code can be
+salvaged, NOT as instructions for what to build next.
+
+---
+
+## Original (wrong-target) handoff
+
+### This was a CodeSurf desktop extension
 
 Concretely:
 
