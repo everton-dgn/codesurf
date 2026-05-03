@@ -321,6 +321,7 @@
   .ctrl-btn.active { background: var(--ct-accent, #4f46e5); color: #fff; border-color: transparent; }
   .ctrl-btn.danger { background: var(--ct-danger, #dc2626); color: #fff; border-color: transparent; }
   .ctrl-btn.muted-state { background: rgba(220,38,38,0.12); color: var(--ct-danger, #dc2626); border-color: rgba(220,38,38,0.2); }
+  .ctrl-btn.ducked-state { background: rgba(245,158,11,0.14); color: #f59e0b; border-color: rgba(245,158,11,0.25); }
 
   .video-area {
     flex: 1;
@@ -618,6 +619,11 @@
   var roomsLoading = false
 
   var LivekitClient = window.LivekitClient || window.livekit
+  var AUDIO_CAPTURE_OPTIONS = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  }
 
   var lobbyEl = document.getElementById('lobby')
   var roomViewEl = document.getElementById('roomView')
@@ -663,6 +669,8 @@
   var assistantModel = 'claude-sonnet-4-6'
   var assistantSpeakReplies = true
   var assistantUseCamera = true
+  var assistantSpeechToken = 0
+  var micTemporarilySuppressed = false
 
   function parseResult(raw) {
     return typeof raw === 'string' ? JSON.parse(raw) : raw
@@ -695,6 +703,38 @@
       assistantTalkBtn.classList.toggle('active', assistantListening)
       assistantTalkBtn.disabled = !room
     }
+  }
+
+  function setLocalMicEnabled(enabled) {
+    if (!room || !room.localParticipant) return Promise.resolve()
+    return room.localParticipant.setMicrophoneEnabled(enabled, AUDIO_CAPTURE_OPTIONS)
+  }
+
+  function pauseMicForAssistantSpeech(token) {
+    if (token !== assistantSpeechToken || !room || !micEnabled || micTemporarilySuppressed) return
+    micTemporarilySuppressed = true
+    updateMicBtn()
+    setLocalMicEnabled(false).catch(function() {
+      if (token !== assistantSpeechToken) return
+      micTemporarilySuppressed = false
+      updateMicBtn()
+    })
+  }
+
+  function restoreMicAfterAssistantSpeech(token) {
+    if (token !== assistantSpeechToken || !micTemporarilySuppressed) return
+    if (!room || !micEnabled) {
+      micTemporarilySuppressed = false
+      updateMicBtn()
+      return
+    }
+    setLocalMicEnabled(true)
+      .catch(function() {})
+      .then(function() {
+        if (token !== assistantSpeechToken) return
+        micTemporarilySuppressed = false
+        updateMicBtn()
+      })
   }
 
   function listParticipantNames() {
@@ -758,13 +798,19 @@
     if (!assistantSpeakReplies || !window.speechSynthesis) return
     var body = String(text || '').trim()
     if (!body) return
+    var token = ++assistantSpeechToken
     try {
       window.speechSynthesis.cancel()
       var utterance = new SpeechSynthesisUtterance(body)
       utterance.rate = 1
       utterance.pitch = 1
+      utterance.onstart = function() { pauseMicForAssistantSpeech(token) }
+      utterance.onend = function() { restoreMicAfterAssistantSpeech(token) }
+      utterance.onerror = function() { restoreMicAfterAssistantSpeech(token) }
       window.speechSynthesis.speak(utterance)
-    } catch (error) {}
+    } catch (error) {
+      restoreMicAfterAssistantSpeech(token)
+    }
   }
 
   function queueAssistantTurn(text, sender, source) {
@@ -1205,6 +1251,7 @@
       room = new LivekitClient.Room({
         adaptiveStream: true,
         dynacast: true,
+        audioCaptureDefaults: AUDIO_CAPTURE_OPTIONS,
       })
 
       room.on(LivekitClient.RoomEvent.ParticipantConnected, function() { renderGrid() })
@@ -1246,7 +1293,7 @@
       updateAssistantUi()
 
       try {
-        await room.localParticipant.setMicrophoneEnabled(true)
+        await setLocalMicEnabled(true)
         micEnabled = true
       } catch (error) {
         micEnabled = false
@@ -1280,6 +1327,8 @@
     assistantQueue = []
     assistantBusy = false
     assistantBuffer = ''
+    micTemporarilySuppressed = false
+    assistantSpeechToken += 1
     stopAssistantListening()
     if (window.speechSynthesis) {
       try { window.speechSynthesis.cancel() } catch (error) {}
@@ -1298,7 +1347,10 @@
   }
 
   function updateMicBtn() {
-    micBtn.className = 'ctrl-btn' + (micEnabled ? ' active' : ' muted-state')
+    micBtn.className = 'ctrl-btn' + (micEnabled ? ' active' : ' muted-state') + (micTemporarilySuppressed ? ' ducked-state' : '')
+    micBtn.title = micTemporarilySuppressed
+      ? 'Microphone is paused while the assistant speaks to prevent speaker echo.'
+      : (micEnabled ? 'Mute microphone' : 'Unmute microphone')
   }
 
   function updateCamBtn() {
@@ -1417,8 +1469,9 @@
     if (!room) return
     var nextEnabled = !micEnabled
     try {
-      await room.localParticipant.setMicrophoneEnabled(nextEnabled)
+      await setLocalMicEnabled(nextEnabled)
       micEnabled = nextEnabled
+      micTemporarilySuppressed = false
       updateMicBtn()
     } catch (error) {
       addChatMessage('System', (error && error.message) ? error.message : 'Microphone access was denied.')

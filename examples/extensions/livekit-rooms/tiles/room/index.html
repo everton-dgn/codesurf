@@ -249,6 +249,16 @@
   var leaveBtn = document.getElementById('leaveBtn')
 
   var LivekitClient = window.LivekitClient || window.livekit
+  var AUDIO_CAPTURE_OPTIONS = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  }
+
+  function setLocalMicEnabled(enabled) {
+    if (!room || !room.localParticipant) return Promise.resolve()
+    return room.localParticipant.setMicrophoneEnabled(enabled, AUDIO_CAPTURE_OPTIONS)
+  }
 
   function showError(msg) {
     joinError.textContent = msg
@@ -416,6 +426,7 @@
       room = new LivekitClient.Room({
         adaptiveStream: true,
         dynacast: true,
+        audioCaptureDefaults: AUDIO_CAPTURE_OPTIONS,
       })
 
       // Wire up events
@@ -463,7 +474,7 @@
       roomLabel.textContent = roomName
 
       try {
-        await room.localParticipant.setMicrophoneEnabled(true)
+        await setLocalMicEnabled(true)
         micEnabled = true
       } catch (err) {
         micEnabled = false
@@ -506,6 +517,7 @@
 
   function updateMicBtn() {
     micBtn.className = 'ctrl-btn' + (micEnabled ? ' active' : ' muted-state')
+    micBtn.title = micEnabled ? 'Mute microphone' : 'Unmute microphone'
   }
 
   function updateCamBtn() {
@@ -526,7 +538,7 @@
     if (!room) return
     var nextEnabled = !micEnabled
     try {
-      await room.localParticipant.setMicrophoneEnabled(nextEnabled)
+      await setLocalMicEnabled(nextEnabled)
       micEnabled = nextEnabled
       updateMicBtn()
     } catch (err) {

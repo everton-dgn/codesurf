@@ -215,8 +215,9 @@ function filterTree(entries: TreeEntry[], query: string): TreeEntry[] {
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function FileIcon({ name, ext }: { name: string; ext: string }): JSX.Element {
-  const meta = SPECIAL_FILES[name] ?? EXT_META[ext] ?? {
-    label: ext.replace('.', '').slice(0, 3).toUpperCase() || 'TXT',
+  const safeExt = ext ?? ''
+  const meta = SPECIAL_FILES[name] ?? EXT_META[safeExt] ?? {
+    label: safeExt.replace('.', '').slice(0, 3).toUpperCase() || 'TXT',
     color: '#888',
     bg: '#252525'
   }

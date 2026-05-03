@@ -64,6 +64,8 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
     return { ok: false, message: 'Electrobun runtime did not respond to provider validation.', models: [], imageModels: [], videoModels: [] }
   }
 
+  if (channel === 'ext:list-sidebar') return { entries: [], tiles: [] }
+
   if (
     channel === 'workspace:list'
     || channel === 'workspace:listProjects'
@@ -76,7 +78,6 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
     || channel === 'dreaming:listRuns'
     || channel === 'extensions:list'
     || channel === 'ext:list'
-    || channel === 'ext:list-sidebar'
     || channel === 'ext:list-tiles'
     || channel === 'ext:list-chat-surfaces'
     || channel === 'ext:context-menu-items'
