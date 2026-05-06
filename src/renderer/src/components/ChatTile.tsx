@@ -49,7 +49,7 @@ import {
   type ToolPermissionDecision,
   type ToolPermissionRequest,
 } from './ai-elements/ToolPermission'
-import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
+import { handleBasicChatSurfaceRpc, normalizeChatSurfacePayload, type ChatSurfacePayload } from './chatSurfaceHostRpc'
 import { getCheckpointRestoreAction, isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
 import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap, type ChatComposerAutocompleteItem } from './chat/ChatComposer'
@@ -205,12 +205,9 @@ interface ActiveChatSurface {
   height: number
   minHeight: number
   /** Last payload pushed up from the iframe via surface.setPayload */
-  payload: null | {
-    kind: 'image' | 'text'
-    data: string
-    mime?: string
-    ext?: string
-  }
+  payload: ChatSurfacePayload | null
+  /** Per-surface state exposed through window.contex.tile.getState/setState. */
+  tileState: Record<string, unknown>
   /** Lightweight local context store for chat-surface peer coordination. */
   context: Record<string, unknown>
   /** Actions registered by the surface via window.contex.actions.register(). */
@@ -253,6 +250,8 @@ interface ChatTilePersistedState {
   input: string
   attachments: PendingAttachment[]
   queuedTurns?: QueuedChatTurn[]
+  openChatSurfaces?: ActiveChatSurface[]
+  activeChatSurfaceId?: string | null
   provider: string
   model: string
   mcpEnabled: boolean
@@ -321,6 +320,45 @@ function getImplicitPeerImageAttachments(peers: DiscoveryPeer[]): PendingAttachm
     .filter(peer => peer.peerType === 'image' && typeof peer.filePath === 'string' && isImagePath(peer.filePath))
     .map(peer => ({ path: peer.filePath!.trim(), kind: 'image' as const }))
     .filter(item => item.path.length > 0)
+}
+
+function normalizePersistedChatSurfaces(value: unknown): ActiveChatSurface[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item): ActiveChatSurface | null => {
+    if (!item || typeof item !== 'object') return null
+    const surface = item as Partial<ActiveChatSurface> & Record<string, unknown>
+    const extId = typeof surface.extId === 'string' ? surface.extId : ''
+    const surfaceId = typeof surface.surfaceId === 'string' ? surface.surfaceId : ''
+    const instanceId = typeof surface.instanceId === 'string' ? surface.instanceId : ''
+    const entryUrl = typeof surface.entryUrl === 'string' ? surface.entryUrl : ''
+    if (!extId || !surfaceId || !instanceId || !entryUrl) return null
+    const tileState = surface.tileState && typeof surface.tileState === 'object' && !Array.isArray(surface.tileState)
+      ? { ...(surface.tileState as Record<string, unknown>) }
+      : {}
+    const context = surface.context && typeof surface.context === 'object' && !Array.isArray(surface.context)
+      ? { ...(surface.context as Record<string, unknown>) }
+      : {}
+    const registeredActions = Array.isArray(surface.registeredActions)
+      ? surface.registeredActions
+        .filter((action: any) => action && typeof action.name === 'string')
+        .map((action: any) => ({ name: String(action.name), description: typeof action.description === 'string' ? action.description : '' }))
+      : []
+    return {
+      extId,
+      surfaceId,
+      label: typeof surface.label === 'string' && surface.label ? surface.label : surfaceId,
+      icon: typeof surface.icon === 'string' ? surface.icon : undefined,
+      instanceId,
+      entryUrl,
+      emits: surface.emits === 'text' ? 'text' : 'image',
+      height: typeof surface.height === 'number' && Number.isFinite(surface.height) ? surface.height : 260,
+      minHeight: typeof surface.minHeight === 'number' && Number.isFinite(surface.minHeight) ? surface.minHeight : 160,
+      payload: normalizeChatSurfacePayload(surface.payload ?? null),
+      tileState,
+      context,
+      registeredActions,
+    }
+  }).filter((surface): surface is ActiveChatSurface => !!surface)
 }
 
 type AutocompleteItem = ChatComposerAutocompleteItem
@@ -2541,8 +2579,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // Chat-surface extensions (e.g. Sketch, Builder) mounted above the composer.
   // Multiple surfaces can stay open as tabs so a sketch can sit beside its
   // enhanced builder output inside the same chat.
-  const [openChatSurfaces, setOpenChatSurfaces] = useState<ActiveChatSurface[]>([])
-  const [activeChatSurfaceId, setActiveChatSurfaceId] = useState<string | null>(null)
+  const [openChatSurfaces, setOpenChatSurfaces] = useState<ActiveChatSurface[]>(() => normalizePersistedChatSurfaces(initialRuntimeStateRef.current?.openChatSurfaces))
+  const [activeChatSurfaceId, setActiveChatSurfaceId] = useState<string | null>(() => initialRuntimeStateRef.current?.activeChatSurfaceId ?? null)
   const [chatSurfaceMenu, setChatSurfaceMenu] = useState<ChatSurfaceMenuEntry[]>([])
   const openChatSurfacesRef = useRef<ActiveChatSurface[]>([])
   useEffect(() => { openChatSurfacesRef.current = openChatSurfaces }, [openChatSurfaces])
@@ -3511,6 +3549,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       input,
       attachments,
       queuedTurns,
+      openChatSurfaces,
+      activeChatSurfaceId,
       executionTarget,
       provider,
       model,
@@ -3533,7 +3573,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       if (isChatTileRuntimeStateDisposed(tileId)) return
       setChatTileRuntimeState(tileId, latestStateRef.current)
     }
-  }, [tileId, messages, input, attachments, queuedTurns, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming])
+  }, [tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming])
 
   // Publish the latest task list for this tile so external chrome (tab bar,
   // sidebar) can surface the agent's current plan without drilling into
@@ -3651,6 +3691,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           createdAt: Number(item.createdAt) || Date.now(),
           parentId: typeof item.parentId === 'string' ? item.parentId : null,
         })))
+      }
+      if (Array.isArray(saved.openChatSurfaces)) {
+        const restoredSurfaces = normalizePersistedChatSurfaces(saved.openChatSurfaces)
+        setOpenChatSurfaces(restoredSurfaces)
+        if (typeof saved.activeChatSurfaceId === 'string' && restoredSurfaces.some(surface => surface.instanceId === saved.activeChatSurfaceId)) {
+          setActiveChatSurfaceId(saved.activeChatSurfaceId)
+        } else if (saved.activeChatSurfaceId === null) {
+          setActiveChatSurfaceId(null)
+        } else {
+          setActiveChatSurfaceId(restoredSurfaces[restoredSurfaces.length - 1]?.instanceId ?? null)
+        }
+      } else if (saved.activeChatSurfaceId === null) {
+        setActiveChatSurfaceId(null)
       }
       const savedProvider = typeof saved.provider === 'string' ? saved.provider : provider
       if (saved.provider) setProvider(saved.provider)
@@ -3817,7 +3870,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         persistTimerRef.current = null
       }
     }
-  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, persistLatestState])
+  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, persistLatestState])
 
   useEffect(() => {
     return () => {
@@ -5011,6 +5064,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       height: Math.max(entry.minHeight, entry.defaultHeight),
       minHeight: entry.minHeight,
       payload: null,
+      tileState: {},
       context: {},
       registeredActions: [],
     }])
@@ -5097,6 +5151,35 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               : candidate))
           }
           reply(basicRpc.result)
+          return
+        }
+
+        if (msg.method === 'tile.getState') {
+          const key = typeof msg.params?.key === 'string' ? msg.params.key : null
+          const liveSurface = openChatSurfacesRef.current.find(candidate => candidate.instanceId === surface.instanceId) ?? surface
+          const tileState = liveSurface.tileState && typeof liveSurface.tileState === 'object' ? liveSurface.tileState : {}
+          reply(key ? tileState[key] ?? null : tileState)
+          return
+        }
+
+        if (msg.method === 'tile.setState') {
+          let nextSurfaceState: Record<string, unknown> = {}
+          const nextSurfaces = openChatSurfacesRef.current.map(candidate => {
+            if (candidate.instanceId !== surface.instanceId) return candidate
+            const currentState = candidate.tileState && typeof candidate.tileState === 'object' ? candidate.tileState : {}
+            if (typeof msg.params?.key === 'string') {
+              nextSurfaceState = { ...currentState, [msg.params.key]: msg.params.value }
+            } else {
+              const data = msg.params?.data ?? msg.params ?? {}
+              nextSurfaceState = data && typeof data === 'object' && !Array.isArray(data)
+                ? { ...(data as Record<string, unknown>) }
+                : {}
+            }
+            return { ...candidate, tileState: nextSurfaceState }
+          })
+          openChatSurfacesRef.current = nextSurfaces
+          setOpenChatSurfaces(nextSurfaces)
+          reply(true)
           return
         }
 

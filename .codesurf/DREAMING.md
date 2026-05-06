@@ -1,7 +1,3 @@
-File is clean and written. Here is the full replacement content for `.codesurf/DREAMING.md`:
-
----
-
 # Workspace Memory — contex (collaborator-clone)
 
 Generated: 2026-05-04. Supplements CLAUDE.md/AGENTS.md — does not replace them.
@@ -12,7 +8,7 @@ Generated: 2026-05-04. Supplements CLAUDE.md/AGENTS.md — does not replace them
 
 **contex** is an Electron desktop app (v40.8.2) — infinite canvas workspace where AI agents and humans collaborate via tiles. Also branded **CodeSurf** (`electrobun.config.ts`, bundle ID `com.huggiapps.codesurf.electrobun`).
 
-Active branch: `main-merge`. HEAD: `cbbf1b5`. ~40+ dirty/untracked files uncommitted. CLAUDE.md and AGENTS.md both still reference `feature/event-bus-mcp` — stale in both.
+Active branch: `main-merge`. HEAD: `53747aa` ("Add daemon, chat app, tastes, and workspace memory"). Working tree clean as of 2026-05-04. CLAUDE.md/AGENTS.md still reference `feature/event-bus-mcp` — stale; actual branch is `main-merge`.
 
 ---
 
@@ -24,6 +20,7 @@ Active branch: `main-merge`. HEAD: `cbbf1b5`. ~40+ dirty/untracked files uncommi
 - Desktop is a rendering shell: input → output → daemon
 - Code-index lib modules must live in `grok-cli`, not the desktop
 - CLI/SDK providers own native execution state; CodeSurf collates normalized conversation output and stable pointers
+- Features involving intelligence, indexing, memory, or agent behavior belong in grok-cli — not the desktop repo
 
 ---
 
@@ -40,7 +37,7 @@ Active branch: `main-merge`. HEAD: `cbbf1b5`. ~40+ dirty/untracked files uncommi
 
 ### MCP Endpoints (two separate concerns)
 - **Agent tool MCP**: config at `~/.contex/mcp-server.json` — random port per launch; never hardcode
-- **Claude Code / Codex MCP**: `.mcp.json` at `http://127.0.0.1:56009/mcp` — hardcoded port; produces `data did not match any variant of untagged enum JsonRpcMessage` when contex is not running; always read live port from `~/.contex/mcp-server.json`
+- **Claude Code / Codex MCP**: `.mcp.json` at `http://127.0.0.1:56009/mcp` — hardcoded port; produces `data did not match any variant of untagged enum JsonRpcMessage` when contex is not running
 
 ### Persistence
 - `~/.contex/workspaces/{id}/canvas.json` (500ms debounce auto-save)
@@ -48,131 +45,89 @@ Active branch: `main-merge`. HEAD: `cbbf1b5`. ~40+ dirty/untracked files uncommi
 - `~/.contex/mcp-server.json` (MCP config)
 - `~/.codesurf/` (daemon state — **distinct from `~/.contex/`**)
 
-### Style
-- Dark `#1e1e1e`/`#252525`/`#333`; Tailwind + inline `React.CSSProperties`; strict TS; 2-space, trailing commas, no semicolons; no emoji
-- Extension tiles: `body.dark` via bridge, solid hex only, never `prefers-color-scheme`
-
 ---
 
 ## Internal Packages
 
 | Package | Description |
 |---|---|
-| `packages/codesurf-daemon/` | `@codesurf/daemon` v0.1.0 — `DaemonManager`, `DaemonClient`, `paths.ts`; all `bin/*.mjs` are shims pointing here; **untracked — must commit before merge** |
+| `packages/codesurf-daemon/` | `@codesurf/daemon` v0.1.0 — `DaemonManager`, `DaemonClient`, `paths.ts`; all `bin/*.mjs` are shims; committed in `53747aa` |
 | `packages/codesurf-dreaming/` | `@codesurf/dreaming` v0.1.0 — `consolidate(sessions) → string` |
-| `packages/contex-relay/` | `@contex/relay` v0.1.0 — local-first agent messaging; archive at `<workspace>/.contex/relay/` |
-| `packages/contex-chat-bridge/` | `@contex/chat-bridge` v0.1.0 — `PROTOCOL_VERSION=1`, `BRIDGE_NAMESPACE='contex-chat-bridge'`; exports: `onContext`, `callHost`, `subscribe`, `BridgeContext`, `ChannelName` |
+| `packages/contex-relay/` | `@contex/relay` v0.1.0 — local-first agent messaging |
+| `packages/contex-chat-bridge/` | `@contex/chat-bridge` v0.1.0 — `PROTOCOL_VERSION=1`, `BRIDGE_NAMESPACE='contex-chat-bridge'`; exports: `onContext`, `callHost`, `subscribe` |
 | `apps/chat-app/` | Standalone chat web app — `@assistant-ui/react` + Vercel AI SDK v6 + Tailwind 4; webview host target |
 
 ---
 
-## Daemon Package — Stable
+## Taste / Behavioral Preferences (`.commandcode/taste/`)
 
-- All package-level tests pass as of 2026-05-04
-- Permission routes: `/permissions`, `/permissions/grant`, `/permissions/resolve`, `/permissions/replace`, `/permissions/clear` — integration-tested
-- `DaemonManagerConfig` requires: `homeDir`, `getAppVersion()`, `resolveDaemonScriptPath()`, optional `extraEnv()`
-- Desktop wires via `src/main/daemon/client.ts` + `manager.ts` — thin shims; daemon logic must not go here
-- `createDaemonClient({ ensureRunning, getStatus, invalidate })` pattern confirmed
+Committed in `53747aa`. Captured learned user preferences:
 
----
-
-## Chat Tile V2 (assistant-ui pivot)
-
-**V1 `ChatTile.tsx` (~8,764 LOC, ~83 useState, ~40 IPC channels, ~12,372 LOC total surface) is still live and must remain until V2 reaches full parity.**
-
-- V2 scaffolded in `apps/chat-app/`; confirmed on disk: `ChatApp.tsx`, `main.tsx`, `Thread.tsx`, `styles.css`, `runtime/ContexRuntimeProvider.tsx`
-- `ChatApp.tsx`: `onContext` from `@contex/chat-bridge`; 1.5s standalone fallback; injects `ctx.theme`/`ctx.fonts` as CSS vars on `document.documentElement`; header shows tile ID + workspace dir when connected, amber dot for standalone
-- `ContexRuntimeProvider.tsx`: subscribes to `stream:${tileId}` channel; calls `callHost('chat.send', { cardId, workspaceId, workspaceDir, messages })` and `callHost('chat.stop', tileId)`; 120ms standalone echo fallback; handles `text`/`done`/`error` chunk types only — **thinking/tool_*/permission chunk types explicitly deferred**
-- `Thread.tsx`: `@assistant-ui/react` primitives; `--thread-max-width: 48rem`; welcome screen with `sm:grid-cols-2` suggestion grid; Composer with paperclip/send/stop; ScrollToBottom; UserMessage/AssistantMessage; `lucide-react` icons
-- `chatRequestAdapter.ts` — planned decoupling layer; **not yet on disk**
-- Parity gate: `.planning/chat-tile-v2-parity.md` (~1,144 lines); V1 props: `tileId, workspaceId, workspaceDir, width, height, reloadToken, settings, onChatModePreferenceChange, isConnected, isAutoConnected, connectedPeers`
-- V2 portability targets: contex desktop, mini-window, daemon web UI, mcp-app-studio widget, Swift WKWebView (muxy)
+- **Communication**: act immediately on permission; no clarifying questions when user says "do it"; NEVER guess or fallback — exact matches only
+- **Workflow**: task list + systematic execution for "Make a list and get them all DONE"; single-issue focus for "just that ONE thing"
+- **Architecture**: preserve exact functionality when porting; keep extension dev in `examples/extensions/`; read agent files before asking questions
+- **UI/UX tabs**: inactive/active tab text must align vertically; activity indicators in left gutter (dead space); indicators visible only on unread updates; main tab background matches canvas background
+- **Chat UI**: "UNKNOWN" tool chips are upstream emission gaps, not renderer bugs; "Exploring workspace" is intentional synthetic tool from daemon
+- **Shiki**: CSS-based overrides with versioned style IDs to defeat HMR staleness
 
 ---
 
-## ChatTile V1 Performance Work (uncommitted)
+## Recent Feature Areas (2026-05-04)
 
-- Pagination: `CHAT_RENDER_PAGE_SIZE=20`, `CHAT_INITIAL_RENDER_PAGES=2`, `CHAT_INITIAL_RENDER_WINDOW=40`; `content-visibility: auto`, `containIntrinsicSize: '0 160px'`
-- Lazy Shiki: `useStreamdownPlugins(text)` hook — bare `streamdownPlugins` export is now `{}`; callers must use hook
-- Render perf probe in `src/main/index.ts`: `CODESURF_PERF_RENDER=1`; `CODESURF_PERF_EXIT_AFTER_RENDER=1`; `scripts/measure-render.js` exists on disk (untracked)
+Active development confirmed by session evidence and file modification times.
 
----
+### Notes Tiles
+- `NotesTile.tsx` — browsing tile for a folder of markdown note files
+- `NotesEditorTile.tsx` — editing tile for individual markdown notes
+- Notes folder contents can be shared with agents as context (per session intent)
+- Both tiles registered in `App.tsx`
 
-## Agent and Relay Subsystems
+### Builder Tile
+- `BuilderTile.tsx` — agent-driven tile that creates new canvas tiles via `tool_use`
+- Canvas placement for newly created tiles was under active iteration (multiple `App.tsx` passes around positioning logic)
+- **Known broken**: builder does not persist build history across sessions; three consecutive sessions on 2026-05-04 at 18:24–18:34 failed with `Error: fetch failed` — root cause undiagnosed
 
-### `src/main/agents/` (all tracked)
-- `agent-adapter-registry.ts` — `AGENT_ADAPTER_DEFINITIONS: AgentAdapterDefinition[]`; `capabilities(enabled, notes?)` helper
-- `agent-adapter-types.ts` — `AgentAdapterCapabilityId`: `headlessRun | streamJson | resume | modelSelect | cwdSelect | approvalMode | mcp | acp | sessionImport | readOnlyHistory`; `AgentAdapterExecutionShape`: `native-sdk | headless-cli | daemon-cli | acp-capable | server-capable | import-only`
-- `agent-cli-contracts.ts` — arg builders/output parsers; `resolveHermesModelSelection` handles `vendor/model` prefix strings
-- `opencode-permissions.ts` — **untracked (new, not committed)**; `READ_SAFE_PERMISSIONS` always allowed; `RISKY_PERMISSIONS` denied/prompted/allowed per mode; `DAEMON_AUTOREAD_PREFIXES`: `~/.contex/chat-attachments/`, `~/.contex/chat-vision/`, `/tmp/contex-chat-attach/`
+### Extension Sidebar
+- `src/renderer/src/extensions/sidebar-extension.ts` iteratively reworked on 2026-05-04
+- Target behavior: file-system navigator tree view + Cmd+P fuzzy file finder
+- Port toward `extensions/sidebar/` directory structure is in progress — do not assume old `sidebar-extension.ts` is canonical or complete
 
-### `src/main/relay/`
-- `registration.ts` — `isRelayHostActive()` / `setRelayHostActive()` guard prevents double-registration of `relay:*` IPC handlers
-- `service.ts` — `WorkspaceRelayInstance` holds `ContexRelay` + `RelayRuntime`; wires relay events to main-process bus; loads tile state via `loadWorkspaceTileState`
-- `provider-executor.ts` — **tracked, modified, uncommitted**; implements `RelayAgentExecutor`; bridges relay spawn to provider session maps; relay contract drift risk; session maps: `claudeSessions`, `hermesSessions`, `openClawSessions`
+### Preference Pane
+- `PreferencePane.tsx` — new tabbed preferences UI component
+- MCP server tools list surfaced in settings; multiple `SettingsPanel.tsx` edits on same day
+- Wired into `App.tsx`
 
----
+### Chat Tile
+- Tool chip rendering aligned between backend emission format and frontend display
+- Cursor/composer mode wired up
+- `ChatTile.tsx` received many independent edits on 2026-05-04; treat as actively evolving
 
-## Provider Mode Resolution (`src/renderer/src/config/providers.ts`)
-
-- `resolveProviderModeId(providerId, preferredModeId?)` — always use; never hardcode mode strings
-- `getApproxContextWindowTokens(providerId, modelId)` — GPT-5.x → 258K; o3/o4/Claude → 200K; others → 128K
-- `DEFAULT_MODELS: Record<BuiltinProvider, ModelOption[]>` — authoritative model list for this repo; must stay in sync with grok-cli `MODELS`
-- Permission modes: Claude (default/acceptEdits/plan/bypassPermissions), Codex (default/auto/read-only/full-access), OpenCode (default/plan/bypassPermissions), OpenClaw (default/auto/plan/full-auto), Hermes (full/terminal/web/query)
-
----
-
-## Code-Index Extension
-
-- Scaffolded as `examples/extensions/code-index/` (untracked); has `extension.json`, `main.js`, `tiles/dashboard/`, `lib/`, `evals/`, `vitest.config.mjs`
-- Implementation logic belongs in `grok-cli`, not this desktop repo — extension manifest here only
-
----
-
-## TypeScript-Go Integration
-
-- `scripts/dev-go.js` — on disk, **untracked**; TypeScript-Go fast typechecker in watch mode; `CODESURF_MAX_OLD_SPACE_SIZE_MB` env var (default 8192)
-- `tsconfig.tsgo.json` — on disk, **untracked**; tsgo-specific config
-- `bun run typecheck` clean as of 2026-05-04
-
----
-
-## grok-cli (`~/Documents/GitHub/grok-cli/`) — Separate Repo
-
-- Desktop is a thin shell; all intelligence goes here
-- **RAG fix (confirmed resolved 2026-05-04):** nested `sharp@0.32.6` in `@xenova/transformers` caused duplicate libvips delegate when root `sharp@0.34.5` also loaded. Fix: `package.json` + `bun.lock` override forces `sharp@^0.34.5` across all transitive deps. Verified: only one `@img/sharp-libvips-darwin-arm64` dylib present; no duplicate delegate warning on import; typecheck clean; targeted RAG/code-index tests pass. Override must remain — do not remove.
-- `MODELS` array in `src/core/extensions/builtin/codesurf-desktop-provider.ts` must mirror `DEFAULT_MODELS` in desktop `providers.ts`
-- **Model catalog wrapper (partial):** `bin/codesurfd.mjs` patches daemon HTTP server to serve authenticated `GET /chat/model-catalog` before delegating to `@codesurf/daemon`; `src/daemon/codesurf-daemon.ts` updated to prefer this wrapper via `resolveDaemonScriptPath()`; live HTTP smoke blocked by sandbox network-bind EPERM (not a regression). Desktop provider still has hard-coded model list — wire-up incomplete.
-- **SSE stream fix:** provider tracks daemon event `sequence`, checks `/chat/job/state` after premature EOF, reattaches with `since=<last sequence>`
-- **Daemon-as-source cleanup:** provider uses `getCodesurfDaemonBridge(home)` — do not parse pid files directly
-- **Split-session fix:** retrospective repair tool at `src/daemon/session-repair.ts`
-- Three pre-existing test failures (not regressions): Anthropic provider default enablement, payments group default enablement, Anthropic credential rejection expectation
+### Grok Build Variant
+- Separate build of contex exists where Grok is available as a provider
+- One session on 2026-05-04 worked on fixing the integration; changes landed in `ChatTile.tsx` and `App.tsx`
+- Treat as a known build variant; integration completeness not confirmed
 
 ---
 
 ## Open Threads
 
-- `packages/codesurf-daemon/` is untracked — blocks clean merge; must commit
-- `opencode-permissions.ts` untracked — must commit
-- `provider-executor.ts` modified/uncommitted — relay contract drift risk
-- V2 `ContexRuntimeProvider` — thinking/tool_*/permission chunk types not yet mapped; full parity gated on `.planning/chat-tile-v2-parity.md`
-- `chatRequestAdapter.ts` planned but not on disk
-- ChatTile V1 perf work (pagination + lazy Shiki) uncommitted — commit or stash before merge
-- `scripts/dev-go.js` and `tsconfig.tsgo.json` untracked — TypeScript-Go integration not fully wired
-- `examples/extensions/code-index/` untracked — confirm commit or ignore
-- `.commandcode/` and `.grok/` — add to `.gitignore`
-- grok-cli desktop provider still uses hard-coded model list; daemon route exists via wrapper, wire-up not done
-- CLAUDE.md and AGENTS.md branch name stale — both say `feature/event-bus-mcp`; actual branch is `main-merge`
+- **Builder history persistence broken** — `Error: fetch failed` in three consecutive sessions; active bug, not diagnosed
+- **Extension sidebar port in progress** — old `sidebar-extension.ts` being replaced by `extensions/sidebar/`; do not assume either file is fully authoritative
+- **V2 `ContexRuntimeProvider`** — thinking/tool_*/permission chunk types not mapped; parity gated on `.planning/chat-tile-v2-parity.md`
+- **`chatRequestAdapter.ts`** — planned but not confirmed on disk
+- **grok-cli model catalog wire-up** — desktop provider has hard-coded model list; daemon `/chat/model-catalog` route exists but connection incomplete
+- **Relay contract drift risk** — `provider-executor.ts`
+- **CLAUDE.md/AGENTS.md branch name stale** — still say `feature/event-bus-mcp`; actual is `main-merge`
+- **`.commandcode/` and `.grok/`** — confirm `.gitignore` status (currently committed)
 
 ---
 
 ## Stable Contracts (Do Not Break)
 
-- MCP port random — always read `~/.contex/mcp-server.json`; never hardcode; `.mcp.json` is a stale approximation
-- `~/.codesurf/` (daemon state) ≠ `~/.contex/` (MCP config + workspaces) — do not conflate
+- MCP port random — always read `~/.contex/mcp-server.json`; never hardcode
+- `~/.codesurf/` (daemon) ≠ `~/.contex/` (workspaces/MCP) — do not conflate
 - `App.tsx` ~1700 LOC — surgical edits only; canvas undo max 50 snapshots; never push to undo stack in hot paths
 - `node-pty` requires `npm run rebuild` after native dep changes
-- `cluso-widget` is `file:../agentation-real` — optional; build degrades silently if absent
 - Extension tiles: `body.dark` via bridge; solid hex only; no `prefers-color-scheme`
 - No emoji; `resolveProviderModeId` always; IPC `{feature}:{action}`
 - Chat V2 bridge: `PROTOCOL_VERSION=1`, `BRIDGE_NAMESPACE='contex-chat-bridge'`; stream channel: `stream:${tileId}`
@@ -180,7 +135,7 @@ Active branch: `main-merge`. HEAD: `cbbf1b5`. ~40+ dirty/untracked files uncommi
 - Relay host guard: check `isRelayHostActive()` before registering `relay:*` IPC handlers
 - grok-cli RAG: top-level `sharp` override in `package.json` must remain to prevent duplicate libvips
 - grok-cli provider: use `getCodesurfDaemonBridge(home)` — do not parse pid files directly
-- grok-cli daemon wrapper: `bin/codesurfd.mjs` serves `/chat/model-catalog`; resolve via `resolveDaemonScriptPath()`
+- When porting code, preserve exact functionality — do not reinterpret or simplify
 
 ---
 

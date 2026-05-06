@@ -99,6 +99,31 @@
     flex-shrink: 0;
   }
 
+  .variant-head-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+
+  .history-select {
+    max-width: 190px;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid var(--ct-border, rgba(0,0,0,.1));
+    background: var(--ct-panel-2, rgba(0,0,0,.06));
+    color: var(--ct-text, #111);
+    font: inherit;
+    font-size: 11px;
+    outline: none;
+  }
+
+  .history-select:disabled {
+    opacity: 0.55;
+  }
+
   .variant-head-copy {
     min-width: 0;
     display: flex;
@@ -482,6 +507,10 @@
     display: none;
   }
 
+  html[data-render-mode="chat"] .history-select {
+    max-width: 132px;
+  }
+
   html[data-render-mode="chat"] .variant-preview {
     min-height: 132px;
   }
@@ -538,7 +567,10 @@
             <div class="variant-head-title">Variants</div>
             <div class="variant-head-subtitle">Large previews side by side in the active light or dark theme.</div>
           </div>
-          <div id="variantCounter" class="ct-pill">0 variants</div>
+          <div class="variant-head-actions">
+            <select id="historySelect" class="history-select" title="Build history" aria-label="Build history"></select>
+            <div id="variantCounter" class="ct-pill">0 variants</div>
+          </div>
         </div>
         <div class="variant-grid-wrap">
           <div id="variantGrid" class="variant-grid"></div>
@@ -611,6 +643,12 @@
 
 <script>
   var DEFAULTS = { apiKey: '', model: 'anthropic/claude-sonnet-4', baseUrl: 'https://openrouter.ai/api/v1' };
+  var STATE_VERSION = 1;
+  var HISTORY_LIMIT = 30;
+  var STATE_STORAGE_PREFIX = 'builder-state-v1:';
+  var TILE_STATE_KEY = 'builderState';
+  var persistTimer = null;
+  var localStateKeyCache = null;
   var SYSTEM_PROMPT = 'You are an expert UI builder. Return ONLY valid HTML or a full HTML document. Never return markdown, code fences, or prose. Produce polished, product-facing UI with strong hierarchy, careful spacing, and restrained styling. Default to the host theme provided in the prompt unless the prompt explicitly asks for a different visual theme. IMPORTANT: match the requested scope. If the prompt asks for a component, control, tab bar, nav bar, card, panel, or other partial UI, output only that component at natural bounds. Do NOT wrap small UI in a full phone screen, browser window, device mockup, or giant empty application shell unless the prompt explicitly asks for that whole screen.';
 
   var state = {
@@ -622,6 +660,9 @@
     activeVariantId: null,
     wantedRefs: [],
     expandedVariantId: null,
+    currentBuildId: null,
+    history: [],
+    loadingPersistedState: false,
     generating: false,
     abortCtrl: null,
     peerContext: {},
@@ -652,6 +693,218 @@
 
   function saveConfig(config) {
     localStorage.setItem('builder-config', JSON.stringify(config));
+  }
+
+  function urlParam(name) {
+    try {
+      return new URLSearchParams(window.location.search || '').get(name) || '';
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function localStateKeys() {
+    if (!localStateKeyCache) {
+      var surfaceKind = urlParam('surfaceKind') || (urlParam('renderMode') === 'chat' ? 'chat' : '');
+      var mode = surfaceKind === 'chat' ? 'chat' : 'tile';
+      var id = urlParam('tileId') || urlParam('surfaceId') || (window.contex && window.contex.tileId) || 'default';
+      localStateKeyCache = STATE_STORAGE_PREFIX + mode + ':' + id;
+    }
+    var keys = [localStateKeyCache];
+    if (localStateKeyCache.indexOf(STATE_STORAGE_PREFIX + 'chat:') === 0) {
+      keys.push(STATE_STORAGE_PREFIX + 'chat:latest');
+    }
+    return keys;
+  }
+
+  function loadLocalState() {
+    var keys = localStateKeys();
+    for (var i = 0; i < keys.length; i++) {
+      try {
+        var raw = localStorage.getItem(keys[i]);
+        if (!raw) continue;
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch (err) {}
+    }
+    return null;
+  }
+
+  function saveLocalState(snapshot) {
+    var keys = localStateKeys();
+    for (var i = 0; i < keys.length; i++) {
+      try {
+        localStorage.setItem(keys[i], JSON.stringify(snapshot));
+      } catch (err) {}
+    }
+  }
+
+  function cloneVariant(variant) {
+    if (!variant || typeof variant !== 'object') return null;
+    var html = typeof variant.html === 'string' ? variant.html : '';
+    var prompt = typeof variant.prompt === 'string' ? variant.prompt : '';
+    return {
+      id: typeof variant.id === 'string' && variant.id ? variant.id : uid('variant'),
+      label: typeof variant.label === 'string' && variant.label ? variant.label : 'Variant',
+      prompt: prompt,
+      html: html,
+      status: variant.status === 'error' || variant.status === 'generating' ? variant.status : (html ? 'ready' : 'empty')
+    };
+  }
+
+  function cloneWantedRef(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    return {
+      sourceId: typeof snapshot.sourceId === 'string' ? snapshot.sourceId : '',
+      label: typeof snapshot.label === 'string' && snapshot.label ? snapshot.label : 'Reference',
+      html: typeof snapshot.html === 'string' ? snapshot.html : ''
+    };
+  }
+
+  function sanitizeVariants(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map(cloneVariant).filter(Boolean).slice(0, 3);
+  }
+
+  function sanitizeWantedRefs(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map(cloneWantedRef).filter(function(item) { return item && item.html; }).slice(0, 12);
+  }
+
+  function currentPromptValue() {
+    var input = $('prompt');
+    return input ? input.value.trim() : '';
+  }
+
+  function historyTitle(prompt, createdAt) {
+    var trimmed = String(prompt || '').trim();
+    if (trimmed) return truncate(trimmed, 64);
+    try { return 'Build ' + new Date(createdAt || Date.now()).toLocaleString(); } catch (err) { return 'Build'; }
+  }
+
+  function sanitizeHistory(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map(function(item) {
+      if (!item || typeof item !== 'object') return null;
+      var variants = sanitizeVariants(item.variants);
+      if (!variants.length) return null;
+      var createdAt = Number(item.createdAt) || Date.now();
+      var activeId = typeof item.activeVariantId === 'string' && variants.some(function(variant) { return variant.id === item.activeVariantId; })
+        ? item.activeVariantId
+        : variants[0].id;
+      var prompt = typeof item.prompt === 'string' ? item.prompt : (variants[0] ? variants[0].prompt : '');
+      return {
+        id: typeof item.id === 'string' && item.id ? item.id : uid('build'),
+        title: typeof item.title === 'string' && item.title ? item.title : historyTitle(prompt, createdAt),
+        prompt: prompt,
+        variants: variants,
+        activeVariantId: activeId,
+        wantedRefs: sanitizeWantedRefs(item.wantedRefs),
+        createdAt: createdAt,
+        updatedAt: Number(item.updatedAt) || createdAt
+      };
+    }).filter(Boolean).sort(function(a, b) {
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    }).slice(0, HISTORY_LIMIT);
+  }
+
+  function snapshotCurrentBuild() {
+    if (!state.currentBuildId && !state.variants.length) return null;
+    if (!state.currentBuildId) state.currentBuildId = uid('build');
+    var variants = sanitizeVariants(state.variants);
+    if (!variants.length) return null;
+    var existing = state.history.find(function(item) { return item.id === state.currentBuildId; });
+    var prompt = (variants[0] ? variants[0].prompt : '') || currentPromptValue();
+    var createdAt = existing ? existing.createdAt : Date.now();
+    var activeId = state.activeVariantId && variants.some(function(variant) { return variant.id === state.activeVariantId; })
+      ? state.activeVariantId
+      : variants[0].id;
+    return {
+      id: state.currentBuildId,
+      title: historyTitle(prompt, createdAt),
+      prompt: prompt,
+      variants: variants,
+      activeVariantId: activeId,
+      wantedRefs: sanitizeWantedRefs(state.wantedRefs),
+      createdAt: createdAt,
+      updatedAt: Date.now()
+    };
+  }
+
+  function syncCurrentBuildToHistory() {
+    var snapshot = snapshotCurrentBuild();
+    if (!snapshot) return;
+    state.history = [snapshot].concat(state.history.filter(function(item) { return item.id !== snapshot.id; }))
+      .sort(function(a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); })
+      .slice(0, HISTORY_LIMIT);
+  }
+
+  function serializeBuilderState() {
+    return {
+      version: STATE_VERSION,
+      currentBuildId: state.currentBuildId,
+      prompt: currentPromptValue(),
+      variantCount: state.variantCount,
+      variants: sanitizeVariants(state.variants),
+      activeVariantId: state.activeVariantId,
+      wantedRefs: sanitizeWantedRefs(state.wantedRefs),
+      history: sanitizeHistory(state.history),
+      updatedAt: Date.now()
+    };
+  }
+
+  function applyPersistedState(saved) {
+    if (!saved || typeof saved !== 'object') return false;
+    var variants = sanitizeVariants(saved.variants);
+    var history = sanitizeHistory(saved.history);
+    state.history = history;
+    state.currentBuildId = typeof saved.currentBuildId === 'string' && saved.currentBuildId ? saved.currentBuildId : (variants.length ? uid('build') : null);
+    if (Number(saved.variantCount) >= 1 && Number(saved.variantCount) <= 3) state.variantCount = Number(saved.variantCount);
+    state.variants = variants;
+    state.activeVariantId = typeof saved.activeVariantId === 'string' && variants.some(function(variant) { return variant.id === saved.activeVariantId; })
+      ? saved.activeVariantId
+      : (variants[0] ? variants[0].id : null);
+    state.wantedRefs = sanitizeWantedRefs(saved.wantedRefs);
+    state.expandedVariantId = null;
+    if (typeof saved.prompt === 'string' && $('prompt')) {
+      $('prompt').value = saved.prompt;
+    }
+    setVariantCount(state.variantCount);
+    return true;
+  }
+
+  function hydratePersistedState() {
+    if (!window.contex || !window.contex.tile || typeof window.contex.tile.getState !== 'function') return Promise.resolve(false);
+    state.loadingPersistedState = true;
+    return window.contex.tile.getState(TILE_STATE_KEY).then(function(saved) {
+      if (saved && typeof saved === 'object') applyPersistedState(saved);
+      return true;
+    }).catch(function() {
+      return false;
+    }).then(function(result) {
+      state.loadingPersistedState = false;
+      render();
+      return result;
+    });
+  }
+
+  function persistBuilderState() {
+    if (state.loadingPersistedState) return;
+    syncCurrentBuildToHistory();
+    var snapshot = serializeBuilderState();
+    saveLocalState(snapshot);
+    if (window.contex && window.contex.tile && typeof window.contex.tile.setState === 'function') {
+      window.contex.tile.setState(TILE_STATE_KEY, snapshot).catch(function() {});
+    }
+  }
+
+  function schedulePersistBuilderState() {
+    if (state.loadingPersistedState) return;
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(function() {
+      persistTimer = null;
+      persistBuilderState();
+    }, state.generating ? 250 : 120);
   }
 
   function uid(prefix) {
@@ -743,11 +996,13 @@
     Array.prototype.forEach.call(document.querySelectorAll('#variantCountControl .segment-btn'), function(button) {
       button.classList.toggle('active', Number(button.getAttribute('data-count')) === count);
     });
+    schedulePersistBuilderState();
   }
 
   function selectVariant(id) {
     state.activeVariantId = id;
     render();
+    schedulePersistBuilderState();
   }
 
   function toggleWantedRef(variant) {
@@ -762,6 +1017,7 @@
       });
     }
     render();
+    schedulePersistBuilderState();
   }
 
   function openExpandedVariant(id) {
@@ -777,6 +1033,22 @@
 
   function isVariantWanted(variantId) {
     return state.wantedRefs.some(function(item) { return item.sourceId === variantId; });
+  }
+
+  function restoreHistoryItem(buildId) {
+    var item = state.history.find(function(entry) { return entry.id === buildId; });
+    if (!item) return;
+    state.currentBuildId = item.id;
+    state.variants = sanitizeVariants(item.variants);
+    state.activeVariantId = item.activeVariantId && state.variants.some(function(variant) { return variant.id === item.activeVariantId; })
+      ? item.activeVariantId
+      : (state.variants[0] ? state.variants[0].id : null);
+    state.wantedRefs = sanitizeWantedRefs(item.wantedRefs);
+    state.expandedVariantId = null;
+    if ($('prompt')) $('prompt').value = item.prompt || '';
+    hideError();
+    render();
+    schedulePersistBuilderState();
   }
 
   function publishChatSurfacePayload(htmlValue) {
@@ -801,11 +1073,22 @@
         html: truncate(variant.html, 160),
       };
     });
+    var historySummaries = state.history.slice(0, 12).map(function(item) {
+      return {
+        id: item.id,
+        title: item.title,
+        prompt: truncate(item.prompt, 140),
+        variantCount: item.variants.length,
+        updatedAt: item.updatedAt,
+      };
+    });
     window.contex.context.set('ctx:artifact:ready', !!selected);
     window.contex.context.set('ctx:artifact:status', status || (state.generating ? 'generating' : (selected ? 'ready' : 'empty')));
     window.contex.context.set('ctx:artifact:html', selected ? selected.html : '');
     window.contex.context.set('ctx:artifact:variants', summaries);
     window.contex.context.set('ctx:builder:variantCount', state.variantCount);
+    window.contex.context.set('ctx:builder:currentBuildId', state.currentBuildId);
+    window.contex.context.set('ctx:builder:history', historySummaries);
     if (errorMessage !== undefined) window.contex.context.set('ctx:artifact:error', errorMessage || null);
     publishChatSurfacePayload(selected ? selected.html : '');
   }
@@ -860,10 +1143,12 @@
     if (state.abortCtrl) state.abortCtrl.abort();
     state.abortCtrl = new AbortController();
 
+    state.currentBuildId = uid('build');
     state.variants = [];
     state.activeVariantId = null;
     setGenerating(true);
     render();
+    schedulePersistBuilderState();
 
     try {
       for (var i = 1; i <= state.variantCount; i++) {
@@ -969,6 +1254,7 @@
     var empty = $('emptyState');
     grid.innerHTML = '';
     empty.style.display = state.variants.length ? 'none' : 'flex';
+    $('variantCounter').textContent = state.variants.length + ' variant' + (state.variants.length === 1 ? '' : 's');
     if (!state.variants.length) return;
 
     grid.style.gridTemplateColumns = 'repeat(' + state.variants.length + ', minmax(0, 1fr))';
@@ -1001,8 +1287,6 @@
       card.querySelector('iframe').srcdoc = buildSrcdoc(variant.html || '');
       grid.appendChild(card);
     });
-
-    $('variantCounter').textContent = state.variants.length + ' variant' + (state.variants.length === 1 ? '' : 's');
   }
 
   function renderExpandedVariant() {
@@ -1031,13 +1315,44 @@
     $('peerContextSummary').textContent = '';
   }
 
+  function renderHistoryControls() {
+    var select = $('historySelect');
+    if (!select) return;
+    select.innerHTML = '';
+    var history = sanitizeHistory(state.history);
+    state.history = history;
+    if (!history.length) {
+      var emptyOption = document.createElement('option');
+      emptyOption.value = '';
+      emptyOption.textContent = 'No build history';
+      select.appendChild(emptyOption);
+      select.disabled = true;
+      return;
+    }
+    select.disabled = false;
+    var placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Build history';
+    select.appendChild(placeholder);
+    history.forEach(function(item) {
+      var option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.id === state.currentBuildId ? 'Current: ' + item.title : item.title;
+      select.appendChild(option);
+    });
+    select.value = state.currentBuildId || '';
+  }
+
   function render() {
+    syncCurrentBuildToHistory();
     renderWantedChips();
     renderGrid();
+    renderHistoryControls();
     renderContextSummary();
     renderExpandedVariant();
     syncPromptHeight();
     publishBuilderContext(state.generating ? 'generating' : (state.variants.length ? 'ready' : 'empty'), null);
+    schedulePersistBuilderState();
   }
 
   function openSettings() {
@@ -1065,6 +1380,7 @@
   function initContex() {
     if (!window.contex || state.contexReady) return;
     state.contexReady = true;
+    hydratePersistedState();
 
     if (window.contex.context) {
       window.contex.context.onPeerContextChanged(function(data) {
@@ -1092,9 +1408,12 @@
         var html = params && (params.html || params.content) ? String(params.html || params.content) : '';
         var cleanHtml = extractHtmlOnly(html);
         if (!cleanHtml) return { ok: false, error: 'Missing html' };
+        state.currentBuildId = uid('build');
         state.variants = [{ id: uid('variant'), label: 'Variant 1', prompt: $('prompt').value.trim(), html: cleanHtml, status: 'ready' }];
         state.activeVariantId = state.variants[0].id;
+        syncCurrentBuildToHistory();
         render();
+        persistBuilderState();
         return { ok: true };
       });
 
@@ -1111,13 +1430,16 @@
         return {
           status: state.generating ? 'generating' : (state.variants.length ? 'ready' : 'empty'),
           variantCount: state.variants.length,
-          activeVariantId: state.activeVariantId
+          activeVariantId: state.activeVariantId,
+          currentBuildId: state.currentBuildId,
+          historyCount: state.history.length
         };
       });
 
       window.contex.actions.register('setPrompt', 'Set the current Builder prompt', function(params) {
         $('prompt').value = params && params.prompt ? String(params.prompt) : '';
         syncPromptHeight();
+        schedulePersistBuilderState();
         return { ok: true };
       });
 
@@ -1143,6 +1465,7 @@
         state.activeVariantId = null;
         state.wantedRefs = [];
         state.expandedVariantId = null;
+        state.currentBuildId = null;
         state.generating = false;
         state.peerContext = {};
         $('prompt').value = '';
@@ -1160,6 +1483,13 @@
     Array.prototype.forEach.call(document.querySelectorAll('#variantCountControl .segment-btn'), function(button) {
       button.onclick = function() { setVariantCount(Number(button.getAttribute('data-count'))); };
     });
+    $('historySelect').onchange = function() {
+      if (this.value) restoreHistoryItem(this.value);
+    };
+
+    state.loadingPersistedState = true;
+    applyPersistedState(loadLocalState());
+    state.loadingPersistedState = false;
 
     setVariantCount(state.variantCount);
     $('generateBtn').onclick = generateVariants;
@@ -1169,13 +1499,18 @@
     $('settingsOverlay').onclick = function(event) { if (event.target === $('settingsOverlay')) closeSettings(); };
     $('expandOverlay').onclick = function(event) { if (event.target === $('expandOverlay')) closeExpandedVariant(); };
     $('expandCloseBtn').onclick = closeExpandedVariant;
-    $('prompt').addEventListener('input', syncPromptHeight);
+    $('prompt').addEventListener('input', function() {
+      syncPromptHeight();
+      schedulePersistBuilderState();
+    });
     $('prompt').addEventListener('keydown', function(event) {
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         generateVariants();
       }
     });
+    window.addEventListener('pagehide', persistBuilderState);
+    window.addEventListener('beforeunload', persistBuilderState);
 
     if (!state.config.apiKey) showError('Set your API key in Builder settings to enable generation.');
     setGenerating(false);
