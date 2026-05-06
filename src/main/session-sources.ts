@@ -69,7 +69,7 @@ export type ImportedContentBlock =
   | { type: 'tool'; toolId: string }
 
 const STANDARD_CODESURF_SUBDIRS = ['sessions', 'agents', 'skills', 'tools', 'plugins', 'extensions'] as const
-const EXTERNAL_SESSION_CACHE_MS = 30_000
+const EXTERNAL_SESSION_CACHE_MS = 60_000
 const EXTERNAL_SESSION_STATE_CACHE_MAX_ENTRIES = 64
 const EXTERNAL_SESSION_FULL_STATE_CACHE_MAX_ENTRIES = 8
 const LARGE_EXTERNAL_SESSION_BYTES = 6 * 1024 * 1024
@@ -1687,24 +1687,56 @@ export async function listExternalSessionEntries(
 ): Promise<AggregatedSessionEntry[]> {
   const cacheKey = workspacePath ?? '__no_workspace__'
   const cached = externalSessionCache.get(cacheKey)
-  if (!options?.force && cached && (Date.now() - cached.at) < EXTERNAL_SESSION_CACHE_MS) {
+
+  // Stale-while-revalidate: when force is set but we have cached data,
+  // return the stale entries immediately and refresh in the background.
+  if (options?.force && cached) {
+    void refreshExternalSessionEntries(workspacePath, cacheKey)
     return cached.entries
   }
 
-  await ensureCodeSurfStructure(workspacePath)
+  if (cached && (Date.now() - cached.at) < EXTERNAL_SESSION_CACHE_MS) {
+    return cached.entries
+  }
 
-  const entries = [
-    ...(await listCodeSurfSessionFiles(workspacePath)),
-    ...(await listClaudeSessions(workspacePath)),
-    ...(await listCodexSessions(workspacePath)),
-    ...(await listHermesSessions(workspacePath)),
-    ...(await listCursorSessions(workspacePath)),
-    ...(await listOpenClawSessions(workspacePath)),
-    ...(await listOpenCodeSessions(workspacePath)),
-  ].sort(compareSessions)
+  return refreshExternalSessionEntries(workspacePath, cacheKey)
+}
 
-  externalSessionCache.set(cacheKey, { at: Date.now(), entries })
-  return entries
+/** Inflight dedup for background refreshes so we don't double-scan. */
+const inflightRefreshes = new Map<string, Promise<AggregatedSessionEntry[]>>()
+
+async function refreshExternalSessionEntries(
+  workspacePath: string | null,
+  cacheKey: string,
+): Promise<AggregatedSessionEntry[]> {
+  const existing = inflightRefreshes.get(cacheKey)
+  if (existing) return existing
+
+  const promise = (async () => {
+    await ensureCodeSurfStructure(workspacePath)
+
+    // Run all provider scans in parallel — they read independent directories.
+    const results = await Promise.allSettled([
+      listCodeSurfSessionFiles(workspacePath),
+      listClaudeSessions(workspacePath),
+      listCodexSessions(workspacePath),
+      listHermesSessions(workspacePath),
+      listCursorSessions(workspacePath),
+      listOpenClawSessions(workspacePath),
+      listOpenCodeSessions(workspacePath),
+    ])
+
+    const entries = results
+      .flatMap(result => result.status === 'fulfilled' ? result.value : [])
+      .sort(compareSessions)
+
+    externalSessionCache.set(cacheKey, { at: Date.now(), entries })
+    return entries
+  })()
+
+  inflightRefreshes.set(cacheKey, promise)
+  promise.finally(() => { inflightRefreshes.delete(cacheKey) })
+  return promise
 }
 
 function buildEntryFromHint(workspacePath: string | null, hint: SessionEntryHint): AggregatedSessionEntry {

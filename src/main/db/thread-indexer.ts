@@ -54,6 +54,9 @@ const status: IndexerStatus = {
 
 let currentScan: Promise<void> | null = null
 
+/** Minimum interval between full scans to avoid hammering the filesystem. */
+const SCAN_MIN_INTERVAL_MS = 10_000
+
 // ─── Row helpers ──────────────────────────────────────────────────────────
 
 function nowIso(): string {
@@ -151,8 +154,16 @@ export function getIndexerStatus(): IndexerStatus & { totalRows: number } {
  *
  * Coalesces concurrent callers onto the in-flight scan.
  */
-export function indexAllSources(): Promise<void> {
+export function indexAllSources(options?: { force?: boolean }): Promise<void> {
   if (currentScan) return currentScan
+  // Throttle: skip if the last scan completed recently, unless forced.
+  if (
+    !options?.force
+    && status.lastScanFinishedAt > 0
+    && (Date.now() - status.lastScanFinishedAt) < SCAN_MIN_INTERVAL_MS
+  ) {
+    return Promise.resolve()
+  }
   const promise = runScan()
   currentScan = promise
   promise.finally(() => { currentScan = null })

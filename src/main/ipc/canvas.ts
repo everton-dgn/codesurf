@@ -799,7 +799,7 @@ export function registerCanvasIPC(): void {
 
   ipcMain.handle('threads:reindex', async () => {
     try {
-      await indexAllSources()
+      await indexAllSources({ force: true })
       return { ok: true, ...getIndexerStatus() }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
