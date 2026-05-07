@@ -149,6 +149,11 @@ function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {
       ...theme.extension,
       background: panelBackground,
     },
+    chat: {
+      ...theme.chat,
+      userBubble: theme.chat.assistantBubble,
+      userBubbleBorder: theme.chat.assistantBubbleBorder,
+    },
     shadow: {
       ...theme.shadow,
       panel: stackEdgeShadow(theme, theme.shadow.panel),

@@ -324,9 +324,14 @@ export function ensureCodeBlockLayoutStyles(): void {
       color: var(--chat-code-inline-color, inherit) !important;
       border: 1px solid var(--chat-code-inline-border, transparent) !important;
       padding: 1px 5px !important;
-      border-radius: 4px !important;
+      border-radius: 6px !important;
       font-size: 0.92em !important;
       font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+      white-space: normal !important;
+      -webkit-box-decoration-break: clone !important;
+      box-decoration-break: clone !important;
     }
     .chat-md.chat-md--path-mod :not(pre) > code[data-codesurf-local-path] {
       cursor: pointer !important;

@@ -817,6 +817,10 @@ const CHAT_AUTO_SCROLL_THRESHOLD = 48
 const TOOLBAR_ICON_SIZE = 16
 const TOOLBAR_PILL_ICON_SIZE = 14
 const TOOL_BLOCK_MAX_WIDTH = 420
+
+function getToolDisplayName(name: string): string {
+  return name === 'exec_command' ? 'bash' : name
+}
 const LIVE_TOOL_COLLAPSE_GRACE_MS = 5000
 const GIT_STATE_CACHE_TTL_MS = 15_000
 const NON_SELECTABLE_UI_STYLE = {
@@ -2127,7 +2131,7 @@ function RawDiffBlock({ files }: { files: RawDiffFile[] }): JSX.Element {
     <div
       style={{
         border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-        borderRadius: 10,
+        borderRadius: 12,
         background: theme.chat.assistantBubble,
         overflow: 'hidden',
       }}
@@ -2488,8 +2492,10 @@ function ensureChatMdStyle(): void {
     .chat-md strong { font-weight: 600; }
     .chat-md em { font-style: italic; }
     .chat-md code:not(pre code) {
-      background: rgba(128,128,128,0.15); padding: 1px 5px; border-radius: 3px;
+      background: rgba(128,128,128,0.15); padding: 1px 5px; border-radius: 6px;
       font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.88em;
+      overflow-wrap: anywhere; word-break: break-word; white-space: normal;
+      -webkit-box-decoration-break: clone; box-decoration-break: clone;
     }
     .chat-md pre { margin: 8px 0; border-radius: 12px; overflow: hidden; }
     .chat-md pre:first-child { margin-top: 0; }
@@ -6841,13 +6847,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           elements.push(
                             <div key={`text-${i}`} style={{
                               background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                              border: msg.role === 'user' ? `1px solid ${theme.chat.userBubbleBorder}` : '0',
+                              border: msg.role === 'user' ? '1px solid transparent' : '0',
+                              boxShadow: msg.role === 'user'
+                                ? theme.mode === 'light'
+                                  ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+                                  : 'var(--cs-edge-shadow)'
+                                : undefined,
                               borderRadius: 14,
                               padding: '8px 12px',
                               fontSize, lineHeight: fontLineHeight,
                               wordBreak: 'break-word',
                               color: theme.chat.text, position: 'relative',
-                              width: '100%', minWidth: 0, overflow: 'hidden',
+                              width: '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
                             }}>
                               <ChatMessageContent text={block.text} isStreaming={isLiveMessage && isLastBlock} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
                             </div>
@@ -6894,13 +6905,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                     {msg.content && (
                       <div style={{
                         background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                        border: msg.role === 'user' ? `1px solid ${theme.chat.userBubbleBorder}` : '0',
+                        border: msg.role === 'user' ? '1px solid transparent' : '0',
+                        boxShadow: msg.role === 'user'
+                          ? theme.mode === 'light'
+                            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+                            : 'var(--cs-edge-shadow)'
+                          : undefined,
                         borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
                         padding: '8px 12px',
                         fontSize, lineHeight: fontLineHeight,
                         wordBreak: 'break-word',
                         color: theme.chat.text, position: 'relative',
-                        width: '100%', minWidth: 0, overflow: 'hidden',
+                        width: '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
                       }}>
                         <ChatMessageContent text={msg.content} isStreaming={isLiveMessage} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
                         {isLiveMessage && msg.content.length === 0 && !hasVisibleToolBlocks && (
@@ -7065,15 +7081,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                   ...NON_SELECTABLE_UI_STYLE,
                 }}
               >
-                <span style={{ fontSize: 13, fontWeight: 600, color: theme.chat.text }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: theme.chat.text }}>
                   {latestChangeDrawer.fileCount} file{latestChangeDrawer.fileCount === 1 ? '' : 's'} changed
                 </span>
                 {latestChangeDrawerHasStats && (
                   <>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.success }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.success }}>
                       +{latestChangeDrawer.additions}
                     </span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.danger }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.danger }}>
                       -{latestChangeDrawer.deletions}
                     </span>
                   </>
@@ -7092,7 +7108,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                       border: 'none',
                       background: 'transparent',
                       color: isRestoringLatestCheckpoint ? theme.chat.muted : theme.chat.text,
-                      fontSize: 13,
+                      fontSize: 12,
                       fontFamily: fontSans,
                       fontWeight: 500,
                       cursor: isRestoringLatestCheckpoint ? 'default' : 'pointer',
@@ -7169,7 +7185,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           textAlign: 'left',
                           color: theme.chat.text,
                           fontFamily: fontSans,
-                          fontSize: 13,
+                          fontSize: 12,
                           ...NON_SELECTABLE_UI_STYLE,
                         }}
                       >
@@ -7204,7 +7220,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           <DiffView
                             diff={change.diff}
                             path={change.path}
-                            fontSize={Math.max(11, monoSize - 1)}
+                            fontSize={Math.max(10, monoSize - 2)}
                           />
                         </div>
                       )}
@@ -7225,7 +7241,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                       border: 'none',
                       background: 'transparent',
                       color: theme.chat.textSecondary,
-                      fontSize: 12,
+                      fontSize: 11,
                       fontFamily: fontSans,
                       fontWeight: 500,
                       cursor: 'pointer',
@@ -8055,7 +8071,11 @@ const ThinkingBlockView = React.memo(function ThinkingBlockView({ thinking }: { 
         onClick={() => hasContent && setExpanded(e => !e)}
         style={{
           background: theme.chat.assistantBubble,
-          border: `0.5px solid ${theme.border.strong}`,
+          border: '0.5px solid transparent',
+          boxShadow: theme.mode === 'light'
+            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+            : 'var(--cs-edge-shadow)',
+          margin: 1,
           borderRadius: 8,
           display: 'inline-flex',
           alignItems: 'center',
@@ -8168,13 +8188,17 @@ const WorkingChipView = React.memo(function WorkingChipView({ message }: { messa
   if (activeThinking) return null
 
   const label = activeTool
-    ? `Running ${activeTool.name}`
+    ? `Running ${getToolDisplayName(activeTool.name)}`
     : 'Working'
 
   return (
     <div style={{
       background: theme.chat.assistantBubble,
-      border: `0.5px solid ${theme.border.strong}`,
+      border: '0.5px solid transparent',
+      boxShadow: theme.mode === 'light'
+        ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+        : 'var(--cs-edge-shadow)',
+      margin: 1,
       borderRadius: 8,
       display: 'inline-flex',
       alignItems: 'center',
@@ -8283,7 +8307,11 @@ const MixedToolGroup = React.memo(function MixedToolGroup({ blocks }: { blocks: 
         onClick={() => setExpanded(e => !e)}
         style={{
           background: theme.chat.assistantBubble,
-          border: `0.5px solid ${theme.border.strong}`,
+          border: '0.5px solid transparent',
+          boxShadow: theme.mode === 'light'
+            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+            : 'var(--cs-edge-shadow)',
+          margin: 1,
           borderRadius: 8,
           display: 'flex',
           alignItems: 'center',
@@ -8349,6 +8377,7 @@ function getGroupedToolLabel(name: string, count: number): string {
     case 'Read':
       return `Read ${count} file${count === 1 ? '' : 's'}`
     case 'Bash':
+    case 'exec_command':
       return `Ran ${count} command${count === 1 ? '' : 's'}`
     case 'Grep':
       return `Searched ${count} time${count === 1 ? '' : 's'}`
@@ -8365,7 +8394,7 @@ function getGroupedToolLabel(name: string, count: number): string {
     case 'Task':
       return `Ran ${count} sub-agent${count === 1 ? '' : 's'}`
     default:
-      return `Used ${name} ${count} time${count === 1 ? '' : 's'}`
+      return `Used ${getToolDisplayName(name)} ${count} time${count === 1 ? '' : 's'}`
   }
 }
 
@@ -8388,7 +8417,11 @@ const CollapsedToolGroup = React.memo(function CollapsedToolGroup({ name, blocks
         onClick={() => setExpanded(e => !e)}
         style={{
           background: theme.chat.assistantBubble,
-          border: `0.5px solid ${theme.border.strong}`,
+          border: '0.5px solid transparent',
+          boxShadow: theme.mode === 'light'
+            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+            : 'var(--cs-edge-shadow)',
+          margin: 1,
           borderRadius: 8,
           display: 'flex',
           alignItems: 'center',
@@ -8524,11 +8557,16 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
     <div
       data-tool-block-kind={isFileChangeBlock ? 'file-changes' : 'tool'}
       style={{
-        background: theme.chat.assistantBubble, border: `0.5px solid ${theme.border.strong}`,
+        background: theme.chat.assistantBubble,
+        border: '0.5px solid transparent',
+        boxShadow: theme.mode === 'light'
+          ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+          : 'var(--cs-edge-shadow)',
+        margin: 1,
         borderRadius: 8,
         overflow: 'hidden',
-        maxWidth: expanded || isFileChangeBlock ? '100%' : `min(100%, ${TOOL_BLOCK_MAX_WIDTH}px)`,
-        width: expanded || isFileChangeBlock ? '100%' : 'fit-content',
+        maxWidth: expanded || isFileChangeBlock ? 'calc(100% - 2px)' : `min(calc(100% - 2px), ${TOOL_BLOCK_MAX_WIDTH}px)`,
+        width: expanded || isFileChangeBlock ? 'calc(100% - 2px)' : 'fit-content',
         alignSelf: 'stretch',
         flex: expanded || isFileChangeBlock ? '1 1 100%' : '0 0 auto',
         minWidth: 0,
@@ -8578,7 +8616,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}>
-            {block.name}
+            {getToolDisplayName(block.name)}
           </ShimmerText>
         ) : (
           <div style={{
@@ -8632,7 +8670,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}>
-                {block.name}
+                {getToolDisplayName(block.name)}
               </span>
             )}
           </div>
@@ -8784,7 +8822,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
         }}>
           {block.input && (
             <ToolInputView
-              toolName={block.name}
+              toolName={getToolDisplayName(block.name)}
               input={block.input}
               codePanelFontSize={codePanelFontSize}
             />
@@ -8842,7 +8880,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
           borderTop: `1px solid ${theme.chat.assistantBubbleBorder}`,
         }}>
           <ToolInputView
-            toolName={block.name}
+            toolName={getToolDisplayName(block.name)}
             input={block.input}
             codePanelFontSize={codePanelFontSize}
           />

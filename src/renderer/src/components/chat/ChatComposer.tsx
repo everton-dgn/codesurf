@@ -178,7 +178,7 @@ export function ChatComposerDrawerFrame({
         border: `1px solid ${theme.chat.divider}`,
         borderTop: joinedToPrevious ? 'none' : `1px solid ${theme.chat.divider}`,
         borderBottom: 'none',
-        borderRadius: joinedToPrevious ? 0 : '14px 14px 0 0',
+        borderRadius: joinedToPrevious ? 0 : '16px 16px 0 0',
         background: collapsed ? theme.chat.background : theme.surface.panelMuted,
         boxShadow: collapsed ? 'none' : `${theme.shadow.panel}, inset 0 1px rgba(255, 255, 255, 0.04)`,
         overflow: 'hidden',
