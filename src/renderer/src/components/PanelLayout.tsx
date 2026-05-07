@@ -42,10 +42,10 @@ interface PanelOuterEdges {
 }
 
 function getLeafBorderRadius(edges: PanelOuterEdges, outerRadii: PanelCornerRadii): string {
-  const topLeft = edges.top && edges.left ? outerRadii.topLeft : PANEL_LEAF_RADIUS_PX
-  const topRight = edges.top && edges.right ? outerRadii.topRight : PANEL_LEAF_RADIUS_PX
-  const bottomRight = edges.bottom && edges.right ? outerRadii.bottomRight : PANEL_LEAF_RADIUS_PX
-  const bottomLeft = edges.bottom && edges.left ? outerRadii.bottomLeft : PANEL_LEAF_RADIUS_PX
+  const topLeft = edges.top && edges.left ? outerRadii.topLeft : 0
+  const topRight = edges.top && edges.right ? outerRadii.topRight : 0
+  const bottomRight = edges.bottom && edges.right ? outerRadii.bottomRight : 0
+  const bottomLeft = edges.bottom && edges.left ? outerRadii.bottomLeft : 0
   return `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`
 }
 
@@ -167,7 +167,7 @@ function ResizeHandle({ direction, onResize, onInteractionChange }: { direction:
   const dragging = useRef(false)
   const lastPos = useRef(0)
   const isHorizontal = direction === 'horizontal'
-  const gutterBackground = theme.surface.app
+  const gutterBackground = theme.surface.panel
   // Ref so the mousemove closure always calls the latest onResize,
   // even after re-renders invalidate the original closure.
   const onResizeRef = useRef(onResize)
@@ -247,9 +247,9 @@ function TabBar({ tabs, activeTab, previewTabId = null, panelId, onActivate, onP
   const fonts = useAppFonts()
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const compactTabBackground = 'transparent'
+  const compactTabBackground = theme.mode === 'light' ? 'rgba(226,228,235,0.88)' : 'rgba(255,255,255,0.13)'
   const compactTabInactiveBackground = 'transparent'
-  const compactTabHoverBackground = 'transparent'
+  const compactTabHoverBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.055)'
   const compactTabMaxWidth = 'min(180px, 18vw)'
 
   useEffect(() => {
@@ -316,16 +316,17 @@ function TabBar({ tabs, activeTab, previewTabId = null, panelId, onActivate, onP
               style={{
                 display: 'flex', alignItems: 'center', gap: 4,
                 height: 24,
-                padding: '0 8px 0 9px', margin: '0 2px', cursor: 'grab', userSelect: 'none',
-                fontSize: Math.max(9, fonts.secondarySize - 2), color: isActive ? theme.accent.base : theme.text.secondary,
+                padding: '0 9px 0 10px', margin: isActive ? '0 2px 4px' : '0 2px', cursor: 'grab', userSelect: 'none',
+                fontSize: 11, color: isActive ? theme.text.primary : theme.text.secondary,
                 background: isActive ? compactTabBackground : compactTabInactiveBackground,
-                marginBottom: 3,
+                marginBottom: isActive ? 4 : 3,
                 borderRadius: 8,
                 transition: 'color 0.15s, background 0.15s, border-color 0.15s',
                 flexShrink: 0, maxWidth: compactTabMaxWidth,
-                fontWeight: isActive ? 650 : 550,
-                letterSpacing: 0,
-                boxShadow: 'none',
+                fontWeight: isActive ? 700 : 600,
+                letterSpacing: 0.45,
+                textTransform: 'uppercase',
+                boxShadow: isActive ? 'var(--cs-edge-shadow-subtle)' : 'none',
                 border: isPreview
                   ? `1px dashed ${isActive ? theme.border.accent : theme.border.subtle}`
                   : '1px solid transparent',
@@ -652,10 +653,8 @@ function LeafPanel({ leaf, outerEdges, getTileLabel, renderTile, isInteracting, 
         borderRadius,
         overflow: 'hidden',
         background: theme.surface.panel,
-        // 0.5px hairline edge (1 physical pixel on retina). The flex-item
-        // wrapper above no longer has overflow:hidden, so Chromium can keep
-        // the sub-pixel bottom row on every side.
-        border: `0.5px solid ${theme.border.default}`,
+        border: '0.5px solid transparent',
+        boxShadow: 'var(--cs-edge-shadow-strong)',
         boxSizing: 'border-box',
       }}
       onClick={() => onPanelFocus(leaf.id)}

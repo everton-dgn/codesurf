@@ -782,6 +782,7 @@ const CHAT_CHIP_ROW_STYLE: React.CSSProperties = {
   minWidth: 0,
   maxWidth: '100%',
   overflow: 'visible',
+  paddingTop: 1,
 }
 const CHAT_OFFSCREEN_MESSAGE_STYLE: React.CSSProperties = {
   contentVisibility: 'auto',
@@ -817,6 +818,10 @@ const CHAT_AUTO_SCROLL_THRESHOLD = 48
 const TOOLBAR_ICON_SIZE = 16
 const TOOLBAR_PILL_ICON_SIZE = 14
 const TOOL_BLOCK_MAX_WIDTH = 420
+
+function getToolDisplayName(name: string): string {
+  return name === 'exec_command' ? 'bash' : name
+}
 const LIVE_TOOL_COLLAPSE_GRACE_MS = 5000
 const GIT_STATE_CACHE_TTL_MS = 15_000
 const NON_SELECTABLE_UI_STYLE = {
@@ -2127,7 +2132,7 @@ function RawDiffBlock({ files }: { files: RawDiffFile[] }): JSX.Element {
     <div
       style={{
         border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-        borderRadius: 10,
+        borderRadius: 12,
         background: theme.chat.assistantBubble,
         overflow: 'hidden',
       }}
@@ -2153,12 +2158,48 @@ function RawDiffBlock({ files }: { files: RawDiffFile[] }): JSX.Element {
   )
 }
 
+function looksLikeUnfencedDiff(text: string): boolean {
+  const lines = text.split('\n')
+  const hasHunk = lines.some(line => /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(line.trim()))
+  const hasReviewDiffHeader = lines.some(line => /^review diff\s+a\/.+\s+(?:→|->)\s+b\/.+@@/.test(line.trim()))
+  const markdownTrapLines = lines.filter(line => /^[+-]\s{2,}\S/.test(line)).length
+  return (hasHunk || hasReviewDiffHeader) && markdownTrapLines >= 2
+}
+
 function GuardedChatMarkdown({ text, isStreaming, className }: {
   text: string
   isStreaming?: boolean
   className?: string
 }): JSX.Element {
+  const theme = useTheme()
+  const fonts = useAppFonts()
   const diff = useMemo(() => isStreaming ? null : splitRawDiffText(text), [isStreaming, text])
+
+  if (!isStreaming && !diff && looksLikeUnfencedDiff(text)) {
+    return (
+      <div className={className} style={{ minWidth: 0 }}>
+        <pre
+          className="allow-text-selection"
+          style={{
+            margin: 0,
+            maxWidth: '100%',
+            overflow: 'auto',
+            borderRadius: 8,
+            background: theme.surface.panelMuted,
+            color: theme.chat.text,
+            padding: 10,
+            fontFamily: fonts.mono,
+            fontSize: Math.max(10, fonts.size - 2),
+            lineHeight: 1.45,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {text}
+        </pre>
+      </div>
+    )
+  }
 
   if (diff) {
     return (
@@ -2178,6 +2219,52 @@ function GuardedChatMarkdown({ text, isStreaming, className }: {
   }
 
   return <ChatMarkdown text={text} isStreaming={isStreaming} className={className} />
+}
+
+type ExternalAgentMarkupSegment =
+  | { kind: 'md'; text: string }
+  | { kind: 'tool'; block: ToolBlock }
+
+function splitExternalAgentMarkup(text: string): ExternalAgentMarkupSegment[] {
+  const pattern = /\[external_agent_tool_call:\s*([^\]]+)\]([\s\S]*?)\[\/external_agent_tool_call\]|\[external_agent_tool_result(?::\s*([^\]]+))?\]([\s\S]*?)\[\/external_agent_tool_result\]/g
+  const segments: ExternalAgentMarkupSegment[] = []
+  let lastIndex = 0
+  let index = 0
+  for (const match of text.matchAll(pattern)) {
+    if (match.index == null) continue
+    const before = text.slice(lastIndex, match.index)
+    if (before) segments.push({ kind: 'md', text: before })
+    const callName = (match[1] ?? '').trim()
+    const resultLabel = (match[3] ?? '').trim()
+    const body = (match[2] ?? match[4] ?? '').trim()
+    const isResult = !callName
+    const isError = isResult && resultLabel.toLowerCase() === 'error'
+    segments.push({
+      kind: 'tool',
+      block: {
+        id: `external-agent-${match.index}-${index++}`,
+        name: callName || resultLabel || 'result',
+        input: body,
+        status: isError ? 'error' : 'done',
+      },
+    })
+    lastIndex = match.index + match[0].length
+  }
+  const tail = text.slice(lastIndex)
+  if (tail) segments.push({ kind: 'md', text: tail })
+  return segments.length > 0 ? segments : [{ kind: 'md', text }]
+}
+
+function getExternalAgentToolBlocks(text: string): ToolBlock[] {
+  return splitExternalAgentMarkup(text)
+    .filter((segment): segment is Extract<ExternalAgentMarkupSegment, { kind: 'tool' }> => segment.kind === 'tool')
+    .map(segment => segment.block)
+}
+
+function isExternalAgentToolOnlyText(text: string): boolean {
+  const segments = splitExternalAgentMarkup(text)
+  return segments.some(segment => segment.kind === 'tool')
+    && segments.every(segment => segment.kind === 'tool' || segment.text.trim().length === 0)
 }
 
 const ChatMessageContent = React.memo(({
@@ -2307,17 +2394,50 @@ const ChatMessageContent = React.memo(({
   // through the normal markdown pipeline.
   const accent = theme.accent.base
   const textColor = theme.text.primary
+  const externalAgentSegments = useMemo(() => splitExternalAgentMarkup(bodyText), [bodyText])
+  const hasExternalAgentMarkup = externalAgentSegments.some(seg => seg.kind === 'tool')
   const segments = useMemo(() => splitInsightSegments(bodyText), [bodyText])
-  const renderedBody = segments.length === 1 && segments[0].kind === 'md'
-    ? <GuardedChatMarkdown text={segments[0].text} isStreaming={isStreaming} className={className} />
-    : (
-      <div className={className}>
-        {segments.map((seg, i) => seg.kind === 'insight'
-          ? <InsightBlock key={i} text={seg.text} closed={seg.closed} isStreaming={isStreaming} accent={accent} textColor={textColor} />
-          : <GuardedChatMarkdown key={i} text={seg.text} isStreaming={isStreaming} />
-        )}
+  const renderedBody = hasExternalAgentMarkup
+    ? (
+      <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+        {(() => {
+          const elements: JSX.Element[] = []
+          let chipRow: JSX.Element[] = []
+          let chipRowStart = 0
+          const flushChipRow = () => {
+            if (chipRow.length === 0) return
+            elements.push(
+              <div key={`external-tool-row-${chipRowStart}`} style={CHAT_CHIP_ROW_STYLE}>
+                {chipRow}
+              </div>
+            )
+            chipRow = []
+          }
+          externalAgentSegments.forEach((seg, i) => {
+            if (seg.kind === 'tool') {
+              if (chipRow.length === 0) chipRowStart = i
+              chipRow.push(<ToolBlockView key={seg.block.id} block={seg.block} />)
+              return
+            }
+            if (!seg.text.trim()) return
+            flushChipRow()
+            elements.push(<GuardedChatMarkdown key={`external-md-${i}`} text={seg.text} isStreaming={isStreaming} />)
+          })
+          flushChipRow()
+          return elements
+        })()}
       </div>
     )
+    : segments.length === 1 && segments[0].kind === 'md'
+      ? <GuardedChatMarkdown text={segments[0].text} isStreaming={isStreaming} className={className} />
+      : (
+        <div className={className}>
+          {segments.map((seg, i) => seg.kind === 'insight'
+            ? <InsightBlock key={i} text={seg.text} closed={seg.closed} isStreaming={isStreaming} accent={accent} textColor={textColor} />
+            : <GuardedChatMarkdown key={i} text={seg.text} isStreaming={isStreaming} />
+          )}
+        </div>
+      )
 
   if (!attachments) return renderedBody
   return <>{renderedBody}{attachments}</>
@@ -2452,8 +2572,10 @@ function ensureChatMdStyle(): void {
     .chat-md strong { font-weight: 600; }
     .chat-md em { font-style: italic; }
     .chat-md code:not(pre code) {
-      background: rgba(128,128,128,0.15); padding: 1px 5px; border-radius: 3px;
+      background: rgba(128,128,128,0.15); padding: 1px 5px; border-radius: 6px;
       font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.88em;
+      overflow-wrap: anywhere; word-break: break-word; white-space: normal;
+      -webkit-box-decoration-break: clone; box-decoration-break: clone;
     }
     .chat-md pre { margin: 8px 0; border-radius: 12px; overflow: hidden; }
     .chat-md pre:first-child { margin-top: 0; }
@@ -2476,9 +2598,22 @@ function ensureChatMdStyle(): void {
       margin: 6px 0; opacity: 0.85;
     }
     .chat-md hr { border: none; border-top: 1px solid rgba(128,128,128,0.3); margin: 10px 0; }
-    .chat-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 0.9em; }
-    .chat-md th, .chat-md td { border: 1px solid rgba(128,128,128,0.3); padding: 4px 8px; text-align: left; }
-    .chat-md th { font-weight: 600; background: rgba(128,128,128,0.1); }
+    .chat-md table {
+      display: table; max-width: 100%; overflow: hidden; border-collapse: separate; border-spacing: 0;
+      margin: 8px 0; width: 100%; font-size: 0.9em; table-layout: fixed;
+      border: 0; border-radius: 0; box-shadow: none;
+    }
+    .chat-md th, .chat-md td {
+      border: 0; padding: 8px 12px; text-align: left; vertical-align: top;
+      overflow-wrap: anywhere; word-break: normal;
+    }
+    .chat-md th {
+      font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--color-muted-foreground); background: color-mix(in srgb, var(--color-muted) 62%, transparent);
+      border-bottom: 1px solid color-mix(in srgb, var(--color-muted-foreground) 22%, transparent);
+    }
+    .chat-md tbody tr + tr td { border-top: 1px solid color-mix(in srgb, var(--color-muted-foreground) 14%, transparent); }
+    .chat-md th:first-child, .chat-md td:first-child { width: 22%; min-width: 120px; overflow-wrap: normal; }
   `
 }
 
@@ -2488,7 +2623,9 @@ function ensureChatMdStyle(): void {
 export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, width: _width, height: _height, reloadToken = 0, settings, onChatModePreferenceChange, isConnected, isAutoConnected, connectedPeers = [] }: Props): JSX.Element {
   const theme = useTheme()
   const chatViewportBackground = theme.surface.panel
-  const composerBackground = theme.mode === 'dark' ? theme.surface.panel : theme.chat.input
+  const composerBackground = theme.mode === 'dark'
+    ? theme.chat.input
+    : `color-mix(in srgb, ${theme.surface.panelMuted} 82%, ${theme.chat.input})`
   const composerBorder = theme.chat.inputBorder
   const fontSans = settings?.fonts?.primary?.family ?? settings?.primaryFont?.family ?? FONT_SANS
   const fontMono = settings?.fonts?.mono?.family ?? settings?.monoFont?.family ?? FONT_MONO
@@ -6372,7 +6509,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       {/* Messages */}
       <div
         ref={messagesRef}
-        className="chat-messages"
+        className={`chat-messages ${isStartScreen ? '' : 'cs-fade-scroll-y cs-fade-scroll-y-lg'}`}
         onScroll={handleMessagesScroll}
         onWheel={handleMessagesWheel}
         onKeyDown={handleMessagesKeyDown}
@@ -6383,7 +6520,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           padding: isStartScreen ? '12px 14px 4px' : '12px 14px',
           overflowX: 'hidden',
           minHeight: 0,
-          // Scrollbar hidden for testing — no gutter reservation needed while hidden.
+          // Keep the transcript centerline stable while chat history loads and
+          // overflow flips on. Reserve both edges so the content doesn't jump
+          // left when the scroll container becomes scrollable.
+          scrollbarGutter: 'stable both-edges' as React.CSSProperties['scrollbarGutter'],
           scrollbarWidth: 'none' as React.CSSProperties['scrollbarWidth'],
           // Disable Chrome's built-in scroll anchoring. React pins scrollTop =
           // scrollHeight on every message update (useLayoutEffect below);
@@ -6410,7 +6550,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                <div style={{
                  fontSize: 'clamp(24px, 3vw, 34px)',
                  lineHeight: 1.15,
-                 fontWeight: 650,
+                 fontWeight: 550,
                  color: theme.chat.text,
                  letterSpacing: 0,
                }}>
@@ -6498,6 +6638,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             const extractChipsFromMessage = (msg: ChatMessage, isLiveMessage: boolean): ChipItem[] => {
               const items: ChipItem[] = []
               const blocks = msg.contentBlocks ?? []
+              if (blocks.length === 0 && isExternalAgentToolOnlyText(msg.content ?? '')) {
+                for (const tb of getExternalAgentToolBlocks(msg.content ?? '')) {
+                  if (!shouldRenderToolBlock(tb)) continue
+                  items.push({
+                    kind: 'tool-single',
+                    key: `${msg.id}-${tb.id}`,
+                    block: tb,
+                    isLive: isLiveMessage,
+                  })
+                }
+                return items
+              }
               const { thinkingById, toolById } = buildMessageBlockLookup(msg)
               let i = 0
               while (i < blocks.length) {
@@ -6572,7 +6724,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             }
 
             const renderChipRow = (items: JSX.Element[], key: string): JSX.Element => {
-              if (items.length === 1) return items[0]
               return (
                 <div key={key} style={CHAT_CHIP_ROW_STYLE}>
                   {items}
@@ -6632,7 +6783,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             const isChipOnly = (msg: ChatMessage): boolean => {
               if (msg.role !== 'assistant') return false
               const blocks = msg.contentBlocks ?? []
-              if (blocks.length === 0) return false
+              if (blocks.length === 0) return isExternalAgentToolOnlyText(msg.content ?? '')
               if (blocks.some(b => b.type === 'text')) return false
               if ((msg.content ?? '').trim().length > 0) return false
               return blocks.some(b => b.type === 'tool' || b.type === 'thinking')
@@ -6700,7 +6851,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 minWidth: 0,
                 alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
                 marginBottom: msg.role === 'user' ? 5 : 0,
-                gap: 6,
+                gap: 2,
                 ...(isLiveMessage ? {} : CHAT_OFFSCREEN_MESSAGE_STYLE),
               }}>
                 {/* Thinking block — show the pre-tools indicator only when there
@@ -6803,13 +6954,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           elements.push(
                             <div key={`text-${i}`} style={{
                               background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                              border: msg.role === 'user' ? `1px solid ${theme.chat.userBubbleBorder}` : '0',
+                              border: msg.role === 'user' ? '1px solid transparent' : '0',
+                              boxShadow: msg.role === 'user'
+                                ? theme.mode === 'light'
+                                  ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+                                  : 'var(--cs-edge-shadow)'
+                                : undefined,
                               borderRadius: 14,
                               padding: '8px 12px',
+                              margin: msg.role === 'user' ? '2px' : 0,
                               fontSize, lineHeight: fontLineHeight,
                               wordBreak: 'break-word',
                               color: theme.chat.text, position: 'relative',
-                              width: '100%', minWidth: 0, overflow: 'hidden',
+                              width: msg.role === 'user' ? 'calc(100% - 4px)' : '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
                             }}>
                               <ChatMessageContent text={block.text} isStreaming={isLiveMessage && isLastBlock} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
                             </div>
@@ -6856,13 +7013,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                     {msg.content && (
                       <div style={{
                         background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                        border: msg.role === 'user' ? `1px solid ${theme.chat.userBubbleBorder}` : '0',
+                        border: msg.role === 'user' ? '1px solid transparent' : '0',
+                        boxShadow: msg.role === 'user'
+                          ? theme.mode === 'light'
+                            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+                            : 'var(--cs-edge-shadow)'
+                          : undefined,
                         borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
                         padding: '8px 12px',
+                        margin: msg.role === 'user' ? '2px' : 0,
                         fontSize, lineHeight: fontLineHeight,
                         wordBreak: 'break-word',
                         color: theme.chat.text, position: 'relative',
-                        width: '100%', minWidth: 0, overflow: 'hidden',
+                        width: msg.role === 'user' ? 'calc(100% - 4px)' : '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
                       }}>
                         <ChatMessageContent text={msg.content} isStreaming={isLiveMessage} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
                         {isLiveMessage && msg.content.length === 0 && !hasVisibleToolBlocks && (
@@ -6930,8 +7093,11 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 {!isLiveMessage && msg.role === 'user' && (
                   <div style={{
                     fontSize: monoSize - 2, color: theme.chat.subtle, fontFamily: fontMono,
-                    padding: '0 4px', textAlign: 'right',
-                    marginTop: -5,
+                    padding: '0 6px', textAlign: 'right',
+                    marginTop: 2,
+                    lineHeight: 1.2,
+                    alignSelf: 'flex-end',
+                    overflow: 'visible',
                   }}>
                     {relativeTime(msg.timestamp)}
                   </div>
@@ -7027,15 +7193,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                   ...NON_SELECTABLE_UI_STYLE,
                 }}
               >
-                <span style={{ fontSize: 13, fontWeight: 600, color: theme.chat.text }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: theme.chat.text }}>
                   {latestChangeDrawer.fileCount} file{latestChangeDrawer.fileCount === 1 ? '' : 's'} changed
                 </span>
                 {latestChangeDrawerHasStats && (
                   <>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.success }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.success }}>
                       +{latestChangeDrawer.additions}
                     </span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: theme.status.danger }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.danger }}>
                       -{latestChangeDrawer.deletions}
                     </span>
                   </>
@@ -7054,7 +7220,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                       border: 'none',
                       background: 'transparent',
                       color: isRestoringLatestCheckpoint ? theme.chat.muted : theme.chat.text,
-                      fontSize: 13,
+                      fontSize: 12,
                       fontFamily: fontSans,
                       fontWeight: 500,
                       cursor: isRestoringLatestCheckpoint ? 'default' : 'pointer',
@@ -7131,7 +7297,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           textAlign: 'left',
                           color: theme.chat.text,
                           fontFamily: fontSans,
-                          fontSize: 13,
+                          fontSize: 12,
                           ...NON_SELECTABLE_UI_STYLE,
                         }}
                       >
@@ -7166,7 +7332,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                           <DiffView
                             diff={change.diff}
                             path={change.path}
-                            fontSize={Math.max(11, monoSize - 1)}
+                            fontSize={Math.max(10, monoSize - 2)}
                           />
                         </div>
                       )}
@@ -7187,7 +7353,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                       border: 'none',
                       background: 'transparent',
                       color: theme.chat.textSecondary,
-                      fontSize: 12,
+                      fontSize: 11,
                       fontFamily: fontSans,
                       fontWeight: 500,
                       cursor: 'pointer',
@@ -7536,14 +7702,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         <ChatComposerCard style={{
         minHeight: CHAT_COMPOSER_MIN_HEIGHT,
         border: isDropTarget ? `1px solid ${theme.accent.base}` : `1px solid ${composerBorder}`, borderRadius: 14,
-        // Resting fill matches the border so the composer reads as one solid
-        // rounded shape. The border stays declared so layout stays stable, but
-        // becomes visually inert because background === border-color.
-        background: isDropTarget ? theme.surface.accentSoft : composerBorder,
+        // Keep the fill on the actual input surface. The dimensional edge is
+        // handled by ChatComposerCard's stacked shadow, not by painting a gray
+        // border colour across the whole composer.
+        background: isDropTarget ? theme.surface.accentSoft : composerBackground,
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: isDropTarget ? `0 0 0 1px ${theme.border.accent}, 0 0 22px ${theme.accent.soft}` : 'none',
+        boxShadow: isDropTarget
+          ? `0 0 0 1px ${theme.border.accent}, 0 0 22px ${theme.accent.soft}`
+          : theme.mode === 'light'
+            ? '0 0 0 1px rgba(15,23,42,0.12), 0 10px 28px rgba(15,23,42,0.09)'
+            : '0 10px 28px rgba(0,0,0,0.18)',
         transition: 'border-color 120ms ease, background 120ms ease, box-shadow 120ms ease',
       }}>
         <ChatComposerAutocompletePopup
@@ -8013,7 +8183,11 @@ const ThinkingBlockView = React.memo(function ThinkingBlockView({ thinking }: { 
         onClick={() => hasContent && setExpanded(e => !e)}
         style={{
           background: theme.chat.assistantBubble,
-          border: `0.5px solid ${theme.border.strong}`,
+          border: '0.5px solid transparent',
+          boxShadow: theme.mode === 'light'
+            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+            : 'var(--cs-edge-shadow)',
+          margin: 1,
           borderRadius: 8,
           display: 'inline-flex',
           alignItems: 'center',
@@ -8022,7 +8196,7 @@ const ThinkingBlockView = React.memo(function ThinkingBlockView({ thinking }: { 
           minHeight: 22,
           boxSizing: 'border-box',
           cursor: hasContent ? 'pointer' : 'default',
-          color: isActive ? theme.accent.hover : theme.chat.muted,
+          color: theme.chat.muted,
           fontSize: 10.5,
           fontFamily: fonts.sans,
           fontWeight: 500,
@@ -8031,9 +8205,9 @@ const ThinkingBlockView = React.memo(function ThinkingBlockView({ thinking }: { 
           maxWidth: '100%',
         }}
       >
-        <Brain size={11} style={{ opacity: isActive ? 0.9 : 0.5, flexShrink: 0 }} />
+        <Brain size={11} style={{ opacity: isActive ? 0.75 : 0.5, flexShrink: 0 }} />
         {isActive ? (
-          <ShimmerText baseColor={theme.accent.hover} style={{
+          <ShimmerText baseColor={theme.chat.muted} style={{
             fontSize: 10.5, fontWeight: 500, lineHeight: 1,
             minWidth: 0, flex: '1 1 auto',
             overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
@@ -8126,13 +8300,17 @@ const WorkingChipView = React.memo(function WorkingChipView({ message }: { messa
   if (activeThinking) return null
 
   const label = activeTool
-    ? `Running ${activeTool.name}`
+    ? `Running ${getToolDisplayName(activeTool.name)}`
     : 'Working'
 
   return (
     <div style={{
       background: theme.chat.assistantBubble,
-      border: `0.5px solid ${theme.border.strong}`,
+      border: '0.5px solid transparent',
+      boxShadow: theme.mode === 'light'
+        ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+        : 'var(--cs-edge-shadow)',
+      margin: 1,
       borderRadius: 8,
       display: 'inline-flex',
       alignItems: 'center',
@@ -8140,7 +8318,7 @@ const WorkingChipView = React.memo(function WorkingChipView({ message }: { messa
       padding: '0 8px',
       minHeight: 24,
       boxSizing: 'border-box',
-      color: theme.accent.hover,
+      color: theme.chat.muted,
       fontSize: 10.5,
       fontFamily: fonts.sans,
       fontWeight: 500,
@@ -8150,11 +8328,11 @@ const WorkingChipView = React.memo(function WorkingChipView({ message }: { messa
       flex: '0 0 auto',
     }}>
       <Cog size={11} style={{
-        opacity: 0.9,
+        opacity: 0.75,
         flexShrink: 0,
         animation: 'chat-spin 2.4s linear infinite',
       }} />
-      <ShimmerText baseColor={theme.accent.hover} style={{
+      <ShimmerText baseColor={theme.chat.muted} style={{
         fontSize: 10.5, fontWeight: 500, lineHeight: 1,
         minWidth: 0,
         overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
@@ -8241,7 +8419,11 @@ const MixedToolGroup = React.memo(function MixedToolGroup({ blocks }: { blocks: 
         onClick={() => setExpanded(e => !e)}
         style={{
           background: theme.chat.assistantBubble,
-          border: `0.5px solid ${theme.border.strong}`,
+          border: '0.5px solid transparent',
+          boxShadow: theme.mode === 'light'
+            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+            : 'var(--cs-edge-shadow)',
+          margin: 1,
           borderRadius: 8,
           display: 'flex',
           alignItems: 'center',
@@ -8307,6 +8489,7 @@ function getGroupedToolLabel(name: string, count: number): string {
     case 'Read':
       return `Read ${count} file${count === 1 ? '' : 's'}`
     case 'Bash':
+    case 'exec_command':
       return `Ran ${count} command${count === 1 ? '' : 's'}`
     case 'Grep':
       return `Searched ${count} time${count === 1 ? '' : 's'}`
@@ -8323,7 +8506,7 @@ function getGroupedToolLabel(name: string, count: number): string {
     case 'Task':
       return `Ran ${count} sub-agent${count === 1 ? '' : 's'}`
     default:
-      return `Used ${name} ${count} time${count === 1 ? '' : 's'}`
+      return `Used ${getToolDisplayName(name)} ${count} time${count === 1 ? '' : 's'}`
   }
 }
 
@@ -8346,7 +8529,11 @@ const CollapsedToolGroup = React.memo(function CollapsedToolGroup({ name, blocks
         onClick={() => setExpanded(e => !e)}
         style={{
           background: theme.chat.assistantBubble,
-          border: `0.5px solid ${theme.border.strong}`,
+          border: '0.5px solid transparent',
+          boxShadow: theme.mode === 'light'
+            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+            : 'var(--cs-edge-shadow)',
+          margin: 1,
           borderRadius: 8,
           display: 'flex',
           alignItems: 'center',
@@ -8482,11 +8669,16 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
     <div
       data-tool-block-kind={isFileChangeBlock ? 'file-changes' : 'tool'}
       style={{
-        background: theme.chat.assistantBubble, border: `0.5px solid ${theme.border.strong}`,
+        background: theme.chat.assistantBubble,
+        border: '0.5px solid transparent',
+        boxShadow: theme.mode === 'light'
+          ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+          : 'var(--cs-edge-shadow)',
+        margin: 1,
         borderRadius: 8,
         overflow: 'hidden',
-        maxWidth: expanded || isFileChangeBlock ? '100%' : `min(100%, ${TOOL_BLOCK_MAX_WIDTH}px)`,
-        width: expanded || isFileChangeBlock ? '100%' : 'fit-content',
+        maxWidth: expanded || isFileChangeBlock ? 'calc(100% - 2px)' : `min(calc(100% - 2px), ${TOOL_BLOCK_MAX_WIDTH}px)`,
+        width: expanded || isFileChangeBlock ? 'calc(100% - 2px)' : 'fit-content',
         alignSelf: 'stretch',
         flex: expanded || isFileChangeBlock ? '1 1 100%' : '0 0 auto',
         minWidth: 0,
@@ -8512,16 +8704,14 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
           cursor: 'pointer',
           color: isDream
             ? theme.accent.base
-            : isCheckpoint
-              ? theme.status.success
-              : (isRunning ? theme.chat.textSecondary : theme.chat.muted),
+            : (isRunning ? theme.chat.textSecondary : theme.chat.muted),
           fontSize: 10, fontFamily: fonts.sans, lineHeight: 1, minWidth: 0,
         }}
       >
         {isDream
           ? <Sparkles size={11} style={{ color: theme.accent.base, opacity: 0.95, flexShrink: 0 }} />
           : isCheckpoint
-            ? <History size={11} style={{ color: theme.status.success, opacity: 0.95, flexShrink: 0 }} />
+            ? <History size={11} style={{ opacity: 0.62, flexShrink: 0 }} />
             : <Wrench size={11} style={{ opacity: isRunning ? 0.7 : 0.5, flexShrink: 0 }} />}
 
         {/* Collapsed chip header shows only the tool name. Detailed summaries stay in the expanded body. */}
@@ -8536,7 +8726,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}>
-            {block.name}
+            {getToolDisplayName(block.name)}
           </ShimmerText>
         ) : (
           <div style={{
@@ -8590,7 +8780,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}>
-                {block.name}
+                {getToolDisplayName(block.name)}
               </span>
             )}
           </div>
@@ -8606,7 +8796,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
             </span>
           )}
           {!isRunning && !block.elapsed && (
-            <Check size={11} color={theme.status.success} style={{ flexShrink: 0 }} />
+            <Check size={11} color={isCheckpoint ? theme.chat.muted : theme.status.success} style={{ flexShrink: 0, opacity: isCheckpoint ? 0.75 : 1 }} />
           )}
           <ChevronRight size={12} style={{
             transform: expanded ? 'rotate(90deg)' : 'none',
@@ -8742,7 +8932,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
         }}>
           {block.input && (
             <ToolInputView
-              toolName={block.name}
+              toolName={getToolDisplayName(block.name)}
               input={block.input}
               codePanelFontSize={codePanelFontSize}
             />
@@ -8800,7 +8990,7 @@ const ToolBlockView = React.memo(function ToolBlockView({ block, isLive = false 
           borderTop: `1px solid ${theme.chat.assistantBubbleBorder}`,
         }}>
           <ToolInputView
-            toolName={block.name}
+            toolName={getToolDisplayName(block.name)}
             input={block.input}
             codePanelFontSize={codePanelFontSize}
           />

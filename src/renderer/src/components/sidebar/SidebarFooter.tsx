@@ -38,6 +38,9 @@ export function SidebarFooter({
   const [showExtMenu, setShowExtMenu] = useState(false)
   const extMenuRef = useRef<HTMLDivElement>(null)
   const footerIconColor = theme.text.secondary
+  const footerButtonBackground = 'transparent'
+  const footerButtonHoverBackground = 'rgba(255,255,255,0.12)'
+  const footerButtonEdge = 'none'
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -55,23 +58,25 @@ export function SidebarFooter({
   const footerExtensions = buildFooterExtensions(extensionTiles ?? [], extensionEntries ?? [])
 
   return (
-    <div style={{ padding: collapsed ? '14px 8px 2px' : '14px 8px 2px 13px', display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: collapsed ? 6 : 14, flexDirection: 'row', width: 'fit-content' }}>
+    <div style={{ padding: collapsed ? '14px 8px 2px' : '14px 8px 2px 13px', display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 6, flexDirection: 'row', width: 'fit-content' }}>
       <button
         onClick={() => onOpenSettings('general')}
         title="Settings"
+        aria-label="Settings"
         style={{
           height: 28,
-          width: collapsed ? 28 : 'auto',
-          padding: collapsed ? 0 : '0 8px',
+          width: 28,
+          padding: 0,
           borderRadius: 7,
           border: 'none',
-          background: 'transparent',
+          background: footerButtonBackground,
+          boxShadow: footerButtonEdge,
           color: footerIconColor,
           cursor: 'pointer',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: collapsed ? 0 : 10,
+          gap: 0,
           flexShrink: 0,
           fontFamily: fonts.primary,
           fontSize: fonts.size,
@@ -79,11 +84,10 @@ export function SidebarFooter({
           lineHeight: 1,
           whiteSpace: 'nowrap',
         }}
-        onMouseEnter={e => { e.currentTarget.style.color = theme.text.primary }}
-        onMouseLeave={e => { e.currentTarget.style.color = footerIconColor }}
+        onMouseEnter={e => { e.currentTarget.style.background = footerButtonHoverBackground; e.currentTarget.style.color = theme.text.primary }}
+        onMouseLeave={e => { e.currentTarget.style.background = footerButtonBackground; e.currentTarget.style.color = footerIconColor }}
       >
         <Settings size={16.2} strokeWidth={2} />
-        {!collapsed && <span>Settings</span>}
       </button>
       <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 2, flexShrink: 0, flexDirection: 'row' }}>
         {([
@@ -97,12 +101,12 @@ export function SidebarFooter({
           ), action: onNewFiles },
         ] as { label: string; icon: React.ReactNode; action: () => void; disabled?: boolean }[]).map(btn => (
           <button key={btn.label} title={btn.disabled ? `${btn.label} disabled` : btn.label} style={{
-            width: 24, height: 24, borderRadius: 6, border: 'none', background: 'transparent',
-            color: btn.disabled ? theme.text.disabled : footerIconColor, cursor: btn.disabled ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 24, height: 24, borderRadius: 6, border: 'none', background: footerButtonBackground,
+            boxShadow: footerButtonEdge, color: btn.disabled ? theme.text.disabled : footerIconColor, cursor: btn.disabled ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
             opacity: btn.disabled ? 0.45 : 1,
           }}
-            onMouseEnter={e => { if (!btn.disabled) e.currentTarget.style.color = theme.text.primary }}
-            onMouseLeave={e => { e.currentTarget.style.color = btn.disabled ? theme.text.disabled : footerIconColor }}
+            onMouseEnter={e => { if (!btn.disabled) { e.currentTarget.style.background = footerButtonHoverBackground; e.currentTarget.style.color = theme.text.primary } }}
+            onMouseLeave={e => { e.currentTarget.style.background = footerButtonBackground; e.currentTarget.style.color = btn.disabled ? theme.text.disabled : footerIconColor }}
             onClick={btn.disabled ? undefined : btn.action}
           >
             {btn.icon}
@@ -125,15 +129,16 @@ export function SidebarFooter({
               title={disabled ? `${ext.label} disabled` : ext.tileType ? ext.label : `${ext.label} settings`}
               onClick={disabled ? undefined : action}
               style={{
-                width: 24, height: 24, borderRadius: 6, border: 'none', background: 'transparent',
+                width: 24, height: 24, borderRadius: 6, border: 'none', background: footerButtonBackground,
+                boxShadow: footerButtonEdge,
                 color: disabled ? theme.text.disabled : footerIconColor,
                 cursor: disabled ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 opacity: disabled ? 0.45 : 1,
                 fontSize: 12, lineHeight: 1,
               }}
-              onMouseEnter={e => { if (!disabled) e.currentTarget.style.color = theme.text.primary }}
-              onMouseLeave={e => { e.currentTarget.style.color = disabled ? theme.text.disabled : footerIconColor }}
+              onMouseEnter={e => { if (!disabled) { e.currentTarget.style.background = footerButtonHoverBackground; e.currentTarget.style.color = theme.text.primary } }}
+              onMouseLeave={e => { e.currentTarget.style.background = footerButtonBackground; e.currentTarget.style.color = disabled ? theme.text.disabled : footerIconColor }}
             >
               {renderExtensionIcon(ext.icon, 12)}
             </button>
@@ -143,12 +148,12 @@ export function SidebarFooter({
         {!galleryEnabled && footerExtensions.length > 0 && (
           <div style={{ position: 'relative' }} ref={extMenuRef}>
             <button title="Extensions" style={{
-              width: 28, height: 28, borderRadius: 6, border: 'none', background: 'transparent',
-              color: showExtMenu ? theme.text.primary : footerIconColor, cursor: 'pointer',
+              width: 28, height: 28, borderRadius: 6, border: 'none', background: footerButtonBackground,
+              boxShadow: footerButtonEdge, color: showExtMenu ? theme.text.primary : footerIconColor, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}
-              onMouseEnter={e => { e.currentTarget.style.color = theme.text.primary }}
-              onMouseLeave={e => { if (!showExtMenu) e.currentTarget.style.color = footerIconColor }}
+              onMouseEnter={e => { e.currentTarget.style.background = footerButtonHoverBackground; e.currentTarget.style.color = theme.text.primary }}
+              onMouseLeave={e => { e.currentTarget.style.background = footerButtonBackground; if (!showExtMenu) e.currentTarget.style.color = footerIconColor }}
               onClick={() => setShowExtMenu(p => !p)}
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">

@@ -872,43 +872,38 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
               label="Default routing"
               description="Choose whether new work prefers the local daemon, stays in-process, or pins to a specific registered host."
             >
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: 460 }}>
-                {([
-                  { id: 'auto', label: 'Auto' },
-                  { id: 'prefer-local-daemon', label: 'Prefer daemon' },
-                  { id: 'runtime-only', label: 'Runtime only' },
-                  { id: 'daemon-only', label: 'Daemon only' },
-                  { id: 'specific-host', label: 'Specific host' },
-                ] as const satisfies Array<{ id: ExecutionMode; label: string }>).map(option => {
-                  const activeExecutionMode = (settings.execution?.mode ?? 'auto') === option.id
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => updateSettingsPatch({
-                        execution: {
-                          mode: option.id,
-                          hostId: option.id === 'specific-host'
-                            ? (settings.execution?.hostId ?? executionHosts.find(host => host.type === 'remote-daemon')?.id ?? null)
-                            : null,
-                        },
-                      })}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: 8,
-                        fontSize: fonts.secondarySize,
-                        fontWeight: 600,
-                        border: `1px solid ${activeExecutionMode ? theme.accent.base : theme.border.default}`,
-                        background: activeExecutionMode ? theme.accent.soft : theme.surface.input,
-                        color: activeExecutionMode ? theme.accent.hover : theme.text.secondary,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {option.label}
-                    </button>
-                  )
-                })}
-              </div>
+              <select
+                value={settings.execution?.mode ?? 'auto'}
+                onChange={e => {
+                  const mode = e.target.value as ExecutionMode
+                  updateSettingsPatch({
+                    execution: {
+                      mode,
+                      hostId: mode === 'specific-host'
+                        ? (settings.execution?.hostId ?? executionHosts.find(host => host.type === 'remote-daemon')?.id ?? null)
+                        : null,
+                    },
+                  })
+                }}
+                style={{
+                  minWidth: 220,
+                  padding: '7px 32px 7px 10px',
+                  fontSize: fonts.secondarySize,
+                  fontWeight: 600,
+                  background: theme.surface.input,
+                  color: theme.text.secondary,
+                  border: `1px solid ${theme.border.default}`,
+                  borderRadius: 8,
+                  outline: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="auto">Auto</option>
+                <option value="prefer-local-daemon">Prefer daemon</option>
+                <option value="runtime-only">Runtime only</option>
+                <option value="daemon-only">Daemon only</option>
+                <option value="specific-host">Specific host</option>
+              </select>
             </SettingRow>
             {(settings.execution?.mode ?? 'auto') === 'specific-host' && (
               <SettingRow
@@ -2149,17 +2144,26 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
     >
       <div style={{
         width: '90vw', maxWidth: 1100, height: '85vh', maxHeight: 780,
-        background: theme.surface.panel, borderRadius: 14,
-        border: `1px solid ${theme.border.default}`,
+        borderRadius: 14,
+        border: '1px solid transparent',
         boxShadow: theme.shadow.modal,
-        display: 'flex', overflow: 'hidden',
-        fontFamily: fonts.primary, fontSize: fonts.size,
+        padding: 1,
+        overflow: 'visible',
       }}>
+        <div style={{
+          width: '100%', height: '100%',
+          background: theme.surface.panel, borderRadius: 13,
+          display: 'flex', overflow: 'hidden',
+          fontFamily: fonts.primary, fontSize: fonts.size,
+        }}>
 
         {/* Left nav */}
         <div style={{
           width: 200, background: theme.surface.panelElevated,
-          borderRight: `1px solid ${theme.border.default}`,
+          borderRight: '1px solid transparent',
+          boxShadow: theme.mode === 'light'
+            ? 'inset -1px 0 0 rgba(255,255,255,0.82)'
+            : 'inset -1px 0 0 rgba(255,255,255,0.28)',
           display: 'flex', flexDirection: 'column',
           padding: '20px 0',
           flexShrink: 0
@@ -2172,7 +2176,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
           </div>
 
           {/* Nav items — grouped */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div className="cs-fade-scroll-y" style={{ flex: 1, overflowY: 'auto' }}>
             {(['app', 'customise', 'system'] as const).map(group => {
               const groupSections = SECTIONS
                 .filter(s => s.group === group)
@@ -2254,9 +2258,10 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
           </div>
 
           {/* Content */}
-          <div style={{ flex: 1, overflowY: 'auto', scrollbarGutter: 'stable', padding: '4px 28px 28px' }}>
+          <div className="cs-fade-scroll-y cs-fade-scroll-y-lg" style={{ flex: 1, overflowY: 'auto', scrollbarGutter: 'stable', padding: '4px 28px 34px' }}>
             {renderContent()}
           </div>
+        </div>
         </div>
       </div>
     </div>

@@ -7,14 +7,14 @@ export interface ToggleProps {
   disabled?: boolean
 }
 
-/** Squared, compact toggle switch. */
+/** Compact toggle switch. */
 export function Toggle({ value, onChange, disabled }: ToggleProps): JSX.Element {
   const theme = useTheme()
   return (
     <div
       onClick={() => { if (!disabled) onChange(!value) }}
       style={{
-        width: 32, height: 18, borderRadius: 4,
+        width: 32, height: 18, borderRadius: 7,
         cursor: disabled ? 'not-allowed' : 'pointer',
         flexShrink: 0,
         background: value ? theme.accent.base : theme.surface.panelMuted,
@@ -27,7 +27,7 @@ export function Toggle({ value, onChange, disabled }: ToggleProps): JSX.Element 
       <div style={{
         position: 'absolute',
         top: 2, left: value ? 16 : 2,
-        width: 12, height: 12, borderRadius: 2,
+        width: 12, height: 12, borderRadius: 4,
         background: value ? theme.text.inverse : theme.text.muted,
         transition: 'left 0.15s, background 0.15s',
       }} />

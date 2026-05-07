@@ -12,7 +12,7 @@ import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNo
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
-import { DEFAULT_THEME_ID, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
+import { DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
 import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf, replaceTabInLeaf } from './components/panelLayoutTree'
 import { basename, getDroppedPaths, toFileUrl, isMediaFile } from './utils/dnd'
@@ -31,17 +31,6 @@ type PendingSessionOpen =
 type SessionTargetEntry = AggregatedSessionEntry | WorkspaceSessionEntry
 type FocusOpenOptions = { persist?: boolean; sourceTileId?: string }
 type MiniChatOptions = { workspaceId: string; tileId: string; title: string }
-type InitialWindowOptions = { workspaceId: string | null; workspacePicker: boolean }
-
-function readInitialWindowOptions(): InitialWindowOptions {
-  if (typeof window === 'undefined') return { workspaceId: null, workspacePicker: false }
-  const params = new URLSearchParams(window.location.search)
-  const workspaceId = params.get('workspaceId')?.trim() || null
-  return {
-    workspaceId,
-    workspacePicker: params.get('workspacePicker') === '1',
-  }
-}
 
 function readMiniChatOptions(): MiniChatOptions | null {
   if (typeof window === 'undefined') return null
@@ -994,11 +983,6 @@ function findDiscoveryMatch(sourceTileId: string, tileList: TileState[], hiddenT
 function App(): JSX.Element {
   useAutoHideScrollbars()
   const miniChatOptions = useMemo(() => readMiniChatOptions(), [])
-  const initialWindowOptions = useMemo(() => readInitialWindowOptions(), [])
-  // Hybrid mode: keep BrowserWindow `tabbingIdentifier` for optional native
-  // macOS grouping, but use our Chrome-style renderer workspace tabs as the
-  // primary visible tab strip.
-  const nativeWorkspaceTabsEnabled = false
 
   const [tiles, setTiles] = useState<TileState[]>([])
   const [groups, setGroups] = useState<GroupState[]>([])
@@ -1047,7 +1031,7 @@ function App(): JSX.Element {
   const [canvasArrangeMode, setCanvasArrangeMode] = useState<'grid' | 'column' | 'row' | null>(null)
   const [guides, setGuides] = useState<{ x?: number; y?: number }[]>([])
   const [discoveryPulses, setDiscoveryPulses] = useState<DiscoveryPulse[]>([])
-  const [autoConnectionsEnabled, setAutoConnectionsEnabled] = useState(true)
+  const [autoConnectionsEnabled] = useState(false)
   const [canvasPointerWorld, setCanvasPointerWorld] = useState<{ x: number; y: number } | null>(null)
   const [hoveredConnectionHandle, setHoveredConnectionHandle] = useState<{ tileId: string; side: AnchorPoint['side'] } | null>(null)
   const connectionHandleHideTimerRef = useRef<number | null>(null)
@@ -1156,11 +1140,11 @@ function App(): JSX.Element {
   // Workspace pill tabs — open workspace ids within this window
   const [openWorkspaceIds, setOpenWorkspaceIds] = useState<string[]>([])
   useEffect(() => {
-    if (miniChatOptions || nativeWorkspaceTabsEnabled) return
+    if (miniChatOptions) return
     if (workspace?.id) setOpenWorkspaceIds(prev => prev.includes(workspace.id) ? prev : [...prev, workspace.id])
-  }, [workspace?.id, miniChatOptions, nativeWorkspaceTabsEnabled])
+  }, [workspace?.id, miniChatOptions])
   useEffect(() => {
-    if (miniChatOptions || nativeWorkspaceTabsEnabled) return
+    if (miniChatOptions) return
     const canonicalCurrentWorkspaceId = getCanonicalWorkspaceId(workspaces, workspace?.id)
     if (workspace?.id && canonicalCurrentWorkspaceId && canonicalCurrentWorkspaceId !== workspace.id) return
 
@@ -1173,10 +1157,10 @@ function App(): JSX.Element {
       if (next.length === prev.length && next.every((id, index) => id === prev[index])) return prev
       return next
     })
-  }, [workspace?.id, workspaces, miniChatOptions, nativeWorkspaceTabsEnabled])
+  }, [workspace?.id, workspaces, miniChatOptions])
 
   useEffect(() => {
-    if (miniChatOptions || nativeWorkspaceTabsEnabled) return
+    if (miniChatOptions) return
     if (!workspaceTabsHydratedRef.current) return
     const canonicalWorkspaceId = getCanonicalWorkspaceId(workspaces, workspace?.id) ?? workspace?.id ?? null
     const canonicalWorkspacePickerReturnId = getCanonicalWorkspaceId(workspaces, workspacePickerReturnWorkspaceId) ?? workspacePickerReturnWorkspaceId ?? null
@@ -1184,7 +1168,7 @@ function App(): JSX.Element {
       openWorkspaceIds,
       currentWorkspaceId: canonicalWorkspaceId ?? canonicalWorkspacePickerReturnId ?? openWorkspaceIds[0] ?? null,
     })
-  }, [openWorkspaceIds, workspace?.id, workspacePickerReturnWorkspaceId, workspaces, miniChatOptions, nativeWorkspaceTabsEnabled])
+  }, [openWorkspaceIds, workspace?.id, workspacePickerReturnWorkspaceId, workspaces, miniChatOptions])
 
   // ─── Auto Agent Mode Effect ───────────────────────────────────────────────
   // Automatically enables agentMode on chat tiles when they get close to compatible tiles
@@ -1568,40 +1552,27 @@ function App(): JSX.Element {
         isFresh ? Promise.resolve(null) : window.electron.workspace.getActive(),
         window.electron.settings?.get()
       ])
-      const persistedWorkspaceTabs = nativeWorkspaceTabsEnabled
-        ? { openWorkspaceIds: [], currentWorkspaceId: null }
-        : readPersistedWorkspaceTabState()
+      const persistedWorkspaceTabs = readPersistedWorkspaceTabState()
       if (savedSettings) setSettings(withDefaultSettings(savedSettings))
       setWorkspaces(wsList)
       const workspaceById = new Map(wsList.map(entry => [entry.id, entry]))
       const miniWorkspaceId = getCanonicalWorkspaceId(wsList, miniChatOptions?.workspaceId ?? null)
-      const initialWorkspaceId = nativeWorkspaceTabsEnabled
-        ? getCanonicalWorkspaceId(wsList, initialWindowOptions.workspaceId)
-        : null
       const restoredWorkspaceId = getCanonicalWorkspaceId(wsList, persistedWorkspaceTabs.currentWorkspaceId)
       const activeWorkspaceId = getCanonicalWorkspaceId(wsList, active?.id ?? null)
       const fallbackWorkspaceId = getCanonicalWorkspaceId(wsList, wsList[0]?.id ?? null)
       const miniWorkspace = miniWorkspaceId
         ? (workspaceById.get(miniWorkspaceId) ?? null)
         : null
-      const initialWorkspace = initialWorkspaceId
-        ? (workspaceById.get(initialWorkspaceId) ?? null)
-        : null
       const restoredWorkspace = restoredWorkspaceId
         ? (workspaceById.get(restoredWorkspaceId) ?? null)
         : null
-      const targetWorkspace = nativeWorkspaceTabsEnabled && initialWindowOptions.workspacePicker
-        ? null
-        : miniWorkspace
-          ?? initialWorkspace
-          ?? restoredWorkspace
-          ?? (activeWorkspaceId ? (workspaceById.get(activeWorkspaceId) ?? null) : null)
-          ?? (fallbackWorkspaceId ? (workspaceById.get(fallbackWorkspaceId) ?? null) : null)
-      const restoredOpenWorkspaceIds = nativeWorkspaceTabsEnabled
-        ? (targetWorkspace ? [targetWorkspace.id] : [])
-        : persistedWorkspaceTabs.openWorkspaceIds
-          .map(id => getCanonicalWorkspaceId(wsList, id))
-          .filter((id): id is string => typeof id === 'string' && workspaceById.has(id))
+      const targetWorkspace = miniWorkspace
+        ?? restoredWorkspace
+        ?? (activeWorkspaceId ? (workspaceById.get(activeWorkspaceId) ?? null) : null)
+        ?? (fallbackWorkspaceId ? (workspaceById.get(fallbackWorkspaceId) ?? null) : null)
+      const restoredOpenWorkspaceIds = persistedWorkspaceTabs.openWorkspaceIds
+        .map(id => getCanonicalWorkspaceId(wsList, id))
+        .filter((id): id is string => Boolean(id) && workspaceById.has(id))
 
       if (targetWorkspace && !restoredOpenWorkspaceIds.includes(targetWorkspace.id)) {
         restoredOpenWorkspaceIds.push(targetWorkspace.id)
@@ -1661,7 +1632,7 @@ function App(): JSX.Element {
         }).catch(() => {})
       }
     }
-  }, [showEmptyLayoutPage, miniChatOptions?.workspaceId, nativeWorkspaceTabsEnabled, initialWindowOptions.workspaceId, initialWindowOptions.workspacePicker])
+  }, [showEmptyLayoutPage, miniChatOptions?.workspaceId])
 
   // ─── Subscribe to custom theme registrations from extensions ─────────────
   useEffect(() => {
@@ -3022,23 +2993,16 @@ function App(): JSX.Element {
     await handleSwitchWorkspace(ws.id)
   }, [handleSwitchWorkspace])
 
-  // Cmd+T → open another workspace. On macOS this uses native AppKit tabs;
-  // elsewhere it keeps the legacy in-window workspace tab strip.
+  // Cmd+T → open next available workspace as a pill tab
   useEffect(() => {
     return window.electron?.window?.onNewTab?.(() => {
-      const next = nativeWorkspaceTabsEnabled
-        ? workspaces.find(w => w.id !== workspace?.id)
-        : workspaces.find(w => !openWorkspaceIds.includes(w.id))
-      if (nativeWorkspaceTabsEnabled) {
-        void window.electron?.window?.newWorkspaceTab?.(next?.id ?? null)
-        return
-      }
+      const next = workspaces.find(w => !openWorkspaceIds.includes(w.id))
       if (next) {
         setOpenWorkspaceIds(prev => [...prev, next.id])
-        void handleSwitchWorkspace(next.id)
+        handleSwitchWorkspace(next.id)
       }
     })
-  }, [workspaces, openWorkspaceIds, handleSwitchWorkspace, nativeWorkspaceTabsEnabled, workspace?.id])
+  }, [workspaces, openWorkspaceIds, handleSwitchWorkspace])
 
   // Launch a layout template into the current workspace instead of creating a
   // separate "Project:Layout" workspace tab.
@@ -4827,57 +4791,55 @@ function App(): JSX.Element {
   const mainPanelTop = 39
   const mainStatusBarLeft = sidebarCollapsed ? 0 : sidebarWidth
   const openSidebarToolbarPadding = sidebarWidth + 16
-  const collapsedSidebarPillHeight = 32
+  const collapsedSidebarPillSize = 24
   // Sidebar's absolute wrapper sits at left: 6 with width sidebarWidth, so its
   // right edge is at (6 + sidebarWidth). Adding 12 here puts the main-panel
   // left edge 6px to the right of the sidebar — a visible 6px gap.
   const expandedLayoutLeft = sidebarWidth + 12
   const mainPanelLeft = sidebarCollapsed ? 6 : expandedLayoutLeft
-  const mainPanelRadius = 16
+  const mainPanelRadius = 10
   const discoveryHighlightZIndex = 0
   const discoveryGlowZIndex = 0
   const discoveryPillZIndex = 99997
-  const showRendererWorkspaceTabs = true
-  const openWorkspaceTabs = showRendererWorkspaceTabs
-    ? openWorkspaceIds
-      .map(id => workspaces.find(ws => ws.id === id) ?? null)
-      .filter((ws): ws is Workspace => Boolean(ws))
-    : []
+  const openWorkspaceTabs = openWorkspaceIds
+    .map(id => workspaces.find(ws => ws.id === id) ?? null)
+    .filter((ws): ws is Workspace => Boolean(ws))
   const hasWorkspaceTabs = openWorkspaceTabs.length > 0
   const workspaceTitleFallback = workspace?.name?.trim() || 'WORKSPACES'
-  const showTopWorkspacePickerTab = showRendererWorkspaceTabs && (showWorkspacePickerTab || (!workspace && openWorkspaceTabs.length === 0))
-  const isFirstTopWorkspaceTabSelected = showRendererWorkspaceTabs
-    ? (showTopWorkspacePickerTab
-      ? openWorkspaceTabs.length === 0
-      : (hasWorkspaceTabs ? openWorkspaceTabs[0]?.id === workspace?.id : true))
-    : false
-  const mainPanelTopLeftRadius = !sidebarCollapsed && isFirstTopWorkspaceTabSelected ? 0 : mainPanelRadius
+  const showTopWorkspacePickerTab = showWorkspacePickerTab || (!workspace && openWorkspaceTabs.length === 0)
   const mainPanelCornerRadii = {
-    topLeft: mainPanelTopLeftRadius,
+    topLeft: mainPanelRadius,
     topRight: mainPanelRadius,
     bottomRight: mainPanelRadius,
     bottomLeft: mainPanelRadius,
   }
   const mainPanelBorderRadius = `${mainPanelCornerRadii.topLeft}px ${mainPanelCornerRadii.topRight}px ${mainPanelCornerRadii.bottomRight}px ${mainPanelCornerRadii.bottomLeft}px`
   const mainPanelBackground = panelLayout ? theme.surface.app : canvasLayerBackground
-  const mainPanelShadow = panelLayout
-    ? 'none'
-    : theme.mode === 'light'
-      ? '0 8px 26px rgba(15,23,42,0.14)'
-      : '0 8px 28px rgba(0,0,0,0.32)'
+  const mainPanelInsetEdgeShadow = theme.mode === 'light'
+    ? 'inset 0 0 0 1px rgba(255,255,255,0.96), inset -1px 0 0 rgba(15,23,42,0.025), inset 0 -1px 0 rgba(15,23,42,0.025)'
+    : 'inset 0 0 0 1px rgba(255,255,255,0.28)'
+  const mainPanelOuterEdgeShadow = '0 0 0 1px rgba(0,0,0,0.04)'
+  const selectedTabDropShadow = theme.mode === 'light'
+    ? '0 5px 12px rgba(15,23,42,0.10)'
+    : '0 5px 12px rgba(0,0,0,0.18)'
+  const mainPanelShadow = `${mainPanelOuterEdgeShadow}, ${selectedTabDropShadow}`
   const workspaceTabLabelSize = Math.max(12, appFonts.size - 1)
-  const chromeWorkspaceTabStripBackground = theme.mode === 'light' ? 'rgba(224, 229, 242, 0.92)' : 'rgba(9, 17, 42, 0.94)'
-  const workspaceTabBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.96)' : 'rgba(3, 5, 12, 0.98)'
-  const workspaceTabInactiveBackground = 'transparent'
-  const workspaceTabInactiveHoverBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.42)' : 'rgba(255,255,255,0.06)'
-  const workspaceTabActiveBorder = theme.mode === 'light' ? 'rgba(12,18,32,0.10)' : 'rgba(255,255,255,0.08)'
-  const workspaceTabCloseHoverBackground = theme.mode === 'light' ? 'rgba(15,23,42,0.10)' : 'rgba(255,255,255,0.12)'
-  const workspaceTabMaxWidth = 'min(270px, 24vw)'
-  const workspaceTabActiveHeight = 34
-  const workspaceTabInactiveHeight = 30
+  const workspaceTabBackground = panelLayout ? theme.surface.panel : mainPanelBackground
+  const workspaceTabInactiveBackground = theme.mode === 'light'
+    ? 'rgba(255,255,255,0.58)'
+    : 'transparent'
+  const workspaceTabInactiveHoverBackground = theme.mode === 'light'
+    ? 'rgba(255,255,255,0.78)'
+    : theme.surface.hover
+  const workspaceTabActiveBorder = `color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
+  const workspaceTabCloseHoverBackground = `color-mix(in srgb, ${theme.surface.selection} 70%, ${theme.surface.hover})`
+  const workspaceTabMaxWidth = 'min(248px, 24vw)'
+  const workspaceTabActiveHeight = 27
+  const workspaceTabInactiveHeight = 22
   const workspaceTabTextOffset = -1
   const workspaceTabInactiveTextOffset = 0
-  const workspaceTabInactiveBottomGap = 3
+  const workspaceTabActiveBottomGap = 3
+  const workspaceTabInactiveBottomGap = workspaceTabActiveBottomGap + 3
   const workspaceTabAttachedBottomGap = -2
   // Discovery connection colors — adapt to theme mode
   const dsc = theme.mode === 'light'
@@ -4916,6 +4878,10 @@ function App(): JSX.Element {
     root.style.setProperty('--color-popover', theme.surface.panel)
     root.style.setProperty('--color-popover-foreground', theme.text.primary)
     root.style.setProperty('--color-sidebar', theme.surface.panelMuted)
+    root.style.setProperty('--cs-edge-shadow', getEdgeShadow(theme))
+    root.style.setProperty('--cs-edge-shadow-subtle', getEdgeShadow(theme, 'subtle'))
+    root.style.setProperty('--cs-edge-shadow-strong', getEdgeShadow(theme, 'strong'))
+    root.style.setProperty('--cs-edge-shadow-accent', getEdgeShadow(theme, 'accent'))
     root.style.setProperty('--ct-font-primary', appFonts.primary)
     root.style.setProperty('--ct-font-primary-size', `${appFonts.size}px`)
     root.style.setProperty('--ct-font-primary-line', String(appFonts.lineHeight))
@@ -4951,6 +4917,7 @@ function App(): JSX.Element {
     appFonts.weight,
     theme.accent.base,
     theme.border.default,
+    theme.mode,
     theme.chat.background,
     theme.chat.inputBorder,
     theme.status.danger,
@@ -4965,15 +4932,55 @@ function App(): JSX.Element {
   ])
 
   useEffect(() => {
+    const selector = '.cs-fade-scroll-y, [data-scroll-fade="y"], [style*="overflow-y: auto"], [style*="overflow: auto"]'
+    let raf = 0
+    const updateScrollFades = () => {
+      raf = 0
+      document.querySelectorAll<HTMLElement>(selector).forEach(el => {
+        if (el.dataset.scrollFade === 'none') {
+          el.removeAttribute('data-scroll-fade-active')
+          return
+        }
+        const style = window.getComputedStyle(el)
+        const canScrollY = style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflowY === 'overlay'
+        const needsFade = canScrollY && el.clientHeight > 0 && el.scrollHeight - el.clientHeight > 2
+        if (needsFade) {
+          if (el.getAttribute('data-scroll-fade-active') !== 'true') el.setAttribute('data-scroll-fade-active', 'true')
+        } else if (el.hasAttribute('data-scroll-fade-active')) {
+          el.removeAttribute('data-scroll-fade-active')
+        }
+      })
+    }
+    const scheduleUpdate = () => {
+      if (raf) return
+      raf = window.requestAnimationFrame(updateScrollFades)
+    }
+    scheduleUpdate()
+    const mutationObserver = new MutationObserver(scheduleUpdate)
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-scroll-fade', 'data-scroll-fade-active'],
+    })
+    const resizeObserver = new ResizeObserver(scheduleUpdate)
+    resizeObserver.observe(document.documentElement)
+    window.addEventListener('resize', scheduleUpdate)
+    const interval = window.setInterval(scheduleUpdate, 1000)
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf)
+      mutationObserver.disconnect()
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', scheduleUpdate)
+      window.clearInterval(interval)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!miniChatOptions) return
     void window.electron?.window?.setTitle?.(miniChatOptions.title)
   }, [miniChatOptions])
-
-  useEffect(() => {
-    if (miniChatOptions) return
-    const title = workspace?.name?.trim() || (showWorkspacePickerTab ? 'New Workspace' : 'CodeSurf')
-    void window.electron?.window?.setTitle?.(title)
-  }, [workspace?.name, showWorkspacePickerTab, miniChatOptions])
 
   const miniChatTile = miniChatOptions
     ? tiles.find(tile => tile.id === miniChatOptions.tileId && tile.type === 'chat')
@@ -5301,17 +5308,14 @@ function App(): JSX.Element {
         <div
           className="flex items-center flex-shrink-0"
           style={{
-            height: 42,
+            height: 38,            
             // @ts-ignore
             WebkitAppRegion: 'drag',
             paddingLeft: sidebarCollapsed ? 78 : sidebarWidth + 4,
             transition: 'padding-left 0.15s ease',
             position: 'relative',
             zIndex: 90,
-            paddingTop: 4,
-            background: showRendererWorkspaceTabs ? chromeWorkspaceTabStripBackground : 'transparent',
-            borderBottom: showRendererWorkspaceTabs ? `1px solid ${theme.mode === 'light' ? 'rgba(15,23,42,0.12)' : 'rgba(255,255,255,0.07)'}` : 'none',
-            boxShadow: showRendererWorkspaceTabs && theme.mode !== 'light' ? 'inset 0 -1px 0 rgba(0,0,0,0.55)' : 'none',
+            paddingTop: 2,
           }}
         >
           {!sidebarCollapsed && (
@@ -5336,35 +5340,37 @@ function App(): JSX.Element {
               style={{
                 position: 'fixed',
                 top: 6,
-                left: 76,
+                left: 78,
                 zIndex: 2147483647,
-                width: 28,
-                height: 28,
-                // Tahoe toolbar control: circular Liquid Glass pill. The
-                // backdrop-filter (blur + saturate) recreates the AppKit
-                // .glass material in the renderer; the translucent dark fill
-                // gives the pill a defined edge against the window vibrancy.
+                width: collapsedSidebarPillSize,
+                height: collapsedSidebarPillSize,
+                // Tahoe toolbar control: the old hover state is now the
+                // resting state so it reads as an actual button next to the
+                // traffic lights instead of disappearing into vibrancy.
                 borderRadius: '50%',
-                border: '0.5px solid rgba(255,255,255,0.10)',
-                background: 'rgba(0,0,0,0.18)',
+                border: '0.5px solid transparent',
+                background: 'rgba(255,255,255,0.10)',
                 backdropFilter: 'blur(20px) saturate(180%)',
                 WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-                color: theme.text.secondary,
+                boxShadow: 'var(--cs-edge-shadow-strong)',
+                color: theme.text.primary,
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 pointerEvents: 'auto',
                 WebkitAppRegion: 'no-drag',
-                transition: 'background 0.12s ease, color 0.12s ease',
+                transition: 'background 0.12s ease, color 0.12s ease, transform 0.12s ease',
               } as React.CSSProperties}
               onMouseEnter={event => {
-                event.currentTarget.style.background = 'rgba(255,255,255,0.10)'
+                event.currentTarget.style.background = 'rgba(255,255,255,0.16)'
                 event.currentTarget.style.color = theme.text.primary
+                event.currentTarget.style.transform = 'scale(1.03)'
               }}
               onMouseLeave={event => {
-                event.currentTarget.style.background = 'rgba(0,0,0,0.18)'
-                event.currentTarget.style.color = theme.text.secondary
+                event.currentTarget.style.background = 'rgba(255,255,255,0.10)'
+                event.currentTarget.style.color = theme.text.primary
+                event.currentTarget.style.transform = 'scale(1)'
               }}
             >
               {/* Tahoe-style sidebar toggle: outlined rounded rectangle with a
@@ -5372,7 +5378,7 @@ function App(): JSX.Element {
                   Symbol (which lucide doesn't ship — its PanelLeft variants
                   use only an outline divider, which read as visually identical
                   to one another at 17px). */}
-              <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true">
                 <rect x="2.5" y="3.5" width="15" height="13" rx="2.6" fill="none" stroke="currentColor" strokeWidth="1.6" />
                 <rect x="2.5" y="3.5" width="5.5" height="13" rx="2.6" fill="currentColor" />
               </svg>
@@ -5381,9 +5387,9 @@ function App(): JSX.Element {
 
           <div
             style={{
-              display: showRendererWorkspaceTabs ? 'flex' : 'none',
+              display: 'flex',
               alignItems: 'flex-end',
-              gap: 3,
+              gap: 8,
               minWidth: 0,
               height: '100%',
               paddingLeft: 8,
@@ -5404,16 +5410,19 @@ function App(): JSX.Element {
                     height: isActive ? workspaceTabActiveHeight : workspaceTabInactiveHeight,
                     padding: '0 8px 0 10px',
                     gap: 5,
-                    marginBottom: isActive ? workspaceTabAttachedBottomGap : workspaceTabInactiveBottomGap,
-                    borderRadius: isActive ? '14px 14px 0 0' : 10,
-                    background: isActive ? workspaceTabBackground : workspaceTabInactiveBackground,
+                    marginBottom: isActive ? workspaceTabActiveBottomGap : workspaceTabInactiveBottomGap,
+                    borderRadius: 8,
+                    background: isActive
+                      ? (theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground)
+                      : workspaceTabInactiveBackground,
                     color: isActive ? theme.text.primary : theme.text.secondary,
-                    transition: 'color 0.12s ease, background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease',
-                    border: isActive ? `1px solid ${workspaceTabActiveBorder}` : '1px solid transparent',
-                    borderBottom: isActive ? 'none' : '1px solid transparent',
+                    transition: 'color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease',
+                    border: '0.5px solid transparent',
                     boxShadow: isActive
-                      ? (theme.mode === 'light' ? '0 -1px 2px rgba(15,23,42,0.06)' : '0 -1px 0 rgba(255,255,255,0.05), 0 8px 18px rgba(0,0,0,0.24)')
-                      : 'none',
+                      ? (theme.mode === 'light'
+                          ? `inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), ${selectedTabDropShadow}`
+                          : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`)
+                      : 'var(--cs-edge-shadow)',
                     boxSizing: 'border-box',
                     position: 'relative',
                     zIndex: isActive ? 1 : 0,
@@ -5444,7 +5453,7 @@ function App(): JSX.Element {
                       background: 'transparent',
                       color: 'inherit',
                       fontSize: Math.max(11, workspaceTabLabelSize),
-                      // just in case I want it back -- fontWeight: isActive ? 600 : 400,
+                      fontWeight: isActive ? 700 : 400,
                       lineHeight: 1,
                       letterSpacing: 0,
                       cursor: isActive ? 'default' : 'pointer',
@@ -5516,16 +5525,18 @@ function App(): JSX.Element {
                   height: workspaceTabActiveHeight,
                   padding: '0 8px 0 10px',
                   gap: 5,
-                  marginBottom: workspaceTabAttachedBottomGap,
-                  borderRadius: '14px 14px 0 0',
-                  background: workspaceTabBackground,
+                  marginBottom: workspaceTabActiveBottomGap,
+                  borderRadius: 8,
+                  background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground,
                   color: theme.text.primary,
                   fontSize: Math.max(11, workspaceTabLabelSize),
-                  fontWeight: 600,
+                  fontWeight: 700,
                   lineHeight: 1,
                   letterSpacing: 0,
-                  border: `1px solid ${workspaceTabActiveBorder}`,
-                  borderBottom: 'none',
+                  border: '0.5px solid transparent',
+                  boxShadow: theme.mode === 'light'
+                    ? `inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), ${selectedTabDropShadow}`
+                    : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`,
                   boxSizing: 'border-box',
                   position: 'relative',
                   zIndex: 1,
@@ -5561,12 +5572,14 @@ function App(): JSX.Element {
                   height: workspaceTabActiveHeight,
                   padding: '0 10px',
                   gap: 5,
-                  marginBottom: workspaceTabAttachedBottomGap,
-                  borderRadius: '14px 14px 0 0',
-                  background: workspaceTabBackground,
+                  marginBottom: workspaceTabActiveBottomGap,
+                  borderRadius: 8,
+                  background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground,
                   color: theme.text.primary,
-                  border: `1px solid ${workspaceTabActiveBorder}`,
-                  borderBottom: 'none',
+                  border: '0.5px solid transparent',
+                  boxShadow: theme.mode === 'light'
+                    ? `inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), ${selectedTabDropShadow}`
+                    : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`,
                   boxSizing: 'border-box',
                   position: 'relative',
                   zIndex: 1,
@@ -5589,7 +5602,7 @@ function App(): JSX.Element {
                     background: 'transparent',
                     color: 'inherit',
                     fontSize: Math.max(11, workspaceTabLabelSize),
-                    fontWeight: 600,
+                    fontWeight: 700,
                     lineHeight: 1,
                     letterSpacing: 0,
                     cursor: 'default',
@@ -5610,7 +5623,7 @@ function App(): JSX.Element {
                       transform: 'translateY(-1px)',
                     }}
                   >
-                    NEW WORKSPACE
+                    WORKSPACE
                   </span>
                 </button>
                 {openWorkspaceTabs.length > 0 && (
@@ -5667,19 +5680,30 @@ function App(): JSX.Element {
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: 30,
-                height: 30,
+                width: 24,
+                height: 24,
                 marginBottom: workspaceTabInactiveBottomGap,
                 padding: 0,
-                border: 'none',
-                borderRadius: 999,
-                background: 'transparent',
+                border: '0.5px solid transparent',
+                borderRadius: '50%',
+                background: workspaceTabInactiveBackground,
+                boxShadow: 'var(--cs-edge-shadow)',
                 color: theme.text.muted,
                 cursor: 'pointer',
-                transition: 'color 0.12s ease, background 0.12s ease',
+                transition: 'background 0.12s ease, color 0.12s ease, transform 0.12s ease',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = workspaceTabInactiveHoverBackground
+                e.currentTarget.style.color = theme.text.primary
+                e.currentTarget.style.transform = 'scale(1.03)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = workspaceTabInactiveBackground
+                e.currentTarget.style.color = theme.text.muted
+                e.currentTarget.style.transform = 'scale(1)'
               }}
             >
-              <Plus size={18} strokeWidth={2.1} />
+              <Plus size={13} strokeWidth={2.2} />
             </button>
           </div>
         </div>
@@ -5691,34 +5715,39 @@ function App(): JSX.Element {
             style={{
               display: !sidebarPillVisible ? 'none' : 'flex',
               position: 'absolute',
-              left: 4,
+              left: 2,
               top: '50%',
               transform: 'translateY(-50%)',
               transition: 'opacity 0.12s ease',
-              width: 8,
-              height: collapsedSidebarPillHeight,
-              background: theme.surface.panelElevated,
-              border: `1px solid ${theme.border.strong}`,
-              borderRadius: 9999,
+              width: collapsedSidebarPillSize,
+              height: collapsedSidebarPillSize,
+              background: theme.mode === 'light' ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.10)',
+              backdropFilter: 'blur(20px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+              border: '0.5px solid transparent',
+              borderRadius: '50%',
+              boxShadow: theme.mode === 'light'
+                ? 'var(--cs-edge-shadow-strong), 0 0 0 1px rgba(15,23,42,0.14), 0 2px 6px rgba(15,23,42,0.10)'
+                : 'var(--cs-edge-shadow-strong), 0 0 0 1px rgba(0,0,0,0.22), 0 2px 6px rgba(0,0,0,0.18)',
               cursor: 'pointer',
               alignItems: 'center',
               justifyContent: 'center',
-              color: theme.text.disabled,
+              color: theme.text.primary,
               fontSize: 9,
               userSelect: 'none',
               zIndex: 200,
+            } as React.CSSProperties}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = theme.mode === 'light' ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.16)'
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = theme.surface.panelMuted }}
-            onMouseLeave={e => { e.currentTarget.style.background = theme.surface.panelElevated }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = theme.mode === 'light' ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.10)'
+            }}
           >
-            <span style={{
-              width: 2,
-              height: 14,
-              borderRadius: 999,
-              background: theme.text.disabled,
-              opacity: 0.9,
-              transition: 'opacity 0.12s ease',
-            }} />
+            <svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" style={{ transform: 'scaleX(-1)' }}>
+              <rect x="2.5" y="3.5" width="15" height="13" rx="2.6" fill="none" stroke="currentColor" strokeWidth="1.6" />
+              <rect x="2.5" y="3.5" width="5.5" height="13" rx="2.6" fill="currentColor" />
+            </svg>
           </div>
         )}
 
@@ -5735,10 +5764,9 @@ function App(): JSX.Element {
             // corners and split gutters don't reveal the app backdrop.
             background: mainPanelBackground,
             borderRadius: mainPanelBorderRadius,
-            // Panel mode draws per-leaf hairline edges. Keeping the shared
-            // shell border underneath causes a second line to peek through at
-            // rounded outer corners.
-            border: panelLayout ? '0.5px solid transparent' : `0.5px solid ${theme.border.subtle}`,
+            // Keep the layout border transparent; the visible panel edge is
+            // the same inset-white + 4% black shadow treatment used by buttons.
+            border: '0.5px solid transparent',
             boxShadow: mainPanelShadow,
             cursor: isDraggingCanvas ? 'grabbing' : (spaceHeld.current ? 'grab' : 'default'),
             userSelect: 'none',
@@ -5833,63 +5861,17 @@ function App(): JSX.Element {
             }
           }}
         >
-          {!panelLayout && (
-            <div
-              onMouseDown={e => e.stopPropagation()}
-              style={{
-                position: 'absolute',
-                right: 12,
-                top: 12,
-                zIndex: 100000,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '7px 9px',
-                borderRadius: 8,
-                border: `1px solid ${theme.border.subtle}`,
-                background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : 'rgba(18,22,26,0.82)',
-                boxShadow: theme.mode === 'light' ? '0 8px 20px rgba(15,23,42,0.12)' : '0 8px 22px rgba(0,0,0,0.26)',
-                backdropFilter: 'blur(12px)',
-                color: theme.text.secondary,
-                fontSize: appFonts.secondarySize,
-              }}
-            >
-              <Link2 size={13} strokeWidth={2} aria-hidden="true" />
-              <span>Automatic</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoConnectionsEnabled}
-                title="Toggle automatic proximity connections"
-                onClick={() => setAutoConnectionsEnabled(value => !value)}
-                style={{
-                  width: 34,
-                  height: 18,
-                  borderRadius: 999,
-                  border: `1px solid ${autoConnectionsEnabled ? `rgba(${dsc.line}, 0.48)` : theme.border.default}`,
-                  background: autoConnectionsEnabled ? `rgba(${dsc.line}, 0.24)` : theme.surface.panelMuted,
-                  padding: 2,
-                  cursor: 'pointer',
-                  position: 'relative',
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: 2,
-                    left: autoConnectionsEnabled ? 18 : 2,
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    background: autoConnectionsEnabled ? `rgb(${dsc.line})` : theme.text.disabled,
-                    transition: 'left 0.14s ease, background 0.14s ease',
-                    boxShadow: autoConnectionsEnabled ? `0 0 8px rgba(${dsc.line}, 0.36)` : 'none',
-                  }}
-                />
-              </button>
-            </div>
-          )}
-
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: 'inherit',
+              boxShadow: mainPanelInsetEdgeShadow,
+              pointerEvents: 'none',
+              zIndex: 100001,
+            }}
+          />
           {/* Canvas content wrapper — fades out when in expanded/tabbed mode */}
           <div style={{
             position: 'absolute', inset: 0,

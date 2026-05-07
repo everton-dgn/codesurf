@@ -6,6 +6,7 @@ import { ContextMenu, type MenuItem } from './ContextMenu'
 import { useTheme } from '../ThemeContext'
 import { useAppFonts } from '../FontContext'
 import { useTileColor } from '../TileColorContext'
+import { getEdgeShadow } from '../theme'
 import { useTileTodos } from '../state/tileTodosStore'
 
 // --- Drawer data types ---
@@ -577,13 +578,13 @@ function SkillsPanel({ skills, onToggle }: {
       <button
         onClick={() => onToggle(s.id)}
         style={{
-          width: 28, height: 14, borderRadius: 7, border: 'none', cursor: 'pointer',
+          width: 28, height: 14, borderRadius: 8, border: 'none', cursor: 'pointer',
           background: s.enabled ? theme.accent.base : theme.surface.panelMuted, position: 'relative',
           transition: 'background 0.15s', flexShrink: 0, padding: 0,
         }}
       >
         <div style={{
-          width: 10, height: 10, borderRadius: 5, background: theme.text.inverse,
+          width: 10, height: 10, borderRadius: 6, background: theme.text.inverse,
           position: 'absolute', top: 2, left: s.enabled ? 16 : 2,
           transition: 'left 0.15s',
         }} />
@@ -1346,8 +1347,8 @@ export function TileChrome({
           width: DRAWER_WIDTH + 12,
           background: theme.surface.panelMuted,
           borderRadius: 10,
-          border: `1px solid ${theme.border.default}`,
-          boxShadow: theme.shadow.panel,
+          border: '1px solid transparent',
+          boxShadow: getEdgeShadow(theme, 'strong'),
           zIndex: -1,
           transform: drawerOpen ? 'translateX(0)' : `translateX(-${DRAWER_WIDTH}px)`,
           transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -1375,10 +1376,8 @@ export function TileChrome({
         style={{
           width: '100%', height: '100%',
           borderRadius: getCurvierBlockRadius(tile.borderRadius), overflow: allowOverflow ? 'visible' : 'hidden',
-          border: isSelected ? `1px solid ${theme.accent.base}` : `1px solid ${theme.border.default}`,
-          boxShadow: isSelected
-            ? `${theme.shadow.panel}, 0 0 0 1px ${theme.border.accent}`
-            : theme.shadow.panel,
+          border: '1px solid transparent',
+          boxShadow: isSelected ? getEdgeShadow(theme, 'accent') : getEdgeShadow(theme, 'strong'),
           background: theme.surface.panel,
           position: 'relative',
           zIndex: 1,
