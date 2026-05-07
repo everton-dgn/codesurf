@@ -361,11 +361,17 @@ button:focus-visible,
 }
 
 /* Soft vertical scroll fade: prevents scroll containers from hard-clipping
-   content at their top/bottom edges. Apply to the actual scrolling element. */
+   content at their top/bottom edges. JS only enables it when vertical overflow
+   actually exists, so short/non-scrolling panes render normally. */
 .cs-fade-scroll-y,
 [data-scroll-fade="y"],
 :where([style*="overflow-y: auto"], [style*="overflow: auto"]):not([data-scroll-fade="none"]) {
   --cs-scroll-fade-size: 24px;
+}
+
+.cs-fade-scroll-y[data-scroll-fade-active="true"],
+[data-scroll-fade="y"][data-scroll-fade-active="true"],
+:where([style*="overflow-y: auto"], [style*="overflow: auto"])[data-scroll-fade-active="true"]:not([data-scroll-fade="none"]) {
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0,
