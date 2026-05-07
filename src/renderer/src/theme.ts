@@ -114,13 +114,15 @@ export type EdgeShadowTone = 'subtle' | 'default' | 'strong' | 'accent'
 
 export function getEdgeShadow(theme: Pick<AppTheme, 'mode' | 'accent'>, tone: EdgeShadowTone = 'default'): string {
   if (tone === 'accent') {
-    return `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 38%, white 18%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.04)`
+    return theme.mode === 'light'
+      ? `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 38%, white 18%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.04)`
+      : `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 24%, white 4%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.10)`
   }
 
   const whiteAlpha = theme.mode === 'light'
     ? tone === 'strong' ? 0.92 : tone === 'subtle' ? 0.68 : 0.82
-    : tone === 'strong' ? 0.44 : tone === 'subtle' ? 0.22 : 0.32
-  const blackAlpha = 0.04
+    : tone === 'strong' ? 0.12 : tone === 'subtle' ? 0.055 : 0.085
+  const blackAlpha = theme.mode === 'light' ? 0.04 : 0.10
 
   return `inset 0 0 0 1px rgba(255, 255, 255, ${whiteAlpha}), 0 0 0 1px rgba(0, 0, 0, ${blackAlpha})`
 }

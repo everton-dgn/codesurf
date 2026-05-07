@@ -4816,7 +4816,7 @@ function App(): JSX.Element {
   const mainPanelBackground = panelLayout ? theme.surface.app : canvasLayerBackground
   const mainPanelInsetEdgeShadow = theme.mode === 'light'
     ? 'inset 0 0 0 1px rgba(255,255,255,0.96), inset -1px 0 0 rgba(15,23,42,0.025), inset 0 -1px 0 rgba(15,23,42,0.025)'
-    : 'inset 0 0 0 1px rgba(255,255,255,0.28)'
+    : 'inset 0 0 0 1px rgba(255,255,255,0.09)'
   const mainPanelOuterEdgeShadow = '0 0 0 1px rgba(0,0,0,0.04)'
   const selectedTabDropShadow = theme.mode === 'light'
     ? '0 5px 12px rgba(15,23,42,0.10)'
