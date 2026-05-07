@@ -69,6 +69,10 @@ function getSessionActivityKey(session: SessionEntry): string {
   return `${agentKey}:entry:${session.workspaceId}:${session.id}`
 }
 
+function getSessionSelectionKey(session: SessionEntry): string {
+  return `${session.workspaceId}:${session.id}`
+}
+
 function loadSessionReadWatermarks(): SessionReadWatermarks {
   try {
     const raw = window.localStorage.getItem(SESSION_READ_WATERMARKS_STORAGE_KEY)
@@ -249,6 +253,11 @@ function SessionSidebarRow({
       ? theme.text.secondary
       : theme.text.disabled
   const leadingIconLeft = Math.max(0, 8 + indent * indentUnit - 14)
+  const activeBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.56)' : 'rgba(255,255,255,0.075)'
+  const hoverBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.34)' : theme.surface.hover
+  const activeShadow = theme.mode === 'light'
+    ? 'inset 0 0 0 1px rgba(255,255,255,0.90), 0 0 0 1px rgba(15,23,42,0.06)'
+    : 'var(--cs-edge-shadow)'
 
   return (
     <div
@@ -274,7 +283,8 @@ function SessionSidebarRow({
         WebkitUserSelect: 'none',
         borderRadius: 'var(--cs-sidebar-row-radius)',
         margin: '0',
-        background: active ? theme.surface.selection : hovered ? theme.surface.hover : 'transparent',
+        background: active ? activeBackground : hovered ? hoverBackground : 'transparent',
+        boxShadow: active ? activeShadow : 'none',
         transition: 'background 0.1s ease, box-shadow 0.1s ease',
         position: 'relative',
         ...({ '--cs-thread-row-accent': active ? theme.accent.base : theme.text.muted } as React.CSSProperties),
@@ -678,7 +688,7 @@ function SidebarSearchPalette({
         <div style={{ padding: '8px 14px 6px', color: theme.text.disabled, fontSize: Math.max(11, fonts.secondarySize), fontWeight: 700 }}>
           Recent chats
         </div>
-        <div style={{ overflowY: 'auto', paddingBottom: 6 }}>
+        <div className="cs-fade-scroll-y cs-fade-scroll-y-sm" style={{ overflowY: 'auto', paddingBottom: 6 }}>
           {sessions.map((session, index) => (
             <button
               key={`${session.workspaceId}:${session.id}`}
@@ -949,7 +959,7 @@ export function Sidebar({
       activeChatSessionId,
       activeChatSessionEntryId,
     }))
-    if (activeSession) setSelectedSessionKey(getSessionActivityKey(activeSession))
+    if (activeSession) setSelectedSessionKey(getSessionSelectionKey(activeSession))
   }, [activeChatSessionEntryId, activeChatSessionId, activeChatTileId, sessions])
 
   const scrollSessionsToTop = useCallback(() => {
@@ -1488,7 +1498,7 @@ export function Sidebar({
   }, [setSessionArchived])
 
   const openSessionFromSidebar = useCallback((session: SessionEntry, options?: { persist?: boolean }) => {
-    setSelectedSessionKey(getSessionActivityKey(session))
+    setSelectedSessionKey(getSessionSelectionKey(session))
     setSelectedProjectId(projectEntries.find(projectEntry => projectEntry.workspaceIds.includes(session.workspaceId))?.id ?? selectedProjectId)
     markSessionRead(session)
     const intent = getSessionOpenIntent(session, options)
@@ -1511,7 +1521,7 @@ export function Sidebar({
       openSessionFromSidebar(session)
       return
     }
-    setSelectedSessionKey(getSessionActivityKey(session))
+    setSelectedSessionKey(getSessionSelectionKey(session))
     setSelectedProjectId(projectEntries.find(projectEntry => projectEntry.workspaceIds.includes(session.workspaceId))?.id ?? selectedProjectId)
     markSessionRead(session)
     void window.electron.window.openMiniChat({
@@ -1743,7 +1753,7 @@ export function Sidebar({
       activeChatTileId,
       activeChatSessionId,
       activeChatSessionEntryId,
-    }) || selectedSessionKey === getSessionActivityKey(session)
+    }) || selectedSessionKey === getSessionSelectionKey(session)
     const isStreaming =
       (session.tileId ? streamingSnapshot.tileIds.has(session.tileId) : false)
       || streamingSnapshot.entryIds.has(session.id)
@@ -1999,8 +2009,7 @@ export function Sidebar({
           flexShrink: 0,
           zIndex: 2,
           padding: '16px 8px 8px',
-          background: theme.surface.sidebar,
-          borderBottom: `1px solid ${theme.border.subtle}`,
+          background: 'transparent',
           fontSize: fonts.secondarySize,
           fontWeight: fonts.secondaryWeight,
           lineHeight: fonts.secondaryLineHeight * 0.9,
@@ -2031,7 +2040,8 @@ export function Sidebar({
       {/* Scrollable sections */}
       <div
         ref={scrollRef}
-        style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 6, userSelect: 'none', WebkitUserSelect: 'none' }}
+        className="cs-fade-scroll-y cs-fade-scroll-y-lg"
+        style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 6, paddingBottom: 18, userSelect: 'none', WebkitUserSelect: 'none' }}
       >
         <div style={{ userSelect: 'none', WebkitUserSelect: 'none' }}>
 
@@ -2251,7 +2261,8 @@ export function Sidebar({
                         width: '100%',
                         padding: '6px 4px 8px 0',
                         color: groupSelected ? theme.text.primary : theme.text.secondary,
-                        background: groupSelected ? theme.surface.selection : 'transparent',
+                        background: 'transparent',
+                        boxShadow: 'none',
                         borderRadius: 8,
                       }}
                     >
@@ -2304,8 +2315,8 @@ export function Sidebar({
                         </span>
                         <span style={{
                           fontSize: fonts.size + 1,
-                          fontWeight: 600,
-                          color: theme.text.secondary,
+                          fontWeight: 800,
+                          color: groupSelected ? theme.text.primary : theme.text.secondary,
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',

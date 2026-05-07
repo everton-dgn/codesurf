@@ -166,6 +166,10 @@
   --cs-chat-mini-height: 720px;
   --cs-accent: #3b82f6;
   --cs-surface-hover: rgba(255, 255, 255, 0.06);
+  --cs-edge-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --cs-edge-shadow-subtle: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --cs-edge-shadow-strong: inset 0 0 0 1px rgba(255, 255, 255, 0.28), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --cs-edge-shadow-accent: inset 0 0 0 1px color-mix(in srgb, var(--cs-accent) 38%, white 18%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.04);
 }
 
 * {
@@ -234,12 +238,48 @@ button:focus-visible,
 [role="button"]:focus,
 [role="button"]:focus-visible {
   outline: none !important;
-  box-shadow: none !important;
 }
 
 #root *:focus,
 #root *:focus-visible {
   outline: none !important;
+}
+
+/* Dimensional edges: replace flat gray 1px strokes with a crisp inset white
+   hairline plus the requested 4% black outer shadow. Keep the real border
+   transparent so layout stays stable while the visual edge comes from shadow. */
+#root :where(.border, .border-input, .border-border) {
+  border-color: transparent;
+  box-shadow: var(--cs-edge-shadow);
+}
+
+#root :where(.shadow-xs) {
+  box-shadow: var(--cs-edge-shadow);
+}
+
+#root [style*="border: 1px solid"][style*="border-radius"],
+#root [style*="border: 0.5px solid"][style*="border-radius"] {
+  border-color: transparent !important;
+  box-shadow: var(--cs-edge-shadow);
+}
+
+#root [style*="border: 1px dashed"][style*="border-radius"] {
+  border-color: transparent !important;
+  box-shadow: var(--cs-edge-shadow-accent);
+}
+
+#root button[style*="border: 1px solid"],
+#root [role="button"][style*="border: 1px solid"],
+#root button.border,
+#root [role="button"].border {
+  border-color: transparent !important;
+  box-shadow: var(--cs-edge-shadow) !important;
+}
+
+#root button[style*="border: 1px dashed"],
+#root [role="button"][style*="border: 1px dashed"] {
+  border-color: transparent !important;
+  box-shadow: var(--cs-edge-shadow-accent) !important;
 }
 
 /* xterm overrides — eliminate bottom gap from fractional row heights.
@@ -318,6 +358,34 @@ button:focus-visible,
 
 .cs-chat-composer-wrap {
   container: cs-chat-composer / inline-size;
+}
+
+/* Soft vertical scroll fade: prevents scroll containers from hard-clipping
+   content at their top/bottom edges. Apply to the actual scrolling element. */
+.cs-fade-scroll-y {
+  --cs-scroll-fade-size: 24px;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--cs-scroll-fade-size),
+    #000 calc(100% - var(--cs-scroll-fade-size)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--cs-scroll-fade-size),
+    #000 calc(100% - var(--cs-scroll-fade-size)),
+    transparent 100%
+  );
+}
+
+.cs-fade-scroll-y-sm {
+  --cs-scroll-fade-size: 14px;
+}
+
+.cs-fade-scroll-y-lg {
+  --cs-scroll-fade-size: 34px;
 }
 
 .cs-chat-composer-card {
@@ -440,27 +508,11 @@ button:focus-visible,
 }
 
 .cs-thread-row::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 7px;
-  bottom: 7px;
-  width: 2px;
-  border-radius: 999px;
-  background: var(--cs-thread-row-accent, var(--cs-accent));
-  opacity: 0;
-  transform: scaleY(0.72);
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-.cs-thread-row-active::before,
-.cs-thread-row:hover::before {
-  opacity: 0.9;
-  transform: scaleY(1);
+  content: none;
 }
 
 .cs-thread-row:hover {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cs-thread-row-accent, var(--cs-accent)) 18%, transparent);
+  box-shadow: var(--cs-edge-shadow-subtle);
 }
 
 .cs-mini-chat-window {

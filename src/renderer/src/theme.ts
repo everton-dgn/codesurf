@@ -110,6 +110,28 @@ export interface AppTheme {
   }
 }
 
+export type EdgeShadowTone = 'subtle' | 'default' | 'strong' | 'accent'
+
+export function getEdgeShadow(theme: Pick<AppTheme, 'mode' | 'accent'>, tone: EdgeShadowTone = 'default'): string {
+  if (tone === 'accent') {
+    return `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 38%, white 18%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.04)`
+  }
+
+  const whiteAlpha = theme.mode === 'light'
+    ? tone === 'strong' ? 0.92 : tone === 'subtle' ? 0.68 : 0.82
+    : tone === 'strong' ? 0.28 : tone === 'subtle' ? 0.14 : 0.20
+  const blackAlpha = 0.04
+
+  return `inset 0 0 0 1px rgba(255, 255, 255, ${whiteAlpha}), 0 0 0 1px rgba(0, 0, 0, ${blackAlpha})`
+}
+
+export function stackEdgeShadow(theme: Pick<AppTheme, 'mode' | 'accent'>, shadow?: string, tone: EdgeShadowTone = 'default'): string {
+  const edge = getEdgeShadow(theme, tone)
+  if (!shadow || shadow === 'none') return edge
+  if (shadow.includes('inset 0 0 0 1px rgba(255, 255, 255') || shadow.includes('color-mix(in srgb')) return shadow
+  return `${edge}, ${shadow}`
+}
+
 function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {
   const panelBackground = theme.surface.panel
   return {
@@ -126,6 +148,11 @@ function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {
     extension: {
       ...theme.extension,
       background: panelBackground,
+    },
+    shadow: {
+      ...theme.shadow,
+      panel: stackEdgeShadow(theme, theme.shadow.panel),
+      modal: stackEdgeShadow(theme, theme.shadow.modal, 'strong'),
     },
   }
 }

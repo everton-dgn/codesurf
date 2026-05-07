@@ -12,7 +12,7 @@ import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNo
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
-import { DEFAULT_THEME_ID, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
+import { DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
 import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf, replaceTabInLeaf } from './components/panelLayoutTree'
 import { basename, getDroppedPaths, toFileUrl, isMediaFile } from './utils/dnd'
@@ -1031,7 +1031,7 @@ function App(): JSX.Element {
   const [canvasArrangeMode, setCanvasArrangeMode] = useState<'grid' | 'column' | 'row' | null>(null)
   const [guides, setGuides] = useState<{ x?: number; y?: number }[]>([])
   const [discoveryPulses, setDiscoveryPulses] = useState<DiscoveryPulse[]>([])
-  const [autoConnectionsEnabled, setAutoConnectionsEnabled] = useState(true)
+  const [autoConnectionsEnabled] = useState(false)
   const [canvasPointerWorld, setCanvasPointerWorld] = useState<{ x: number; y: number } | null>(null)
   const [hoveredConnectionHandle, setHoveredConnectionHandle] = useState<{ tileId: string; side: AnchorPoint['side'] } | null>(null)
   const connectionHandleHideTimerRef = useRef<number | null>(null)
@@ -4797,7 +4797,7 @@ function App(): JSX.Element {
   // left edge 6px to the right of the sidebar — a visible 6px gap.
   const expandedLayoutLeft = sidebarWidth + 12
   const mainPanelLeft = sidebarCollapsed ? 6 : expandedLayoutLeft
-  const mainPanelRadius = 16
+  const mainPanelRadius = 10
   const discoveryHighlightZIndex = 0
   const discoveryGlowZIndex = 0
   const discoveryPillZIndex = 99997
@@ -4807,31 +4807,35 @@ function App(): JSX.Element {
   const hasWorkspaceTabs = openWorkspaceTabs.length > 0
   const workspaceTitleFallback = workspace?.name?.trim() || 'WORKSPACES'
   const showTopWorkspacePickerTab = showWorkspacePickerTab || (!workspace && openWorkspaceTabs.length === 0)
-  const isFirstTopWorkspaceTabSelected = showTopWorkspacePickerTab
-    ? openWorkspaceTabs.length === 0
-    : (hasWorkspaceTabs ? openWorkspaceTabs[0]?.id === workspace?.id : true)
-  const mainPanelTopLeftRadius = !sidebarCollapsed && isFirstTopWorkspaceTabSelected ? 0 : mainPanelRadius
   const mainPanelCornerRadii = {
-    topLeft: mainPanelTopLeftRadius,
+    topLeft: mainPanelRadius,
     topRight: mainPanelRadius,
     bottomRight: mainPanelRadius,
     bottomLeft: mainPanelRadius,
   }
   const mainPanelBorderRadius = `${mainPanelCornerRadii.topLeft}px ${mainPanelCornerRadii.topRight}px ${mainPanelCornerRadii.bottomRight}px ${mainPanelCornerRadii.bottomLeft}px`
   const mainPanelBackground = panelLayout ? theme.surface.app : canvasLayerBackground
+  const mainPanelInsetEdgeShadow = theme.mode === 'light'
+    ? 'inset 0 0 0 1px rgba(255,255,255,0.96), inset -1px 0 0 rgba(15,23,42,0.025), inset 0 -1px 0 rgba(15,23,42,0.025)'
+    : 'inset 0 0 0 1px rgba(255,255,255,0.28)'
+  const mainPanelOuterEdgeShadow = '0 0 0 1px rgba(0,0,0,0.04)'
   const mainPanelShadow = panelLayout
-    ? 'none'
+    ? mainPanelOuterEdgeShadow
     : theme.mode === 'light'
-      ? '0 8px 26px rgba(15,23,42,0.14)'
-      : '0 8px 28px rgba(0,0,0,0.32)'
+      ? `${mainPanelOuterEdgeShadow}, 0 8px 26px rgba(15,23,42,0.14)`
+      : `${mainPanelOuterEdgeShadow}, 0 8px 28px rgba(0,0,0,0.32)`
   const workspaceTabLabelSize = Math.max(12, appFonts.size - 1)
   const workspaceTabBackground = panelLayout ? theme.surface.panel : mainPanelBackground
-  const workspaceTabInactiveBackground = 'transparent'
-  const workspaceTabInactiveHoverBackground = theme.surface.hover
+  const workspaceTabInactiveBackground = theme.mode === 'light'
+    ? 'rgba(255,255,255,0.58)'
+    : 'transparent'
+  const workspaceTabInactiveHoverBackground = theme.mode === 'light'
+    ? 'rgba(255,255,255,0.78)'
+    : theme.surface.hover
   const workspaceTabActiveBorder = `color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
   const workspaceTabCloseHoverBackground = `color-mix(in srgb, ${theme.surface.selection} 70%, ${theme.surface.hover})`
   const workspaceTabMaxWidth = 'min(248px, 24vw)'
-  const workspaceTabActiveHeight = 31
+  const workspaceTabActiveHeight = 29
   const workspaceTabInactiveHeight = 24
   const workspaceTabTextOffset = -1
   const workspaceTabInactiveTextOffset = 0
@@ -4874,6 +4878,10 @@ function App(): JSX.Element {
     root.style.setProperty('--color-popover', theme.surface.panel)
     root.style.setProperty('--color-popover-foreground', theme.text.primary)
     root.style.setProperty('--color-sidebar', theme.surface.panelMuted)
+    root.style.setProperty('--cs-edge-shadow', getEdgeShadow(theme))
+    root.style.setProperty('--cs-edge-shadow-subtle', getEdgeShadow(theme, 'subtle'))
+    root.style.setProperty('--cs-edge-shadow-strong', getEdgeShadow(theme, 'strong'))
+    root.style.setProperty('--cs-edge-shadow-accent', getEdgeShadow(theme, 'accent'))
     root.style.setProperty('--ct-font-primary', appFonts.primary)
     root.style.setProperty('--ct-font-primary-size', `${appFonts.size}px`)
     root.style.setProperty('--ct-font-primary-line', String(appFonts.lineHeight))
@@ -4909,6 +4917,7 @@ function App(): JSX.Element {
     appFonts.weight,
     theme.accent.base,
     theme.border.default,
+    theme.mode,
     theme.chat.background,
     theme.chat.inputBorder,
     theme.status.danger,
@@ -5289,31 +5298,33 @@ function App(): JSX.Element {
                 zIndex: 2147483647,
                 width: 28,
                 height: 28,
-                // Tahoe toolbar control: circular Liquid Glass pill. The
-                // backdrop-filter (blur + saturate) recreates the AppKit
-                // .glass material in the renderer; the translucent dark fill
-                // gives the pill a defined edge against the window vibrancy.
+                // Tahoe toolbar control: the old hover state is now the
+                // resting state so it reads as an actual button next to the
+                // traffic lights instead of disappearing into vibrancy.
                 borderRadius: '50%',
-                border: '0.5px solid rgba(255,255,255,0.10)',
-                background: 'rgba(0,0,0,0.18)',
+                border: '0.5px solid transparent',
+                background: 'rgba(255,255,255,0.10)',
                 backdropFilter: 'blur(20px) saturate(180%)',
                 WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-                color: theme.text.secondary,
+                boxShadow: 'var(--cs-edge-shadow-strong)',
+                color: theme.text.primary,
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 pointerEvents: 'auto',
                 WebkitAppRegion: 'no-drag',
-                transition: 'background 0.12s ease, color 0.12s ease',
+                transition: 'background 0.12s ease, color 0.12s ease, transform 0.12s ease',
               } as React.CSSProperties}
               onMouseEnter={event => {
-                event.currentTarget.style.background = 'rgba(255,255,255,0.10)'
+                event.currentTarget.style.background = 'rgba(255,255,255,0.16)'
                 event.currentTarget.style.color = theme.text.primary
+                event.currentTarget.style.transform = 'scale(1.03)'
               }}
               onMouseLeave={event => {
-                event.currentTarget.style.background = 'rgba(0,0,0,0.18)'
-                event.currentTarget.style.color = theme.text.secondary
+                event.currentTarget.style.background = 'rgba(255,255,255,0.10)'
+                event.currentTarget.style.color = theme.text.primary
+                event.currentTarget.style.transform = 'scale(1)'
               }}
             >
               {/* Tahoe-style sidebar toggle: outlined rounded rectangle with a
@@ -5353,13 +5364,19 @@ function App(): JSX.Element {
                     height: isActive ? workspaceTabActiveHeight : workspaceTabInactiveHeight,
                     padding: '0 8px 0 10px',
                     gap: 5,
-                    marginBottom: isActive ? workspaceTabAttachedBottomGap : workspaceTabInactiveBottomGap,
-                    borderRadius: isActive ? '8px 8px 0 0' : 8,
-                    background: isActive ? workspaceTabBackground : workspaceTabInactiveBackground,
+                    marginBottom: isActive ? workspaceTabInactiveBottomGap : workspaceTabInactiveBottomGap,
+                    borderRadius: 8,
+                    background: isActive
+                      ? (theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground)
+                      : workspaceTabInactiveBackground,
                     color: isActive ? theme.accent.base : theme.text.secondary,
-                    transition: 'color 0.12s ease, background 0.12s ease, border-color 0.12s ease',
-                    border: isActive ? `1px solid ${workspaceTabActiveBorder}` : '1px solid transparent',
-                    borderBottom: isActive ? 'none' : '1px solid transparent',
+                    transition: 'color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease',
+                    border: '0.5px solid transparent',
+                    boxShadow: isActive
+                      ? (theme.mode === 'light'
+                          ? 'inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), 0 8px 18px rgba(15,23,42,0.12)'
+                          : 'var(--cs-edge-shadow-strong), 0 8px 18px rgba(0,0,0,0.24)')
+                      : 'var(--cs-edge-shadow)',
                     boxSizing: 'border-box',
                     position: 'relative',
                     zIndex: isActive ? 1 : 0,
@@ -5390,7 +5407,7 @@ function App(): JSX.Element {
                       background: 'transparent',
                       color: 'inherit',
                       fontSize: Math.max(11, workspaceTabLabelSize),
-                      // just in case I want it back -- fontWeight: isActive ? 600 : 400,
+                      fontWeight: isActive ? 700 : 400,
                       lineHeight: 1,
                       letterSpacing: 0,
                       cursor: isActive ? 'default' : 'pointer',
@@ -5462,16 +5479,18 @@ function App(): JSX.Element {
                   height: workspaceTabActiveHeight,
                   padding: '0 8px 0 10px',
                   gap: 5,
-                  marginBottom: workspaceTabAttachedBottomGap,
-                  borderRadius: '8px 8px 0 0',
-                  background: workspaceTabBackground,
+                  marginBottom: workspaceTabInactiveBottomGap,
+                  borderRadius: 8,
+                  background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground,
                   color: theme.accent.base,
                   fontSize: Math.max(11, workspaceTabLabelSize),
-                  fontWeight: 600,
+                  fontWeight: 700,
                   lineHeight: 1,
                   letterSpacing: 0,
-                  border: `1px solid ${workspaceTabActiveBorder}`,
-                  borderBottom: 'none',
+                  border: '0.5px solid transparent',
+                  boxShadow: theme.mode === 'light'
+                    ? 'inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), 0 8px 18px rgba(15,23,42,0.12)'
+                    : 'var(--cs-edge-shadow-strong), 0 8px 18px rgba(0,0,0,0.24)',
                   boxSizing: 'border-box',
                   position: 'relative',
                   zIndex: 1,
@@ -5507,12 +5526,14 @@ function App(): JSX.Element {
                   height: workspaceTabActiveHeight,
                   padding: '0 10px',
                   gap: 5,
-                  marginBottom: workspaceTabAttachedBottomGap,
-                  borderRadius: '8px 8px 0 0',
-                  background: workspaceTabBackground,
+                  marginBottom: workspaceTabInactiveBottomGap,
+                  borderRadius: 8,
+                  background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground,
                   color: theme.accent.base,
-                  border: `1px solid ${workspaceTabActiveBorder}`,
-                  borderBottom: 'none',
+                  border: '0.5px solid transparent',
+                  boxShadow: theme.mode === 'light'
+                    ? 'inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), 0 8px 18px rgba(15,23,42,0.12)'
+                    : 'var(--cs-edge-shadow-strong), 0 8px 18px rgba(0,0,0,0.24)',
                   boxSizing: 'border-box',
                   position: 'relative',
                   zIndex: 1,
@@ -5535,7 +5556,7 @@ function App(): JSX.Element {
                     background: 'transparent',
                     color: 'inherit',
                     fontSize: Math.max(11, workspaceTabLabelSize),
-                    fontWeight: 600,
+                    fontWeight: 700,
                     lineHeight: 1,
                     letterSpacing: 0,
                     cursor: 'default',
@@ -5556,7 +5577,7 @@ function App(): JSX.Element {
                       transform: 'translateY(-1px)',
                     }}
                   >
-                    NEW WORKSPACE
+                    WORKSPACE
                   </span>
                 </button>
                 {openWorkspaceTabs.length > 0 && (
@@ -5613,17 +5634,30 @@ function App(): JSX.Element {
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: 28,
-                height: '100%',
+                width: 24,
+                height: 24,
+                marginBottom: workspaceTabInactiveBottomGap,
                 padding: 0,
-                border: 'none',
-                background: 'transparent',
+                border: '0.5px solid transparent',
+                borderRadius: '50%',
+                background: workspaceTabInactiveBackground,
+                boxShadow: 'var(--cs-edge-shadow)',
                 color: theme.text.muted,
                 cursor: 'pointer',
-                transition: 'color 0.12s ease',
+                transition: 'background 0.12s ease, color 0.12s ease, transform 0.12s ease',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = workspaceTabInactiveHoverBackground
+                e.currentTarget.style.color = theme.text.primary
+                e.currentTarget.style.transform = 'scale(1.03)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = workspaceTabInactiveBackground
+                e.currentTarget.style.color = theme.text.muted
+                e.currentTarget.style.transform = 'scale(1)'
               }}
             >
-              <Plus size={18} strokeWidth={2.1} />
+              <Plus size={13} strokeWidth={2.2} />
             </button>
           </div>
         </div>
@@ -5679,10 +5713,9 @@ function App(): JSX.Element {
             // corners and split gutters don't reveal the app backdrop.
             background: mainPanelBackground,
             borderRadius: mainPanelBorderRadius,
-            // Panel mode draws per-leaf hairline edges. Keeping the shared
-            // shell border underneath causes a second line to peek through at
-            // rounded outer corners.
-            border: panelLayout ? '0.5px solid transparent' : `0.5px solid ${theme.border.subtle}`,
+            // Keep the layout border transparent; the visible panel edge is
+            // the same inset-white + 4% black shadow treatment used by buttons.
+            border: '0.5px solid transparent',
             boxShadow: mainPanelShadow,
             cursor: isDraggingCanvas ? 'grabbing' : (spaceHeld.current ? 'grab' : 'default'),
             userSelect: 'none',
@@ -5777,63 +5810,17 @@ function App(): JSX.Element {
             }
           }}
         >
-          {!panelLayout && (
-            <div
-              onMouseDown={e => e.stopPropagation()}
-              style={{
-                position: 'absolute',
-                right: 12,
-                top: 12,
-                zIndex: 100000,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '7px 9px',
-                borderRadius: 8,
-                border: `1px solid ${theme.border.subtle}`,
-                background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : 'rgba(18,22,26,0.82)',
-                boxShadow: theme.mode === 'light' ? '0 8px 20px rgba(15,23,42,0.12)' : '0 8px 22px rgba(0,0,0,0.26)',
-                backdropFilter: 'blur(12px)',
-                color: theme.text.secondary,
-                fontSize: appFonts.secondarySize,
-              }}
-            >
-              <Link2 size={13} strokeWidth={2} aria-hidden="true" />
-              <span>Automatic</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoConnectionsEnabled}
-                title="Toggle automatic proximity connections"
-                onClick={() => setAutoConnectionsEnabled(value => !value)}
-                style={{
-                  width: 34,
-                  height: 18,
-                  borderRadius: 999,
-                  border: `1px solid ${autoConnectionsEnabled ? `rgba(${dsc.line}, 0.48)` : theme.border.default}`,
-                  background: autoConnectionsEnabled ? `rgba(${dsc.line}, 0.24)` : theme.surface.panelMuted,
-                  padding: 2,
-                  cursor: 'pointer',
-                  position: 'relative',
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: 2,
-                    left: autoConnectionsEnabled ? 18 : 2,
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    background: autoConnectionsEnabled ? `rgb(${dsc.line})` : theme.text.disabled,
-                    transition: 'left 0.14s ease, background 0.14s ease',
-                    boxShadow: autoConnectionsEnabled ? `0 0 8px rgba(${dsc.line}, 0.36)` : 'none',
-                  }}
-                />
-              </button>
-            </div>
-          )}
-
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: 'inherit',
+              boxShadow: mainPanelInsetEdgeShadow,
+              pointerEvents: 'none',
+              zIndex: 100001,
+            }}
+          />
           {/* Canvas content wrapper — fades out when in expanded/tabbed mode */}
           <div style={{
             position: 'absolute', inset: 0,

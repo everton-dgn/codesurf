@@ -1,6 +1,7 @@
 import React from 'react'
 import { FileText, Folder, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { useTheme } from '../../ThemeContext'
+import { stackEdgeShadow } from '../../theme'
 import { basename } from '../../utils/dnd'
 import type { ExecutionHostRecord } from '../../../../shared/types'
 import type { TtsPlayerState } from '../../utils/ttsPlayer'
@@ -63,8 +64,11 @@ export function ChatComposerCard({
   style?: React.CSSProperties
   children: React.ReactNode
 }): JSX.Element {
+  const theme = useTheme()
+  const { boxShadow, ...restStyle } = style ?? {}
+
   return (
-    <div className="cs-chat-composer-card" style={style}>
+    <div className="cs-chat-composer-card" style={{ ...restStyle, boxShadow: stackEdgeShadow(theme, boxShadow as string | undefined) }}>
       {children}
     </div>
   )

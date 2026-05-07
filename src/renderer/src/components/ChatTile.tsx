@@ -2153,12 +2153,48 @@ function RawDiffBlock({ files }: { files: RawDiffFile[] }): JSX.Element {
   )
 }
 
+function looksLikeUnfencedDiff(text: string): boolean {
+  const lines = text.split('\n')
+  const hasHunk = lines.some(line => /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(line.trim()))
+  const hasReviewDiffHeader = lines.some(line => /^review diff\s+a\/.+\s+(?:→|->)\s+b\/.+@@/.test(line.trim()))
+  const markdownTrapLines = lines.filter(line => /^[+-]\s{2,}\S/.test(line)).length
+  return (hasHunk || hasReviewDiffHeader) && markdownTrapLines >= 2
+}
+
 function GuardedChatMarkdown({ text, isStreaming, className }: {
   text: string
   isStreaming?: boolean
   className?: string
 }): JSX.Element {
+  const theme = useTheme()
+  const fonts = useAppFonts()
   const diff = useMemo(() => isStreaming ? null : splitRawDiffText(text), [isStreaming, text])
+
+  if (!isStreaming && !diff && looksLikeUnfencedDiff(text)) {
+    return (
+      <div className={className} style={{ minWidth: 0 }}>
+        <pre
+          className="allow-text-selection"
+          style={{
+            margin: 0,
+            maxWidth: '100%',
+            overflow: 'auto',
+            borderRadius: 8,
+            background: theme.surface.panelMuted,
+            color: theme.chat.text,
+            padding: 10,
+            fontFamily: fonts.mono,
+            fontSize: Math.max(10, fonts.size - 2),
+            lineHeight: 1.45,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {text}
+        </pre>
+      </div>
+    )
+  }
 
   if (diff) {
     return (
@@ -2488,7 +2524,9 @@ function ensureChatMdStyle(): void {
 export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, width: _width, height: _height, reloadToken = 0, settings, onChatModePreferenceChange, isConnected, isAutoConnected, connectedPeers = [] }: Props): JSX.Element {
   const theme = useTheme()
   const chatViewportBackground = theme.surface.panel
-  const composerBackground = theme.mode === 'dark' ? theme.surface.panel : theme.chat.input
+  const composerBackground = theme.mode === 'dark'
+    ? theme.surface.panel
+    : `color-mix(in srgb, ${theme.surface.panelMuted} 82%, ${theme.chat.input})`
   const composerBorder = theme.chat.inputBorder
   const fontSans = settings?.fonts?.primary?.family ?? settings?.primaryFont?.family ?? FONT_SANS
   const fontMono = settings?.fonts?.mono?.family ?? settings?.monoFont?.family ?? FONT_MONO
@@ -6372,7 +6410,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       {/* Messages */}
       <div
         ref={messagesRef}
-        className="chat-messages"
+        className={`chat-messages ${isStartScreen ? '' : 'cs-fade-scroll-y cs-fade-scroll-y-lg'}`}
         onScroll={handleMessagesScroll}
         onWheel={handleMessagesWheel}
         onKeyDown={handleMessagesKeyDown}
@@ -7536,14 +7574,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         <ChatComposerCard style={{
         minHeight: CHAT_COMPOSER_MIN_HEIGHT,
         border: isDropTarget ? `1px solid ${theme.accent.base}` : `1px solid ${composerBorder}`, borderRadius: 14,
-        // Resting fill matches the border so the composer reads as one solid
-        // rounded shape. The border stays declared so layout stays stable, but
-        // becomes visually inert because background === border-color.
-        background: isDropTarget ? theme.surface.accentSoft : composerBorder,
+        // Keep the fill on the actual input surface. The dimensional edge is
+        // handled by ChatComposerCard's stacked shadow, not by painting a gray
+        // border colour across the whole composer.
+        background: isDropTarget ? theme.surface.accentSoft : composerBackground,
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: isDropTarget ? `0 0 0 1px ${theme.border.accent}, 0 0 22px ${theme.accent.soft}` : 'none',
+        boxShadow: isDropTarget
+          ? `0 0 0 1px ${theme.border.accent}, 0 0 22px ${theme.accent.soft}`
+          : theme.mode === 'light'
+            ? '0 0 0 1px rgba(15,23,42,0.12)'
+            : 'none',
         transition: 'border-color 120ms ease, background 120ms ease, box-shadow 120ms ease',
       }}>
         <ChatComposerAutocompletePopup

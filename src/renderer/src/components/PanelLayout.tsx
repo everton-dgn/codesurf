@@ -42,10 +42,10 @@ interface PanelOuterEdges {
 }
 
 function getLeafBorderRadius(edges: PanelOuterEdges, outerRadii: PanelCornerRadii): string {
-  const topLeft = edges.top && edges.left ? outerRadii.topLeft : PANEL_LEAF_RADIUS_PX
-  const topRight = edges.top && edges.right ? outerRadii.topRight : PANEL_LEAF_RADIUS_PX
-  const bottomRight = edges.bottom && edges.right ? outerRadii.bottomRight : PANEL_LEAF_RADIUS_PX
-  const bottomLeft = edges.bottom && edges.left ? outerRadii.bottomLeft : PANEL_LEAF_RADIUS_PX
+  const topLeft = edges.top && edges.left ? outerRadii.topLeft : 0
+  const topRight = edges.top && edges.right ? outerRadii.topRight : 0
+  const bottomRight = edges.bottom && edges.right ? outerRadii.bottomRight : 0
+  const bottomLeft = edges.bottom && edges.left ? outerRadii.bottomLeft : 0
   return `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`
 }
 
@@ -167,7 +167,7 @@ function ResizeHandle({ direction, onResize, onInteractionChange }: { direction:
   const dragging = useRef(false)
   const lastPos = useRef(0)
   const isHorizontal = direction === 'horizontal'
-  const gutterBackground = theme.surface.app
+  const gutterBackground = theme.surface.panel
   // Ref so the mousemove closure always calls the latest onResize,
   // even after re-renders invalidate the original closure.
   const onResizeRef = useRef(onResize)
@@ -652,10 +652,8 @@ function LeafPanel({ leaf, outerEdges, getTileLabel, renderTile, isInteracting, 
         borderRadius,
         overflow: 'hidden',
         background: theme.surface.panel,
-        // 0.5px hairline edge (1 physical pixel on retina). The flex-item
-        // wrapper above no longer has overflow:hidden, so Chromium can keep
-        // the sub-pixel bottom row on every side.
-        border: `0.5px solid ${theme.border.default}`,
+        border: '0.5px solid transparent',
+        boxShadow: 'var(--cs-edge-shadow-strong)',
         boxSizing: 'border-box',
       }}
       onClick={() => onPanelFocus(leaf.id)}

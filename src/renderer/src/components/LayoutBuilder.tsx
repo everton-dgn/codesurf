@@ -128,6 +128,12 @@ function InteractiveTree({ node, path, onDropOnLeaf, onDragLeaf, hoverPath, hove
   const isHovered = hoverPath && hoverPath.length === path.length && hoverPath.every((v, i) => v === path[i])
   const containerRef = useRef<HTMLDivElement>(null)
   const isHoriz = node.type === 'split' ? node.direction === 'horizontal' : false
+  const isLight = theme.mode === 'light'
+  const leafSurface = isLight ? 'rgba(226,232,240,0.58)' : theme.surface.panelMuted
+  const leafEdge = isLight
+    ? 'inset 0 0 0 1px rgba(255,255,255,0.74), 0 0 0 1px rgba(15,23,42,0.08)'
+    : 'var(--cs-edge-shadow)'
+  const dividerHandle = isLight ? 'rgba(15,23,42,0.36)' : theme.text.disabled
 
   const handleDividerDrag = useCallback((dividerIndex: number, e: React.MouseEvent) => {
     if (!isEditing || !onResizeSplit || !containerRef.current || node.type !== 'split') return
@@ -166,8 +172,9 @@ function InteractiveTree({ node, path, onDropOnLeaf, onDragLeaf, hoverPath, hove
         style={{
           flex: 1, display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center', gap: 2,
-          background: theme.surface.panelMuted,
-          minHeight: 24, borderRadius: 0,
+          background: leafSurface,
+          boxShadow: leafEdge,
+          minHeight: 24, borderRadius: 2,
           padding: 4, position: 'relative',
           cursor: isEditing ? 'grab' : 'default',
         }}
@@ -242,12 +249,12 @@ function InteractiveTree({ node, path, onDropOnLeaf, onDragLeaf, hoverPath, hove
                 width: isHoriz ? 3 : 16,
                 height: isHoriz ? 16 : 3,
                 borderRadius: 999,
-                background: theme.text.disabled,
+                background: dividerHandle,
                 opacity: 0.95,
               }} />
             </div>
           )}
-          {!isEditing && i > 0 && <div style={{ flexShrink: 0, width: isHoriz ? 2 : '100%', height: isHoriz ? '100%' : 2, background: theme.text.disabled, opacity: 0.95 }} />}
+          {!isEditing && i > 0 && <div style={{ flexShrink: 0, width: isHoriz ? 2 : '100%', height: isHoriz ? '100%' : 2, background: dividerHandle, opacity: 0.95 }} />}
           <div style={{ flex: node.sizes?.[i] ?? 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
             <InteractiveTree
               node={child}
@@ -319,6 +326,16 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
   const [hoverLeafPath, setHoverLeafPath] = useState<number[] | null>(null)
   const [hoverZone, setHoverZone] = useState<DockZone | null>(null)
   const [hoveredLayoutCard, setHoveredLayoutCard] = useState<number | null>(null)
+  const isLight = theme.mode === 'light'
+  const layoutEdgeShadow = isLight
+    ? 'inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12)'
+    : 'var(--cs-edge-shadow-strong)'
+  const layoutRaisedShadow = isLight
+    ? 'inset 0 0 0 1px rgba(255,255,255,0.94), 0 0 0 1px rgba(15,23,42,0.12), 0 8px 18px rgba(15,23,42,0.12)'
+    : 'var(--cs-edge-shadow-strong), 0 8px 18px rgba(0,0,0,0.24)'
+  const layoutSubtleShadow = isLight
+    ? 'inset 0 0 0 1px rgba(255,255,255,0.78), 0 0 0 1px rgba(15,23,42,0.08)'
+    : 'var(--cs-edge-shadow)'
 
   // Load saved templates into cards on first load
   const loadedRef = useRef(false)
@@ -522,8 +539,8 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
         `radial-gradient(circle at 24% 82%, ${theme.accent.soft}18 0%, transparent 28%)`,
         `radial-gradient(circle at 76% 80%, ${theme.accent.soft}1e 0%, transparent 30%)`,
         `radial-gradient(circle at 50% 76%, ${theme.accent.soft}2c 0%, transparent 44%)`,
-        `linear-gradient(180deg, ${theme.accent.soft}24 0%, transparent 46%)`,
-        theme.surface.panelMuted,
+        `linear-gradient(180deg, ${theme.accent.soft}18 0%, transparent 46%)`,
+        isLight ? '#eef2f7' : theme.surface.panelMuted,
       ].join(', '),
       overflow: 'auto', padding: 20,
     }}>
@@ -545,18 +562,25 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 56px)', gap: 6, justifyContent: 'center', maxWidth: '100%' }}>
                     {TILE_DEFS.map(def => (
                       <div key={def.type} onMouseDown={def.disabled ? undefined : e => startDrag(def.type, e)} style={{
-                        width: 56, height: 52, borderRadius: 10,
-                        background: theme.surface.panelElevated, border: `1px solid ${theme.text.disabled}`,
+                        width: 56, height: 52, borderRadius: 9,
+                        background: isLight ? 'rgba(255,255,255,0.62)' : theme.surface.panelElevated, border: '0.5px solid transparent',
+                        boxShadow: layoutEdgeShadow,
                         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                         gap: 2, cursor: def.disabled ? 'not-allowed' : 'grab', color: def.disabled ? theme.text.disabled : theme.text.muted, fontSize: Math.max(10, fonts.secondarySize - 1), fontWeight: 500,
-                        userSelect: 'none', transition: 'all 0.12s ease', opacity: def.disabled ? 0.45 : 1,
+                        userSelect: 'none', transition: 'background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease', opacity: def.disabled ? 0.42 : 1,
                       }}
                         onMouseEnter={e => {
                           if (def.disabled) return
-                          e.currentTarget.style.borderColor = theme.border.accent; e.currentTarget.style.color = theme.accent.base
+                          e.currentTarget.style.background = isLight ? 'rgba(255,255,255,0.86)' : theme.surface.panel
+                          e.currentTarget.style.boxShadow = layoutRaisedShadow
+                          e.currentTarget.style.transform = 'translateY(-1px)'
+                          e.currentTarget.style.color = theme.accent.base
                         }}
                         onMouseLeave={e => {
-                          e.currentTarget.style.borderColor = theme.text.disabled; e.currentTarget.style.color = def.disabled ? theme.text.disabled : theme.text.muted
+                          e.currentTarget.style.background = isLight ? 'rgba(255,255,255,0.62)' : theme.surface.panelElevated
+                          e.currentTarget.style.boxShadow = layoutEdgeShadow
+                          e.currentTarget.style.transform = 'translateY(0)'
+                          e.currentTarget.style.color = def.disabled ? theme.text.disabled : theme.text.muted
                         }}
                         title={def.disabled ? `${def.label} disabled` : def.label}
                       >
@@ -590,9 +614,9 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                   ) : (
                     <input value={card.name} onChange={e => setCards(prev => { const n = [...prev]; n[cardIdx] = { ...n[cardIdx], name: e.target.value }; return n })}
                       placeholder="Click to name..."
-                      style={{ flex: 1, padding: '3px 7px', fontSize: Math.max(11, fonts.size - 1), borderRadius: 4, background: 'transparent', color: theme.text.primary, border: '1px solid transparent', outline: 'none', fontFamily: 'inherit', minWidth: 0, fontWeight: 700, cursor: 'text' }}
-                      onFocus={e => { e.currentTarget.style.background = theme.surface.input; e.currentTarget.style.borderColor = theme.border.default }}
-                      onBlur={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent' }}
+                      style={{ flex: 1, padding: '4px 8px', fontSize: Math.max(11, fonts.size - 1), borderRadius: 6, background: 'transparent', color: theme.text.primary, border: '0.5px solid transparent', boxShadow: 'none', outline: 'none', fontFamily: 'inherit', minWidth: 0, fontWeight: 800, cursor: 'text' }}
+                      onFocus={e => { e.currentTarget.style.background = isLight ? 'rgba(255,255,255,0.88)' : theme.surface.input; e.currentTarget.style.boxShadow = layoutEdgeShadow }}
+                      onBlur={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.boxShadow = 'none' }}
                     />
                   )}
                   {!isEmpty && (
@@ -632,13 +656,22 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                   data-layout-card={cardIdx}
                   onClick={() => { if (!isEmpty && !isEditing) buildAndLaunch(cardIdx) }}
                   style={{
-                    borderRadius: 10, aspectRatio: '16 / 9',
-                    border: `1.5px ${isEmpty ? 'dashed' : 'solid'} ${isCardHovered ? theme.accent.base : isEmpty ? `${theme.text.disabled}44` : theme.border.accent}`,
-                    background: isEmpty ? `${theme.surface.panel}40` : theme.surface.panel,
+                    borderRadius: 9, aspectRatio: '16 / 9',
+                    border: '0.5px solid transparent',
+                    background: isEmpty
+                      ? (isLight ? 'rgba(255,255,255,0.30)' : `${theme.surface.panel}40`)
+                      : (isLight ? 'rgba(255,255,255,0.58)' : theme.surface.panel),
+                    boxShadow: isCardHovered
+                      ? (isLight
+                          ? 'inset 0 0 0 1px rgba(255,255,255,0.94), 0 0 0 1px rgba(53,104,255,0.42), 0 8px 18px rgba(15,23,42,0.14)'
+                          : 'var(--cs-edge-shadow-accent), 0 8px 18px rgba(0,0,0,0.26)')
+                      : isEmpty
+                        ? layoutSubtleShadow
+                        : layoutRaisedShadow,
                     backdropFilter: isEmpty ? 'blur(8px)' : 'none',
                     WebkitBackdropFilter: isEmpty ? 'blur(8px)' : 'none',
                     position: 'relative', overflow: 'hidden',
-                    transition: 'border-color 0.12s ease',
+                    transition: 'background 0.12s ease, box-shadow 0.12s ease',
                     display: 'flex',
                     cursor: !isEmpty && !isEditing ? 'pointer' : 'default',
                   }}

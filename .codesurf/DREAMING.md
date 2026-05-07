@@ -1,18 +1,14 @@
-The file is written cleanly. Here is the full replacement content for `.codesurf/DREAMING.md`:
-
----
-
 # Workspace Memory — contex (collaborator-clone)
 
-Generated: 2026-05-06. Supplements CLAUDE.md/AGENTS.md — does not replace them.
+Generated: 2026-05-07. Supplements CLAUDE.md/AGENTS.md — does not replace them.
 
 ---
 
 ## Overview
 
-**contex** is an Electron desktop app (v40.8.2) — infinite canvas workspace where AI agents and humans collaborate via tiles. Also branded **CodeSurf** (`electrobun.config.ts`, bundle ID `com.huggiapps.codesurf.electrobun`).
+**contex** is an Electron desktop app (v40.8.2) — infinite canvas workspace where AI agents and humans collaborate via tiles. Also branded **CodeSurf**. The repo is a monorepo: Electron host app in `src/`, plus companion packages and apps.
 
-Active branch: `main-merge`. HEAD: `9cbb578` ("Persist builder history and chat-surface state"). CLAUDE.md/AGENTS.md still reference `feature/event-bus-mcp` — stale; actual branch is `main-merge`.
+Active branch: `main-latest`. HEAD: `8390242` ("Update Sidebar.tsx"). CLAUDE.md/AGENTS.md reference `feature/event-bus-mcp` — stale; that branch is long merged.
 
 ---
 
@@ -20,29 +16,74 @@ Active branch: `main-merge`. HEAD: `9cbb578` ("Persist builder history and chat-
 
 > "The desktop is dumb as shit. The daemon is smart." (commit `587a239`)
 
-- All intelligence belongs in `grok-cli` (at `~/Documents/GitHub/grok-cli/`), not in this repo
+- All intelligence belongs in `grok-cli` (`~/Documents/GitHub/grok-cli/`), not this repo
 - Desktop is a rendering shell: input → output → daemon
-- Code-index, agent memory, and model intelligence belong in grok-cli, not the desktop
+- Code-index, agent memory, and model intelligence belong in grok-cli
+
+---
+
+## Monorepo Layout
+
+- `src/` — Electron host app (main + preload + renderer)
+- `packages/codesurf-daemon` — CodeSurf daemon binary package
+- `packages/codesurf-dreaming` — Dreaming agent package
+- `packages/contex-chat-bridge` — Chat bridge package
+- `packages/contex-relay` — Relay layer package
+- `apps/chat-app` — Standalone React chat UI
 
 ---
 
 ## Durable Facts
 
-**Stack:** Electron 40.8.2, React 19.2.4, TypeScript 5.9.3, Vite/electron-vite 7.3.1/5.0.0, Tailwind CSS 4.0.0, xterm+node-pty, Monaco, `@anthropic-ai/claude-agent-sdk`, `@opencode-ai/sdk` 1.2.27. All providers stream via NDJSON/SSE in `src/main/ipc/stream.ts`.
+**Stack:** Electron 40.8.2, React 19.2.4, TypeScript 5.9.3, Vite/electron-vite 7.3.1/5.0.0, Tailwind CSS 4.0.0, xterm+node-pty, Monaco, `@anthropic-ai/claude-agent-sdk` 0.2.79, `@opencode-ai/sdk` 1.2.27. All chat providers stream via NDJSON/SSE parsed in `src/main/ipc/stream.ts`.
 
 **IPC:** `{feature}:{action}` naming; handlers in `src/main/ipc/`; context bridge in `src/preload/index.ts`.
 
-**MCP:** Agent tool MCP → random port, always read `~/.contex/mcp-server.json`. Claude Code/Codex MCP → `http://127.0.0.1:56009/mcp` hardcoded.
+**MCP:** Agent tool MCP → random port, always read `~/.contex/mcp-server.json`. Claude Code/Codex MCP contex server port is session-local — read from `.mcp.json`, never hardcode.
 
-**Persistence:** `~/.contex/workspaces/{id}/canvas.json` (500ms debounce), `~/.contex/workspaces/{id}/tiles/{id}.json`, `~/.contex/mcp-server.json`, `~/.codesurf/` (daemon — distinct from `~/.contex/`).
+**Persistence:**
+- `~/.contex/workspaces/{id}/canvas.json` — canvas state (500ms debounce auto-save)
+- `~/.contex/workspaces/{id}/tiles/{id}.json` — kanban tile state
+- `~/.contex/mcp-server.json` — MCP server config
+- `~/.codesurf/` — daemon state (distinct from `~/.contex/`)
+- SQLite DB in `src/main/db/` — thread indexing, jobs, migrations
 
 ---
 
-## Active Subsystems and Feature Areas
+## Active Subsystems
 
-Key changes as of `9cbb578` include: builder history persistence fixed, chat surface state persistence, large-content handling with `largeContent.ts`, chat sub-directory with `DiffView`, `PlanCard/Chip/Pane`, `ChatComposer*`, and supporting stores (`chatTileRuntimeState`, `chatStreamingStore`, `chatMessageSentStore`, `chatSurfaceHostRpc`).
+**Session Management, Thread Indexer, Storage Layer, Daemon** — all stable as of last dream; no new evidence of changes.
 
-Open: `largeContent.ts` and `test/large-content.test.ts` are **untracked** — commit before any branch switch. `ContexRuntimeProvider.tsx` dirty (V2 chunk types in progress). Extension sidebar port partial. grok-cli model catalog wire-up incomplete.
+**Theme / Edge Shadow System** — new this session: `getEdgeShadow(theme, tone)` and `stackEdgeShadow()` in `theme.ts`; CSS vars `--cs-edge-shadow-*` on `#root`; global CSS replacing flat gray borders on rounded elements with shadow-based dimensional edges.
+
+**Chat Tile / Composer** — composer fill now uses `composerBackground` (not border color); `ChatComposerCard` applies `stackEdgeShadow()`.
+
+**Builder history** — now persisted (committed `9cbb578`); the session work requesting this is resolved.
+
+---
+
+## Currently Dirty (Unstaged — one coherent UI refactor)
+
+| File | Nature of change |
+|------|-----------------|
+| `src/renderer/src/theme.ts` | `getEdgeShadow()`, `stackEdgeShadow()`, `EdgeShadowTone` |
+| `src/renderer/src/index.css` | `--cs-edge-shadow-*` CSS vars; global border→shadow replacement rules |
+| `src/renderer/src/App.tsx` | Wires CSS vars into `#root`; light-mode tab backgrounds; Tahoe toolbar button resting state |
+| `src/renderer/src/components/ChatTile.tsx` | Composer fill: `composerBackground` not `composerBorder` |
+| `src/renderer/src/components/chat/ChatComposer.tsx` | `ChatComposerCard` applies `stackEdgeShadow()` |
+| `src/renderer/src/components/Sidebar.tsx` | Header background → transparent, border removed |
+| `src/renderer/src/components/sidebar/SidebarFooter.tsx` | Footer buttons: glass resting state; always 28×28 icon-only |
+| `.mcp.json` | Port updated to `49668` (session-local) |
+
+---
+
+## Open Threads
+
+- Dimensional edge shadow refactor is unstaged — needs a commit
+- `SidebarFooter` collapsed-mode label removed; confirm intentional
+- grok-cli model catalog wire-up incomplete (persistent across multiple dreams)
+- `chat-app` standalone app scaffolded; integration completeness unknown
+- AI SDK + AI Elements integration extent unknown
 
 ---
 
