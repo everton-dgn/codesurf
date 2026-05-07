@@ -1,4 +1,4 @@
-The `.codesurf/DREAMING.md` file has been updated. Here is the full replacement content:
+The file is being managed by a live dreaming process that keeps writing it. The current on-disk version is accurate and well-structured. Here is the full replacement content for `.codesurf/DREAMING.md`:
 
 ---
 
@@ -10,13 +10,15 @@ Generated: 2026-05-07. Supplements CLAUDE.md/AGENTS.md — does not replace them
 
 ## Overview
 
-**contex** is an Electron desktop app — infinite canvas workspace for AI agents and humans. Also branded **CodeSurf**. Active branch: `main-latest`. HEAD: `2a5e985` ("Merge branch 'main-latest'"). Working tree has 2 unstaged files (`src/main/ipc/canvas.ts`, `src/renderer/src/App.tsx`). The branch referenced in CLAUDE.md/AGENTS.md (`feature/event-bus-mcp`) is long merged; ignore it.
+**contex** is an Electron desktop app — infinite canvas workspace for AI agents and humans. Also branded **CodeSurf**. Active branch: `main-latest`. HEAD: `864084a` ("Adjust edge shadow opacities for light/dark themes"). Working tree is clean.
+
+The branch referenced in CLAUDE.md/AGENTS.md (`feature/event-bus-mcp`) is long merged; ignore it.
 
 ---
 
 ## Architectural NorthStar
 
-"The desktop is dumb as shit. The daemon is smart." — all intelligence belongs in `grok-cli` at `~/Documents/GitHub/grok-cli/`. Desktop is a rendering shell; code-index, agent memory, and model intelligence live in grok-cli, not this repo. Session title generation now queries the daemon (`daemonClient.listExternalSessions()`) before falling back to local SQLite — signals growing daemon-first data ownership.
+"The desktop is dumb as shit. The daemon is smart." — all intelligence belongs in `grok-cli` at `~/Documents/GitHub/grok-cli/`. Desktop is a rendering shell; code-index, agent memory, and model intelligence live in grok-cli, not this repo. `getCurrentSessionTitleForTitleGeneration` in `canvas.ts` now queries `daemonClient.listExternalSessions()` before falling back to SQLite — daemon-first data ownership pattern is live and committed.
 
 ---
 
@@ -41,7 +43,9 @@ Generated: 2026-05-07. Supplements CLAUDE.md/AGENTS.md — does not replace them
 
 **Persistence:** canvas.json (500ms debounce), kanban tile JSON, `~/.codesurf/sessions/` (chat threads), `~/.codesurf/builder/{tileId}.json` (builder history), `~/.contex/mcp-server.json`, SQLite DB in `src/main/db/`.
 
-**Style:** Dark theme hardcoded. Tailwind + inline `React.CSSProperties`. 2-space indent, trailing commas, no semicolons. No `prefers-color-scheme`; dark mode via `body.dark` bridge.
+**Default theme:** `shared/types.ts` sets app appearance to `"paper-light"` (light theme) with adjusted canvas/grid colors and updated default font stacks, sizes, and weights. Previous default was dark.
+
+**Style:** Theme-aware (light/dark). Tailwind + inline `React.CSSProperties`. 2-space indent, trailing commas, no semicolons. No `prefers-color-scheme`; dark mode via `body.dark` bridge.
 
 **Typecheck:** `npm run typecheck:go` has pre-existing repo-wide TS errors. Use `npm run build:renderer` as the practical compile check for UI work.
 
@@ -51,25 +55,29 @@ Generated: 2026-05-07. Supplements CLAUDE.md/AGENTS.md — does not replace them
 
 | Commit | Summary |
 |--------|---------|
+| `864084a` | Edge shadow opacity tuning for light/dark: lower white alpha, higher dark alpha; `getEdgeShadow` fully mode-aware (distinct accent mix and black alpha for dark); `mainPanelInsetEdgeShadow` in App.tsx adjusted |
+| `c30b3d8` | Daemon-first session titles live; `renameSessionTitleForSidebar` introduced (local → scoped → global daemon rename → re-index fallback); TileChrome light-mode edge-shadow variants (`drawerPanelShadow`/`tilePanelShadow`); types.ts defaults updated (fonts, sizes, "paper-light"); debug console.log removed from App.tsx |
 | `2a5e985` | Merge branch 'main-latest' — 18 files, 914 insertions: App.tsx, ChatTile, LayoutBuilder, PanelLayout, SettingsPanel, Sidebar, TileChrome, SidebarFooter, ChatComposer, streamdown-utils, Toggle, index.css, theme.ts, types.ts |
 | `61e2e92` | UI spacing: workspace tab heights, chat transcript scrollbar gutter, user bubble margins, compact tab theme-aware sizing, SidebarTopItem vertical rhythm |
 | `b3dadfe` | ChatTile tool parsing helpers, `extractChipsFromMessage` tool-only support; workspace tab active/inactive bottom gaps split; sidebar hover overlay (absolute positioning) |
-| `fd23f34` | External-agent markup parsing; toolbar pill sizing; sidebar right-rail offset 4→2; CSS table exclusion from border→shadow rule |
-| `82f6c77` | Refactor UI: edge shadows & light-mode visuals (15 files) |
-| `67f17be` | Throttle thread scans; SWR and dedupe sessions |
+| `fd23f34` | Parse external-agent markup; toolbar pill sizing; sidebar right-rail offset 4→2; CSS table exclusion from border→shadow rule |
 | `9cbb578` | Persist builder history and chat-surface state |
 
 ---
 
 ## Active Subsystems
 
-**Edge Shadow System** — `getEdgeShadow(theme, tone)` and `stackEdgeShadow()` in `theme.ts`; CSS vars `--cs-edge-shadow-*` on `#root`; global CSS rule in `index.css` replaces hairline borders with `box-shadow` on rounded/pill elements; tables excluded (`:not(table)`); `SidebarFooter` glass resting state, 28×28 icon-only.
+**Edge Shadow System** — `getEdgeShadow(theme, tone)` and `stackEdgeShadow()` in `theme.ts`; fully mode-aware (dark mode uses different accent mix and black alpha). CSS vars `--cs-edge-shadow-*` on `#root`; global CSS rule in `index.css` replaces hairline borders with `box-shadow` on rounded/pill elements; tables excluded (`:not(table)`).
 
-**Light-Mode Theming** — LayoutBuilder computes `leafSurface`, `leafEdge`, `dividerHandle` from `theme.mode`; leaf tiles use `borderRadius: 2` and edge shadow. Multiple components received light-mode passes in `2a5e985` merge.
+**TileChrome** — Light-mode variant uses `drawerPanelShadow` / `tilePanelShadow`. Tile panel and drawer render distinct shadow styles depending on theme mode.
+
+**Light-Mode Theming** — Default app appearance is `"paper-light"`. LayoutBuilder computes `leafSurface`, `leafEdge`, `dividerHandle` from `theme.mode`; leaf tiles use `borderRadius: 2` and edge shadow. Components with light-mode passes: App.tsx, ChatTile, LayoutBuilder, PanelLayout, SettingsPanel, Sidebar, TileChrome, SidebarFooter, ChatComposer.
+
+**Session Title / Rename Flow** — `getCurrentSessionTitleForTitleGeneration` queries daemon first, falls back to SQLite. `renameSessionTitleForSidebar` tries local rename, then scoped daemon rename, then global daemon rename, then falls back to re-indexing. `cleanSessionTitleCandidate()` applied to hint titles.
 
 **Chat Tile / Composer** — Composer fill uses `composerBackground`; `ChatComposerCard` applies `stackEdgeShadow()`; unfenced-diff blocks as `<pre>`; chat-md tables flat. Large content: `largeContent.ts`, `GuardedChatMarkdown`, `LargeTextBlock`, `RawDiffBlock`. Streaming: 50ms flush; deferred normalization; 2000ms/500ms persist debounce. Chat transcript uses `scrollbarGutter: 'stable'`.
 
-**External Agent Markup** — `splitExternalAgentMarkup`, `getExternalAgentToolBlocks`, `isExternalAgentToolOnlyText` parse `[external_agent_tool_call:name]` / `[external_agent_tool_result]` tags. `extractChipsFromMessage` handles tool-only messages as `'tool-single'` chips. All committed.
+**External Agent Markup** — `splitExternalAgentMarkup`, `getExternalAgentToolBlocks`, `isExternalAgentToolOnlyText` parse `[external_agent_tool_call:name]` / `[external_agent_tool_result]` tags. `extractChipsFromMessage` handles tool-only messages as `'tool-single'` chips.
 
 **Sidebar** — Absolute overlay for hover/active backgrounds. Archive icon fade-in / timestamp fade-out on hover. `SIDEBAR_RIGHT_RAIL_ACTION_RIGHT = 2`. Header transparent. Footer 28×28 icon-only glass. `selectedSessionKey` prevents multi-row selection.
 
@@ -81,19 +89,10 @@ Generated: 2026-05-07. Supplements CLAUDE.md/AGENTS.md — does not replace them
 
 ---
 
-## Currently Dirty (Unstaged — vs HEAD `2a5e985`)
-
-| File | Change |
-|------|--------|
-| `src/main/ipc/canvas.ts` | Session title generation: `daemonClient.listExternalSessions()` lookup inserted before SQLite lookup in `getCurrentSessionTitleForTitleGeneration`; `cleanSessionTitleCandidate()` wraps `entryHint.title`; `currentTitleBeforeGeneration` fetched once and reused; `workspacePath` hoisted out of gated block |
-| `src/renderer/src/App.tsx` | 1-line cleanup: removes `console.log('[Discovery] Injecting locked connections:...')` from locked-connection injection loop |
-
----
-
 ## Open Threads
 
-- Dirty canvas.ts (daemon-first title lookup) and App.tsx (console.log removal) are both ready to commit
-- Archive icon alignment (`SIDEBAR_RIGHT_RAIL_ACTION_RIGHT = 2`) is stable but fragile if sidebar width changes significantly
+- Archive icon alignment (`SIDEBAR_RIGHT_RAIL_ACTION_RIGHT = 2`) was still actively being debugged in the most recent session — fragile if sidebar width changes; `ChatSidebarSection` row layout is the place to check
+- Builder tile history persistence committed (`9cbb578`); UX for how the current build renders on the canvas alongside rearrangements was an active concern in the same session — may still need work
 - `ChatSidebarSection.tsx` (WebSocket) vs `ChatHistorySection.tsx` (IPC): consolidation to IPC version deferred
 - grok-cli model catalog wire-up incomplete (persistent across multiple dreams)
 - `apps/chat-app` standalone scaffolded with AI SDK + AI Elements; integration depth with main harness unknown
