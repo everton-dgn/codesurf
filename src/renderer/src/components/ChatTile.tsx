@@ -1188,7 +1188,7 @@ const InsightBlock = React.memo(({ text, closed, isStreaming, accent, textColor 
         color: textColor,
         // Subtle inner highlight on the top edge — a small touch that
         // sells the "glass" reading without being explicit about it.
-        boxShadow: `0 1px 0 0 ${withAlpha(accent, '14')} inset, 0 1px 2px rgba(0,0,0,0.04)`,
+        boxShadow: `0 1px 0 0 ${withAlpha(accent, '14')} inset, 0 1px 2px color-mix(in srgb, ${theme.text.primary} 4%, transparent)`,
       }}
     >
       <div
@@ -1572,10 +1572,14 @@ const ChatMessageContent = React.memo(({
   // values from elsewhere, producing a "ghost chip" effect.
   void isUser
   const isLight = theme.mode === 'light'
-  const chipBackground = isLight ? '#ffffff' : theme.surface.panelElevated
-  const chipBorder = isLight ? 'rgba(15,23,42,0.18)' : theme.border.default
-  const chipText = isLight ? '#1b2430' : theme.text.primary
-  const chipMeta = isLight ? '#2d3748' : theme.text.secondary
+  // Chip surfaces follow theme: in light mode the canvas-anchored chip should
+  // read as paper, so use surface.app rather than panelElevated (which is the
+  // chat shell background and would blend in). Borders come from the theme's
+  // own gradient so contrast tracks.
+  const chipBackground = isLight ? theme.surface.app : theme.surface.panelElevated
+  const chipBorder = isLight ? theme.border.default : theme.border.default
+  const chipText = theme.text.primary
+  const chipMeta = theme.text.secondary
 
   const attachments = attachmentPaths.length > 0 ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: bodyText ? 8 : 0, minWidth: 0 }}>
@@ -1626,7 +1630,7 @@ const ChatMessageContent = React.memo(({
                     borderRadius: 4,
                     flexShrink: 0,
                     display: 'block',
-                    background: isLight ? '#f5f7fb' : 'rgba(255,255,255,0.04)',
+                    background: theme.surface.panelMuted,
                   }}
                 />
               ) : (
@@ -5562,7 +5566,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                               border: msg.role === 'user' ? '1px solid transparent' : '0',
                               boxShadow: msg.role === 'user'
                                 ? theme.mode === 'light'
-                                  ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+                                  ? `var(--cs-edge-shadow), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
                                   : 'var(--cs-edge-shadow)'
                                 : undefined,
                               borderRadius: 14,
@@ -5620,7 +5624,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                         border: msg.role === 'user' ? '1px solid transparent' : '0',
                         boxShadow: msg.role === 'user'
                           ? theme.mode === 'light'
-                            ? 'var(--cs-edge-shadow), 0 0 0 1px rgba(15,23,42,0.12)'
+                            ? `var(--cs-edge-shadow), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
                             : 'var(--cs-edge-shadow)'
                           : undefined,
                         borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
@@ -6136,7 +6140,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                       ? theme.surface.selection
                       // Urgent rows get a soft red tint so a pasted crash/error
                       // log stands out without drowning the rest of the queue.
-                      : (isUrgent ? 'rgba(220, 60, 60, 0.14)' : 'transparent')),
+                      : (isUrgent ? `color-mix(in srgb, ${theme.status.danger} 18%, transparent)` : 'transparent')),
                   // Top/bottom indicator lines for before/after drop zones.
                   // Urgent rows additionally get a left accent bar in danger
                   // color; if a drop indicator is active, it takes precedence.
@@ -6308,8 +6312,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         boxShadow: isDropTarget
           ? `0 0 0 1px ${theme.border.accent}, 0 0 22px ${theme.accent.soft}`
           : theme.mode === 'light'
-            ? '0 0 0 1px rgba(15,23,42,0.12), 0 10px 28px rgba(15,23,42,0.09)'
-            : '0 10px 28px rgba(0,0,0,0.18)',
+            ? `0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent), 0 10px 28px color-mix(in srgb, ${theme.text.primary} 9%, transparent)`
+            : `0 10px 28px color-mix(in srgb, #000 18%, transparent)`,
         transition: 'border-color 120ms ease, background 120ms ease, box-shadow 120ms ease',
       }}>
         <ChatComposerAutocompletePopup
@@ -6545,7 +6549,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             >
               <Mic
                 size={14}
-                color={isDictating ? '#fff' : theme.chat.muted}
+                color={isDictating ? theme.text.inverse : theme.chat.muted}
                 strokeWidth={2.2}
               />
             </button>
@@ -6587,7 +6591,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               onMouseLeave={e => { if (hasSendableDraft) e.currentTarget.style.background = theme.accent.base }}
               title="Send message"
             >
-              <ArrowUp size={16} color="#fff" strokeWidth={2.5} style={{ opacity: hasSendableDraft ? 1 : 0.3 }} />
+              <ArrowUp size={16} color={theme.text.inverse} strokeWidth={2.5} style={{ opacity: hasSendableDraft ? 1 : 0.3 }} />
             </button>
           )}
         </ChatComposerPrimaryToolbar>

@@ -72,7 +72,7 @@ export function ContextMenu({ x, y, items, onClose }: Props): JSX.Element {
               borderRadius: 3,
               margin: '0 2px'
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = item.danger ? (theme.mode === 'light' ? 'rgba(209,74,74,0.08)' : '#3a1a1a') : theme.surface.hover)}
+            onMouseEnter={e => (e.currentTarget.style.background = item.danger ? `color-mix(in srgb, ${theme.status.danger} 14%, transparent)` : theme.surface.hover)}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             onClick={() => { item.action(); onClose() }}
           >

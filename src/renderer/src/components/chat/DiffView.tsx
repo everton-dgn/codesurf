@@ -107,8 +107,11 @@ export const DiffView = React.memo(function DiffView({
 
   const rowBg = (kind: DiffRow['kind']): string => {
     switch (kind) {
-      case 'add': return 'rgba(63, 185, 80, 0.14)'
-      case 'del': return 'rgba(248, 81, 73, 0.14)'
+      // Use the theme's status colors so add/del tints stay within palette
+      // and respond to the contrast slider through the text colours that
+      // status.success / status.danger derive from in computed shifts.
+      case 'add': return `color-mix(in srgb, ${theme.status.success} 18%, transparent)`
+      case 'del': return `color-mix(in srgb, ${theme.status.danger} 18%, transparent)`
       case 'hunk': return theme.surface.panelMuted
       case 'meta': return theme.surface.panelMuted
       default: return 'transparent'

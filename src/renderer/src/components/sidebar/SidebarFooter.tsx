@@ -39,7 +39,7 @@ export function SidebarFooter({
   const extMenuRef = useRef<HTMLDivElement>(null)
   const footerIconColor = theme.text.secondary
   const footerButtonBackground = 'transparent'
-  const footerButtonHoverBackground = 'rgba(255,255,255,0.12)'
+  const footerButtonHoverBackground = `color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
   const footerButtonEdge = 'none'
 
   useEffect(() => {

@@ -413,6 +413,11 @@ export interface AppSettings {
   /** UI chrome: dark palette, light palette, or follow OS (uses dark theme preset when OS is dark). */
   appearance: 'dark' | 'light' | 'system'
   themeId: string
+  /** Global contrast offset applied on top of the resolved theme palette.
+   *  Range -1..1 (clamped on apply); 0 = preset's natural contrast.
+   *  Positive = surfaces shift away from text and vice versa; negative =
+   *  everything compresses toward mid-grey. */
+  themeContrast: number
   // Canvas
   canvasBackground: string
   canvasGlowEnabled: boolean
@@ -530,6 +535,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fonts: { ...DEFAULT_FONTS },
   appearance: 'light',
   themeId: 'paper-light',
+  themeContrast: 0,
   canvasBackground: '#f3f5f8',
   canvasGlowEnabled: true,
   canvasGlowRadius: 120,
@@ -783,6 +789,7 @@ export function withDefaultSettings(input: Partial<AppSettings> | null | undefin
     ),
   }
   base.canvasGlowRadius = Math.max(50, Math.min(200, base.canvasGlowRadius ?? DEFAULT_SETTINGS.canvasGlowRadius))
+  base.themeContrast = Math.max(-1, Math.min(1, Number.isFinite(base.themeContrast) ? base.themeContrast : 0))
   return base
 }
 

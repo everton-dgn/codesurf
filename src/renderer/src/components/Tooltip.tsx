@@ -73,8 +73,8 @@ export function Tooltip({
             pointerEvents: 'none',
             zIndex: 99999,
             boxShadow: isLight
-              ? '0 4px 14px rgba(15, 23, 42, 0.12)'
-              : '0 2px 8px rgba(0,0,0,0.4)',
+              ? `0 4px 14px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
+              : `0 2px 8px color-mix(in srgb, #000 40%, transparent)`,
           }}
         >
           {isRich ? content : label}

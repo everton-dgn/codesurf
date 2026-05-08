@@ -343,7 +343,7 @@ export function MainStatusBar({ onOpenDaemonTask, health = 'compact' }: MainStat
       ? theme.status.warning
       : theme.accent.base
 
-  const barBackground = theme.mode === 'light' ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)'
+  const barBackground = `color-mix(in srgb, ${theme.text.primary} 8%, transparent)`
   const title = stats
     ? `Main heap ${formatBytes(usage.heapUsed)} / ${formatBytes(usage.heapLimit || usage.heapTotal)} - RSS ${formatBytes(stats.rss)} - external ${formatBytes(stats.external)}`
     : 'Loading memory stats'
@@ -490,8 +490,8 @@ export function MainStatusBar({ onOpenDaemonTask, health = 'compact' }: MainStat
                 border: `1px solid ${theme.border.default}`,
                 borderRadius: 14,
                 boxShadow: theme.mode === 'light'
-                  ? '0 18px 40px rgba(0,0,0,0.12)'
-                  : '0 18px 40px rgba(0,0,0,0.45)',
+                  ? `0 18px 40px color-mix(in srgb, #000 12%, transparent)`
+                  : `0 18px 40px color-mix(in srgb, #000 45%, transparent)`,
                 padding: '8px 8px 10px',
                 pointerEvents: 'auto',
                 zIndex: 5,

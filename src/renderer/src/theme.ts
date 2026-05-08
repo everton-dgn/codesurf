@@ -1,3 +1,5 @@
+import { shiftLAway } from './colorMath'
+
 export type ThemeMode = 'dark' | 'light'
 
 export interface AppTheme {
@@ -132,6 +134,130 @@ export function stackEdgeShadow(theme: Pick<AppTheme, 'mode' | 'accent'>, shadow
   if (!shadow || shadow === 'none') return edge
   if (shadow.includes('inset 0 0 0 1px rgba(255, 255, 255') || shadow.includes('color-mix(in srgb')) return shadow
   return `${edge}, ${shadow}`
+}
+
+/**
+ * Apply a global contrast offset to a resolved theme. `factor` is in
+ * `[-1, 1]`; positive values increase contrast (surfaces shift away from text,
+ * text shifts away from surfaces), negative values compress everything toward
+ * mid-grey.
+ *
+ * What we touch: surface/border/text/chat surface/extension/editor.background
+ * lightness. Alpha overlays (e.g. the rgba surface.hover) keep their alpha
+ * but shift their colour anchor in the same direction as the matching base
+ * surface, so glass-style highlights remain visible at high-contrast
+ * extremes.
+ *
+ * What we do *not* touch: accent.*, status.*, terminal ANSI palette,
+ * editor.monacoBase (it's a mode hint, not a colour), shadow strings (they're
+ * composed multi-value strings; their alpha-only black components don't
+ * benefit from L shifts), shiki theme name. These are deliberately calibrated
+ * and shifting them would break syntax-highlight semantics or accent
+ * recognisability.
+ */
+export function applyContrast(theme: AppTheme, factor: number): AppTheme {
+  const f = Math.max(-1, Math.min(1, factor || 0))
+  if (f === 0) return theme
+  const isDark = theme.mode === 'dark'
+  // Surfaces push toward 0 in dark mode, toward 1 in light mode.
+  // Text pushes the opposite way.
+  const surfaceMode: 'darker' | 'lighter' = isDark ? 'darker' : 'lighter'
+  const textMode: 'darker' | 'lighter' = isDark ? 'lighter' : 'darker'
+
+  const S = (v: string) => shiftLAway(v, f, surfaceMode)
+  const T = (v: string) => shiftLAway(v, f, textMode)
+  // Borders sit between surfaces and content; they should track the surface
+  // direction but with a stronger pull so they remain visible against
+  // higher-contrast surfaces.
+  const B = (v: string) => shiftLAway(v, f, textMode)
+
+  return {
+    ...theme,
+    canvas: {
+      ...theme.canvas,
+      background: S(theme.canvas.background),
+      gridSmall: B(theme.canvas.gridSmall),
+      gridLarge: B(theme.canvas.gridLarge),
+      // gridGlow* are alpha overlays; leave alpha alone, shift anchor toward text
+      gridGlowSmall: T(theme.canvas.gridGlowSmall),
+      gridGlowLarge: T(theme.canvas.gridGlowLarge),
+    },
+    surface: {
+      ...theme.surface,
+      app: S(theme.surface.app),
+      sidebarOverlay: S(theme.surface.sidebarOverlay),
+      sidebar: S(theme.surface.sidebar),
+      panel: S(theme.surface.panel),
+      panelMuted: S(theme.surface.panelMuted),
+      panelElevated: S(theme.surface.panelElevated),
+      titlebar: S(theme.surface.titlebar),
+      input: S(theme.surface.input),
+      // hover/selection/accentSoft are alpha-tinted; nudge their anchor but
+      // they preserve alpha so glass highlights remain visible at extremes.
+      hover: T(theme.surface.hover),
+      selection: theme.surface.selection,
+      selectionBorder: theme.surface.selectionBorder,
+      accentSoft: theme.surface.accentSoft,
+    },
+    border: {
+      ...theme.border,
+      subtle: B(theme.border.subtle),
+      default: B(theme.border.default),
+      strong: B(theme.border.strong),
+      // accent border stays anchored to accent.base — don't touch
+      accent: theme.border.accent,
+    },
+    text: {
+      ...theme.text,
+      primary: T(theme.text.primary),
+      secondary: T(theme.text.secondary),
+      muted: T(theme.text.muted),
+      disabled: T(theme.text.disabled),
+      inverse: S(theme.text.inverse),
+    },
+    chat: {
+      ...theme.chat,
+      background: S(theme.chat.background),
+      placeholder: T(theme.chat.placeholder),
+      input: S(theme.chat.input),
+      inputBorder: B(theme.chat.inputBorder),
+      text: T(theme.chat.text),
+      textSecondary: T(theme.chat.textSecondary),
+      muted: T(theme.chat.muted),
+      subtle: T(theme.chat.subtle),
+      divider: B(theme.chat.divider),
+      assistantBubble: S(theme.chat.assistantBubble),
+      assistantBubbleBorder: B(theme.chat.assistantBubbleBorder),
+      userBubble: S(theme.chat.userBubble),
+      userBubbleBorder: B(theme.chat.userBubbleBorder),
+      dropdownBackground: S(theme.chat.dropdownBackground),
+      dropdownBorder: B(theme.chat.dropdownBorder),
+      dropdownActiveBackground: S(theme.chat.dropdownActiveBackground),
+      dropdownHoverBackground: S(theme.chat.dropdownHoverBackground),
+    },
+    terminal: {
+      ...theme.terminal,
+      // Only the surrounding chrome shifts; ANSI palette is sacrosanct.
+      background: S(theme.terminal.background),
+      foreground: T(theme.terminal.foreground),
+      cursorAccent: S(theme.terminal.cursorAccent),
+    },
+    editor: {
+      ...theme.editor,
+      background: S(theme.editor.background),
+    },
+    extension: {
+      ...theme.extension,
+      background: S(theme.extension.background),
+      panel: S(theme.extension.panel),
+      border: B(theme.extension.border),
+      text: T(theme.extension.text),
+      muted: T(theme.extension.muted),
+      // accent stays anchored
+    },
+    // shadows are mostly black with alpha — leave them; the L shift on
+    // surfaces underneath them changes the perceived shadow weight naturally.
+  }
 }
 
 function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {

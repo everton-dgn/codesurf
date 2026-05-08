@@ -17,7 +17,7 @@ export const CHAT_TILE_STYLES = `
     .chat-md strong { font-weight: 600; }
     .chat-md em { font-style: italic; }
     .chat-md code:not(pre code) {
-      background: rgba(128,128,128,0.15); padding: 1px 5px; border-radius: 6px;
+      background: color-mix(in srgb, var(--color-muted-foreground) 18%, transparent); padding: 1px 5px; border-radius: 6px;
       font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.88em;
       overflow-wrap: anywhere; word-break: break-word; white-space: normal;
       -webkit-box-decoration-break: clone; box-decoration-break: clone;
@@ -35,14 +35,14 @@ export const CHAT_TILE_STYLES = `
     .chat-md li > p, .chat-md li > .chat-md-p { margin: 0; }
     .chat-md a,
     .chat-md a:any-link,
-    .chat-md a:visited { color: var(--chat-link-color, #4f8cff) !important; opacity: 1; text-decoration: underline; text-underline-offset: 2px; }
+    .chat-md a:visited { color: var(--chat-link-color, var(--cs-th-accent-base)) !important; opacity: 1; text-decoration: underline; text-underline-offset: 2px; }
     .chat-md a:hover,
-    .chat-md a:focus-visible { color: var(--chat-link-hover-color, #77a2ff) !important; opacity: 1; }
+    .chat-md a:focus-visible { color: var(--chat-link-hover-color, var(--cs-th-accent-base)) !important; opacity: 1; }
     .chat-md blockquote {
-      border-left: 3px solid rgba(128,128,128,0.4); padding-left: 10px;
+      border-left: 3px solid color-mix(in srgb, var(--color-muted-foreground) 45%, transparent); padding-left: 10px;
       margin: 6px 0; opacity: 0.85;
     }
-    .chat-md hr { border: none; border-top: 1px solid rgba(128,128,128,0.3); margin: 10px 0; }
+    .chat-md hr { border: none; border-top: 1px solid color-mix(in srgb, var(--color-muted-foreground) 32%, transparent); margin: 10px 0; }
     .chat-md table {
       display: table; max-width: 100%; overflow: hidden; border-collapse: separate; border-spacing: 0;
       margin: 8px 0; width: 100%; font-size: 0.9em; table-layout: fixed;

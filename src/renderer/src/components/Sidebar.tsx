@@ -255,10 +255,14 @@ function SessionSidebarRow({
       ? theme.text.secondary
       : theme.text.disabled
   const leadingIconLeft = Math.max(0, 8 + indent * indentUnit - 14)
-  const activeBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.56)' : 'rgba(255,255,255,0.075)'
-  const hoverBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.34)' : theme.surface.hover
+  const activeBackground = theme.mode === 'light'
+    ? `color-mix(in srgb, ${theme.surface.app} 56%, transparent)`
+    : `color-mix(in srgb, ${theme.text.primary} 7.5%, transparent)`
+  const hoverBackground = theme.mode === 'light'
+    ? `color-mix(in srgb, ${theme.surface.app} 34%, transparent)`
+    : theme.surface.hover
   const activeShadow = theme.mode === 'light'
-    ? 'inset 0 0 0 1px rgba(255,255,255,0.90), 0 0 0 1px rgba(15,23,42,0.06)'
+    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 90%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 6%, transparent)`
     : 'var(--cs-edge-shadow)'
 
   return (
@@ -559,7 +563,7 @@ function SidebarTextDialog({
               borderRadius: 8,
               border: 'none',
               background: theme.accent.base,
-              color: theme.mode === 'light' ? '#fff' : '#0b1118',
+              color: theme.text.inverse,
               cursor: busy ? 'default' : 'pointer',
               opacity: busy ? 0.7 : 1,
               fontFamily: fonts.primary,

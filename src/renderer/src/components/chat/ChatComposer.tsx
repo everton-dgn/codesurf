@@ -180,7 +180,7 @@ export function ChatComposerDrawerFrame({
         borderBottom: 'none',
         borderRadius: joinedToPrevious ? 0 : '16px 16px 0 0',
         background: collapsed ? theme.chat.background : theme.surface.panelMuted,
-        boxShadow: collapsed ? 'none' : `${theme.shadow.panel}, inset 0 1px rgba(255, 255, 255, 0.04)`,
+        boxShadow: collapsed ? 'none' : `${theme.shadow.panel}, inset 0 1px color-mix(in srgb, ${theme.text.primary} 4%, transparent)`,
         overflow: 'hidden',
         position: 'relative',
         zIndex: 0,

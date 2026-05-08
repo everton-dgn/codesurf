@@ -694,6 +694,50 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                 ))}
               </select>
             </SettingRow>
+            <SettingRow
+              label="Contrast"
+              description="Push surfaces and text apart (positive) or compress them toward mid-grey (negative). 0 keeps the preset's natural contrast."
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 240 }}>
+                <input
+                  type="range"
+                  min={-1}
+                  max={1}
+                  step={0.05}
+                  value={settings.themeContrast ?? 0}
+                  onChange={e => updateSettingsPatch({ themeContrast: Number(e.target.value) })}
+                  style={{ flex: 1, accentColor: theme.accent.base, cursor: 'pointer' }}
+                  aria-label="Theme contrast"
+                />
+                <button
+                  type="button"
+                  onClick={() => updateSettingsPatch({ themeContrast: 0 })}
+                  title="Reset contrast to preset default"
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: fonts.secondarySize,
+                    background: theme.surface.input,
+                    color: theme.text.secondary,
+                    border: `1px solid ${theme.border.default}`,
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reset
+                </button>
+                <span
+                  style={{
+                    minWidth: 44,
+                    textAlign: 'right',
+                    fontVariantNumeric: 'tabular-nums',
+                    fontSize: fonts.secondarySize,
+                    color: theme.text.muted,
+                  }}
+                >
+                  {((settings.themeContrast ?? 0) >= 0 ? '+' : '') + (settings.themeContrast ?? 0).toFixed(2)}
+                </span>
+              </div>
+            </SettingRow>
             <DisplaySettingsEditor
               settings={settings}
               onApply={updateSettingsPatch}

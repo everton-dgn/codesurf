@@ -12,7 +12,7 @@ import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNo
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
-import { DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
+import { applyContrast, DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
 import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf, replaceTabInLeaf } from './components/panelLayoutTree'
 import { basename, getDroppedPaths, toFileUrl, isMediaFile } from './utils/dnd'
@@ -4556,7 +4556,45 @@ function App(): JSX.Element {
     () => resolveEffectiveThemeId(settings.appearance, settings.themeId, systemPrefersDark),
     [settings.appearance, settings.themeId, systemPrefersDark],
   )
-  const theme = React.useMemo(() => getThemeById(effectiveThemeId), [effectiveThemeId])
+  const theme = React.useMemo(
+    () => applyContrast(getThemeById(effectiveThemeId), settings.themeContrast ?? 0),
+    [effectiveThemeId, settings.themeContrast],
+  )
+
+  // Publish theme tokens as CSS custom properties on <html> so plain CSS
+  // (index.css, Tailwind utilities via @theme, scrollbar pseudo-elements,
+  // etc.) tracks the active theme — including any contrast-slider offset.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const root = document.documentElement
+    const isDark = theme.mode === 'dark'
+    const setVar = (name: string, value: string) => root.style.setProperty(name, value)
+    setVar('--cs-th-app', theme.surface.app)
+    setVar('--cs-th-sidebar', theme.surface.sidebar)
+    setVar('--cs-th-panel', theme.surface.panel)
+    setVar('--cs-th-panel-muted', theme.surface.panelMuted)
+    setVar('--cs-th-panel-elevated', theme.surface.panelElevated)
+    setVar('--cs-th-input', theme.surface.input)
+    setVar('--cs-th-text-primary', theme.text.primary)
+    setVar('--cs-th-text-muted', theme.text.muted)
+    setVar('--cs-th-text-inverse', theme.text.inverse)
+    setVar('--cs-th-border-subtle', theme.border.subtle)
+    setVar('--cs-th-border-default', theme.border.default)
+    setVar('--cs-th-border-strong', theme.border.strong)
+    setVar('--cs-th-accent-base', theme.accent.base)
+    setVar('--cs-th-status-danger', theme.status.danger)
+    // Edge shadow alpha channels — these mirror the ladder used by
+    // `getEdgeShadow()` in theme.ts so the React-side and CSS-side edges
+    // stay coherent regardless of how the slider shifts the surfaces.
+    setVar('--cs-th-edge-white-alpha', isDark ? '0.085' : '0.82')
+    setVar('--cs-th-edge-white-alpha-subtle', isDark ? '0.055' : '0.68')
+    setVar('--cs-th-edge-white-alpha-strong', isDark ? '0.12' : '0.92')
+    setVar('--cs-th-edge-black-alpha', isDark ? '0.10' : '0.04')
+    // Scrollbar thumb — anchor on text colour with low alpha so it stays
+    // visible against any surface and tracks contrast.
+    setVar('--cs-th-scrollbar-thumb', isDark ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.22)')
+    setVar('--cs-th-scrollbar-thumb-hover', isDark ? 'rgba(255,255,255,0.26)' : 'rgba(15,23,42,0.34)')
+  }, [theme])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -4814,21 +4852,27 @@ function App(): JSX.Element {
   }
   const mainPanelBorderRadius = `${mainPanelCornerRadii.topLeft}px ${mainPanelCornerRadii.topRight}px ${mainPanelCornerRadii.bottomRight}px ${mainPanelCornerRadii.bottomLeft}px`
   const mainPanelBackground = panelLayout ? theme.surface.app : canvasLayerBackground
+  // Edge shadows compose multiple alpha layers; the alpha values stay
+  // constant by design (Tahoe glass) and the surfaces beneath them track
+  // contrast, so the perceived edge weight follows the palette.
   const mainPanelInsetEdgeShadow = theme.mode === 'light'
-    ? 'inset 0 0 0 1px rgba(255,255,255,0.96), inset -1px 0 0 rgba(15,23,42,0.025), inset 0 -1px 0 rgba(15,23,42,0.025)'
-    : 'inset 0 0 0 1px rgba(255,255,255,0.09)'
-  const mainPanelOuterEdgeShadow = '0 0 0 1px rgba(0,0,0,0.04)'
+    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 96%, transparent), inset -1px 0 0 color-mix(in srgb, ${theme.text.primary} 2.5%, transparent), inset 0 -1px 0 color-mix(in srgb, ${theme.text.primary} 2.5%, transparent)`
+    : `inset 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 9%, transparent)`
+  const mainPanelOuterEdgeShadow = `0 0 0 1px color-mix(in srgb, ${theme.text.primary} 4%, transparent)`
   const selectedTabDropShadow = theme.mode === 'light'
-    ? '0 5px 12px rgba(15,23,42,0.10)'
-    : '0 5px 12px rgba(0,0,0,0.18)'
+    ? `0 5px 12px color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
+    : `0 5px 12px color-mix(in srgb, ${theme.text.primary} 18%, transparent)`
   const mainPanelShadow = `${mainPanelOuterEdgeShadow}, ${selectedTabDropShadow}`
   const workspaceTabLabelSize = Math.max(12, appFonts.size - 1)
   const workspaceTabBackground = panelLayout ? theme.surface.panel : mainPanelBackground
+  // Inactive tab on light is a translucent paper plate over the canvas; on
+  // dark it stays transparent so the canvas shows through. Anchoring on
+  // surface.panel rather than literal white means contrast tracks here.
   const workspaceTabInactiveBackground = theme.mode === 'light'
-    ? 'rgba(255,255,255,0.58)'
+    ? `color-mix(in srgb, ${theme.surface.panel} 58%, transparent)`
     : 'transparent'
   const workspaceTabInactiveHoverBackground = theme.mode === 'light'
-    ? 'rgba(255,255,255,0.78)'
+    ? `color-mix(in srgb, ${theme.surface.panel} 78%, transparent)`
     : theme.surface.hover
   const workspaceTabActiveBorder = `color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
   const workspaceTabCloseHoverBackground = `color-mix(in srgb, ${theme.surface.selection} 70%, ${theme.surface.hover})`
@@ -5030,7 +5074,9 @@ function App(): JSX.Element {
               ? '0 10px 0 80px'
               : '0 10px 0 14px',
             borderBottom: `1px solid ${theme.border.subtle}`,
-            background: theme.mode === 'light' ? 'rgba(250,250,252,0.92)' : 'rgba(14,16,20,0.88)',
+            // Use the theme's titlebar surface so contrast tracks the rest
+            // of the palette. backdrop-filter still adds vibrancy on top.
+            background: theme.surface.titlebar,
             backdropFilter: 'blur(18px)',
             WebkitBackdropFilter: 'blur(18px)',
             ...({ WebkitAppRegion: 'drag' } as React.CSSProperties),
@@ -5352,7 +5398,11 @@ function App(): JSX.Element {
                 // traffic lights instead of disappearing into vibrancy.
                 borderRadius: '50%',
                 border: '0.5px solid transparent',
-                background: 'rgba(255,255,255,0.10)',
+                // Glass overlay anchored on text.primary so it reads as a
+                // light tint over a dark surface (and a near-paper tint over
+                // a light surface). Both modes look right and the contrast
+                // slider tracks because text.primary tracks.
+                background: `color-mix(in srgb, ${theme.text.primary} 10%, transparent)`,
                 backdropFilter: 'blur(20px) saturate(180%)',
                 WebkitBackdropFilter: 'blur(20px) saturate(180%)',
                 boxShadow: 'var(--cs-edge-shadow-strong)',
@@ -5366,12 +5416,12 @@ function App(): JSX.Element {
                 transition: 'background 0.12s ease, color 0.12s ease, transform 0.12s ease',
               } as React.CSSProperties}
               onMouseEnter={event => {
-                event.currentTarget.style.background = 'rgba(255,255,255,0.16)'
+                event.currentTarget.style.background = `color-mix(in srgb, ${theme.text.primary} 16%, transparent)`
                 event.currentTarget.style.color = theme.text.primary
                 event.currentTarget.style.transform = 'scale(1.03)'
               }}
               onMouseLeave={event => {
-                event.currentTarget.style.background = 'rgba(255,255,255,0.10)'
+                event.currentTarget.style.background = `color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
                 event.currentTarget.style.color = theme.text.primary
                 event.currentTarget.style.transform = 'scale(1)'
               }}
@@ -5416,14 +5466,14 @@ function App(): JSX.Element {
                     marginBottom: isActive ? workspaceTabActiveBottomGap : workspaceTabInactiveBottomGap,
                     borderRadius: 8,
                     background: isActive
-                      ? (theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground)
+                      ? (theme.mode === 'light' ? `color-mix(in srgb, ${theme.surface.app} 86%, transparent)` : workspaceTabBackground)
                       : workspaceTabInactiveBackground,
                     color: isActive ? theme.text.primary : theme.text.secondary,
                     transition: 'color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease',
                     border: '0.5px solid transparent',
                     boxShadow: isActive
                       ? (theme.mode === 'light'
-                          ? `inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), ${selectedTabDropShadow}`
+                          ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 92%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent), ${selectedTabDropShadow}`
                           : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`)
                       : 'var(--cs-edge-shadow)',
                     boxSizing: 'border-box',
@@ -5530,7 +5580,7 @@ function App(): JSX.Element {
                   gap: 5,
                   marginBottom: workspaceTabActiveBottomGap,
                   borderRadius: 8,
-                  background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground,
+                  background: theme.mode === 'light' ? `color-mix(in srgb, ${theme.surface.app} 86%, transparent)` : workspaceTabBackground,
                   color: theme.text.primary,
                   fontSize: Math.max(11, workspaceTabLabelSize),
                   fontWeight: 700,
@@ -5538,7 +5588,7 @@ function App(): JSX.Element {
                   letterSpacing: 0,
                   border: '0.5px solid transparent',
                   boxShadow: theme.mode === 'light'
-                    ? `inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), ${selectedTabDropShadow}`
+                    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 92%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent), ${selectedTabDropShadow}`
                     : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`,
                   boxSizing: 'border-box',
                   position: 'relative',
@@ -5577,11 +5627,11 @@ function App(): JSX.Element {
                   gap: 5,
                   marginBottom: workspaceTabActiveBottomGap,
                   borderRadius: 8,
-                  background: theme.mode === 'light' ? 'rgba(255,255,255,0.86)' : workspaceTabBackground,
+                  background: theme.mode === 'light' ? `color-mix(in srgb, ${theme.surface.app} 86%, transparent)` : workspaceTabBackground,
                   color: theme.text.primary,
                   border: '0.5px solid transparent',
                   boxShadow: theme.mode === 'light'
-                    ? `inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12), ${selectedTabDropShadow}`
+                    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 92%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent), ${selectedTabDropShadow}`
                     : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`,
                   boxSizing: 'border-box',
                   position: 'relative',
@@ -5724,14 +5774,16 @@ function App(): JSX.Element {
               transition: 'opacity 0.12s ease',
               width: collapsedSidebarPillSize,
               height: collapsedSidebarPillSize,
-              background: theme.mode === 'light' ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.10)',
+              background: theme.mode === 'light'
+                ? `color-mix(in srgb, ${theme.surface.app} 78%, transparent)`
+                : `color-mix(in srgb, ${theme.text.primary} 10%, transparent)`,
               backdropFilter: 'blur(20px) saturate(180%)',
               WebkitBackdropFilter: 'blur(20px) saturate(180%)',
               border: '0.5px solid transparent',
               borderRadius: '50%',
               boxShadow: theme.mode === 'light'
-                ? 'var(--cs-edge-shadow-strong), 0 0 0 1px rgba(15,23,42,0.14), 0 2px 6px rgba(15,23,42,0.10)'
-                : 'var(--cs-edge-shadow-strong), 0 0 0 1px rgba(0,0,0,0.22), 0 2px 6px rgba(0,0,0,0.18)',
+                ? `var(--cs-edge-shadow-strong), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 14%, transparent), 0 2px 6px color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
+                : `var(--cs-edge-shadow-strong), 0 0 0 1px color-mix(in srgb, #000 22%, transparent), 0 2px 6px color-mix(in srgb, #000 18%, transparent)`,
               cursor: 'pointer',
               alignItems: 'center',
               justifyContent: 'center',
@@ -5741,10 +5793,14 @@ function App(): JSX.Element {
               zIndex: 200,
             } as React.CSSProperties}
             onMouseEnter={e => {
-              e.currentTarget.style.background = theme.mode === 'light' ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.16)'
+              e.currentTarget.style.background = theme.mode === 'light'
+                ? `color-mix(in srgb, ${theme.surface.app} 92%, transparent)`
+                : `color-mix(in srgb, ${theme.text.primary} 16%, transparent)`
             }}
             onMouseLeave={e => {
-              e.currentTarget.style.background = theme.mode === 'light' ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.10)'
+              e.currentTarget.style.background = theme.mode === 'light'
+                ? `color-mix(in srgb, ${theme.surface.app} 78%, transparent)`
+                : `color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
             }}
           >
             <svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" style={{ transform: 'scaleX(-1)' }}>
@@ -6265,7 +6321,7 @@ function App(): JSX.Element {
                           style={{
                             width: 12, height: 12, borderRadius: '50%',
                             background: color, cursor: 'pointer', flexShrink: 0,
-                            border: '1px solid rgba(255,255,255,0.2)'
+                            border: `1px solid ${theme.border.default}`
                           }}
                           onClick={e => {
                             e.stopPropagation()
