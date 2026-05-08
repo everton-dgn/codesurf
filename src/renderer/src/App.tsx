@@ -4861,13 +4861,21 @@ function App(): JSX.Element {
   // Edge shadows compose multiple alpha layers; the alpha values stay
   // constant by design (Tahoe glass) and the surfaces beneath them track
   // contrast, so the perceived edge weight follows the palette.
+  // Dark-mode shadows anchor on #000 (not text.primary) — when the contrast
+  // slider lifts text.primary toward white, text-anchored shadows turn into
+  // a glow. Only use text.primary for shadow tinting in light mode where
+  // it's already dark.
   const mainPanelInsetEdgeShadow = theme.mode === 'light'
     ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 96%, transparent), inset -1px 0 0 color-mix(in srgb, ${theme.text.primary} 2.5%, transparent), inset 0 -1px 0 color-mix(in srgb, ${theme.text.primary} 2.5%, transparent)`
-    : `inset 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 9%, transparent)`
-  const mainPanelOuterEdgeShadow = `0 0 0 1px color-mix(in srgb, ${theme.text.primary} 4%, transparent)`
+    // Dark inset hairline — pure white at low alpha so the contrast slider
+    // doesn't pump it into a halo.
+    : `inset 0 0 0 1px rgba(255,255,255,0.045)`
+  const mainPanelOuterEdgeShadow = theme.mode === 'light'
+    ? `0 0 0 1px color-mix(in srgb, ${theme.text.primary} 4%, transparent)`
+    : `0 0 0 1px rgba(0,0,0,0.30)`
   const selectedTabDropShadow = theme.mode === 'light'
     ? `0 5px 12px color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
-    : `0 5px 12px color-mix(in srgb, ${theme.text.primary} 18%, transparent)`
+    : `0 5px 12px rgba(0,0,0,0.36)`
   const mainPanelShadow = `${mainPanelOuterEdgeShadow}, ${selectedTabDropShadow}`
   const workspaceTabLabelSize = Math.max(12, appFonts.size - 1)
   const workspaceTabBackground = panelLayout ? theme.surface.panel : mainPanelBackground

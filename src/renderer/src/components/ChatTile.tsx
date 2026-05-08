@@ -1188,7 +1188,11 @@ const InsightBlock = React.memo(({ text, closed, isStreaming, accent, textColor 
         color: textColor,
         // Subtle inner highlight on the top edge — a small touch that
         // sells the "glass" reading without being explicit about it.
-        boxShadow: `0 1px 0 0 ${withAlpha(accent, '14')} inset, 0 1px 2px color-mix(in srgb, ${theme.text.primary} 4%, transparent)`,
+        // Drop shadow anchored on #000 in dark mode (text.primary would lift
+        // toward white at high contrast and turn the shadow into a glow);
+        // light mode keeps text.primary so the shadow is genuinely dark
+        // against paper.
+        boxShadow: `0 1px 0 0 ${withAlpha(accent, '14')} inset, 0 1px 2px ${theme.mode === 'light' ? `color-mix(in srgb, ${theme.text.primary} 4%, transparent)` : `rgba(0,0,0,0.18)`}`,
       }}
     >
       <div
