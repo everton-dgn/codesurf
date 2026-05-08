@@ -247,9 +247,17 @@ function TabBar({ tabs, activeTab, previewTabId = null, panelId, onActivate, onP
   const fonts = useAppFonts()
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const compactTabBackground = theme.mode === 'light' ? 'rgba(226,228,235,0.88)' : 'rgba(255,255,255,0.13)'
+  // Selected tab fill: in light mode it's a slightly tinted paper (anchor on
+  // panelMuted to avoid pure white blowing out next to canvas); in dark mode
+  // it's a low-alpha glass over the canvas. Both anchor on theme tokens so
+  // they shift with contrast.
+  const compactTabBackground = theme.mode === 'light'
+    ? `color-mix(in srgb, ${theme.surface.panelMuted} 88%, transparent)`
+    : `color-mix(in srgb, ${theme.text.primary} 13%, transparent)`
   const compactTabInactiveBackground = 'transparent'
-  const compactTabHoverBackground = theme.mode === 'light' ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.055)'
+  const compactTabHoverBackground = theme.mode === 'light'
+    ? `color-mix(in srgb, ${theme.surface.app} 32%, transparent)`
+    : `color-mix(in srgb, ${theme.text.primary} 5.5%, transparent)`
   const compactTabMaxWidth = 'min(180px, 18vw)'
 
   useEffect(() => {

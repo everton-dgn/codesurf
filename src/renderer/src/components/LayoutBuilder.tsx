@@ -129,11 +129,15 @@ function InteractiveTree({ node, path, onDropOnLeaf, onDragLeaf, hoverPath, hove
   const containerRef = useRef<HTMLDivElement>(null)
   const isHoriz = node.type === 'split' ? node.direction === 'horizontal' : false
   const isLight = theme.mode === 'light'
-  const leafSurface = isLight ? 'rgba(226,232,240,0.58)' : theme.surface.panelMuted
+  const leafSurface = isLight
+    ? `color-mix(in srgb, ${theme.surface.panelMuted} 58%, transparent)`
+    : theme.surface.panelMuted
   const leafEdge = isLight
-    ? 'inset 0 0 0 1px rgba(255,255,255,0.74), 0 0 0 1px rgba(15,23,42,0.08)'
+    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 74%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 8%, transparent)`
     : 'var(--cs-edge-shadow)'
-  const dividerHandle = isLight ? 'rgba(15,23,42,0.36)' : theme.text.disabled
+  const dividerHandle = isLight
+    ? `color-mix(in srgb, ${theme.text.primary} 36%, transparent)`
+    : theme.text.disabled
 
   const handleDividerDrag = useCallback((dividerIndex: number, e: React.MouseEvent) => {
     if (!isEditing || !onResizeSplit || !containerRef.current || node.type !== 'split') return
@@ -194,12 +198,12 @@ function InteractiveTree({ node, path, onDropOnLeaf, onDragLeaf, hoverPath, hove
             style={{
               position: 'absolute', top: 2, right: 2,
               width: 12, height: 12, borderRadius: 3, border: 'none',
-              background: 'rgba(0,0,0,0.25)', color: '#fff',
+              background: `color-mix(in srgb, #000 25%, transparent)`, color: theme.text.inverse,
               cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: Math.max(8, fonts.secondarySize - 2), opacity: 0.6, zIndex: 2,
             }}
             onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = theme.status.danger }}
-            onMouseLeave={e => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.background = 'rgba(0,0,0,0.25)' }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.background = `color-mix(in srgb, #000 25%, transparent)` }}
           >x</button>
         )}
         {/* Zone overlay */}
@@ -328,13 +332,13 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
   const [hoveredLayoutCard, setHoveredLayoutCard] = useState<number | null>(null)
   const isLight = theme.mode === 'light'
   const layoutEdgeShadow = isLight
-    ? 'inset 0 0 0 1px rgba(255,255,255,0.92), 0 0 0 1px rgba(15,23,42,0.12)'
+    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 92%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
     : 'var(--cs-edge-shadow-strong)'
   const layoutRaisedShadow = isLight
-    ? 'inset 0 0 0 1px rgba(255,255,255,0.94), 0 0 0 1px rgba(15,23,42,0.12), 0 8px 18px rgba(15,23,42,0.12)'
-    : 'var(--cs-edge-shadow-strong), 0 8px 18px rgba(0,0,0,0.24)'
+    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 94%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 12%, transparent), 0 8px 18px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
+    : `var(--cs-edge-shadow-strong), 0 8px 18px color-mix(in srgb, #000 24%, transparent)`
   const layoutSubtleShadow = isLight
-    ? 'inset 0 0 0 1px rgba(255,255,255,0.78), 0 0 0 1px rgba(15,23,42,0.08)'
+    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 78%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 8%, transparent)`
     : 'var(--cs-edge-shadow)'
 
   // Load saved templates into cards on first load
@@ -540,7 +544,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
         `radial-gradient(circle at 76% 80%, ${theme.accent.soft}1e 0%, transparent 30%)`,
         `radial-gradient(circle at 50% 76%, ${theme.accent.soft}2c 0%, transparent 44%)`,
         `linear-gradient(180deg, ${theme.accent.soft}18 0%, transparent 46%)`,
-        isLight ? '#eef2f7' : theme.surface.panelMuted,
+        isLight ? theme.surface.panelMuted : theme.surface.panelMuted,
       ].join(', '),
       overflow: 'auto', padding: 20,
     }}>
@@ -563,7 +567,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                     {TILE_DEFS.map(def => (
                       <div key={def.type} onMouseDown={def.disabled ? undefined : e => startDrag(def.type, e)} style={{
                         width: 56, height: 52, borderRadius: 9,
-                        background: isLight ? 'rgba(255,255,255,0.62)' : theme.surface.panelElevated, border: '0.5px solid transparent',
+                        background: isLight ? `color-mix(in srgb, ${theme.surface.app} 62%, transparent)` : theme.surface.panelElevated, border: '0.5px solid transparent',
                         boxShadow: layoutEdgeShadow,
                         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                         gap: 2, cursor: def.disabled ? 'not-allowed' : 'grab', color: def.disabled ? theme.text.disabled : theme.text.muted, fontSize: Math.max(10, fonts.secondarySize - 1), fontWeight: 500,
@@ -571,13 +575,13 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                       }}
                         onMouseEnter={e => {
                           if (def.disabled) return
-                          e.currentTarget.style.background = isLight ? 'rgba(255,255,255,0.86)' : theme.surface.panel
+                          e.currentTarget.style.background = isLight ? `color-mix(in srgb, ${theme.surface.app} 86%, transparent)` : theme.surface.panel
                           e.currentTarget.style.boxShadow = layoutRaisedShadow
                           e.currentTarget.style.transform = 'translateY(-1px)'
                           e.currentTarget.style.color = theme.accent.base
                         }}
                         onMouseLeave={e => {
-                          e.currentTarget.style.background = isLight ? 'rgba(255,255,255,0.62)' : theme.surface.panelElevated
+                          e.currentTarget.style.background = isLight ? `color-mix(in srgb, ${theme.surface.app} 62%, transparent)` : theme.surface.panelElevated
                           e.currentTarget.style.boxShadow = layoutEdgeShadow
                           e.currentTarget.style.transform = 'translateY(0)'
                           e.currentTarget.style.color = def.disabled ? theme.text.disabled : theme.text.muted
@@ -615,7 +619,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                     <input value={card.name} onChange={e => setCards(prev => { const n = [...prev]; n[cardIdx] = { ...n[cardIdx], name: e.target.value }; return n })}
                       placeholder="Click to name..."
                       style={{ flex: 1, padding: '4px 8px', fontSize: Math.max(11, fonts.size - 1), borderRadius: 6, background: 'transparent', color: theme.text.primary, border: '0.5px solid transparent', boxShadow: 'none', outline: 'none', fontFamily: 'inherit', minWidth: 0, fontWeight: 800, cursor: 'text' }}
-                      onFocus={e => { e.currentTarget.style.background = isLight ? 'rgba(255,255,255,0.88)' : theme.surface.input; e.currentTarget.style.boxShadow = layoutEdgeShadow }}
+                      onFocus={e => { e.currentTarget.style.background = isLight ? `color-mix(in srgb, ${theme.surface.app} 88%, transparent)` : theme.surface.input; e.currentTarget.style.boxShadow = layoutEdgeShadow }}
                       onBlur={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.boxShadow = 'none' }}
                     />
                   )}
@@ -659,12 +663,12 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                     borderRadius: 9, aspectRatio: '16 / 9',
                     border: '0.5px solid transparent',
                     background: isEmpty
-                      ? (isLight ? 'rgba(255,255,255,0.30)' : `${theme.surface.panel}40`)
-                      : (isLight ? 'rgba(255,255,255,0.58)' : theme.surface.panel),
+                      ? (isLight ? `color-mix(in srgb, ${theme.surface.app} 30%, transparent)` : `${theme.surface.panel}40`)
+                      : (isLight ? `color-mix(in srgb, ${theme.surface.app} 58%, transparent)` : theme.surface.panel),
                     boxShadow: isCardHovered
                       ? (isLight
-                          ? 'inset 0 0 0 1px rgba(255,255,255,0.94), 0 0 0 1px rgba(53,104,255,0.42), 0 8px 18px rgba(15,23,42,0.14)'
-                          : 'var(--cs-edge-shadow-accent), 0 8px 18px rgba(0,0,0,0.26)')
+                          ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 94%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 42%, transparent), 0 8px 18px color-mix(in srgb, ${theme.text.primary} 14%, transparent)`
+                          : `var(--cs-edge-shadow-accent), 0 8px 18px color-mix(in srgb, #000 26%, transparent)`)
                       : isEmpty
                         ? layoutSubtleShadow
                         : layoutRaisedShadow,

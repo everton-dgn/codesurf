@@ -32,7 +32,13 @@ export function ConnectionPill({ x, y, zoom, isLocked, onToggleLock, onDelete: _
   }, [])
 
   const isLight = theme.mode === 'light'
-  const pillBg = isLight ? 'rgba(255, 255, 255, 0.97)' : 'rgba(5, 13, 19, 0.96)'
+  // Pill body anchored on theme surfaces. The dynamic dscLine is the
+  // discovery-route line color (bright cyan/blue per mode) — kept as the
+  // categorical accent for the border so the connection's identity is
+  // preserved regardless of palette/contrast.
+  const pillBg = isLight
+    ? `color-mix(in srgb, ${theme.surface.app} 97%, transparent)`
+    : `color-mix(in srgb, ${theme.surface.app} 96%, transparent)`
   const pillBorder = `rgba(${dscLine}, ${expanded ? 0.5 : 0.35})`
   const activeColor = isLight ? theme.accent.base : `rgba(${dscLine}, 0.95)`
   const mutedColor = isLight ? theme.text.disabled : `rgba(${dscLine}, 0.35)`
@@ -70,7 +76,7 @@ export function ConnectionPill({ x, y, zoom, isLocked, onToggleLock, onDelete: _
           borderRadius: 999,
           background: pillBg,
           border: `1px solid ${pillBorder}`,
-          boxShadow: `0 4px 16px rgba(0,0,0,${isLight ? 0.12 : 0.28})`,
+          boxShadow: `0 4px 16px color-mix(in srgb, #000 ${isLight ? 12 : 28}%, transparent)`,
           cursor: 'pointer',
           transition: 'width 0.18s ease, padding 0.18s ease, border-color 0.15s ease',
           overflow: 'hidden',

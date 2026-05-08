@@ -215,11 +215,15 @@ function filterTree(entries: TreeEntry[], query: string): TreeEntry[] {
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function FileIcon({ name, ext }: { name: string; ext: string }): JSX.Element {
+  const theme = useTheme()
   const safeExt = ext ?? ''
   const meta = SPECIAL_FILES[name] ?? EXT_META[safeExt] ?? {
     label: safeExt.replace('.', '').slice(0, 3).toUpperCase() || 'TXT',
-    color: '#888',
-    bg: '#252525'
+    // Unknown-extension fallback uses theme tokens so it visually melts into
+    // the file list rather than fighting the chrome. Known extensions keep
+    // their semantic Linguist-style colours.
+    color: theme.text.muted,
+    bg: theme.surface.panelMuted
   }
   return (
     <div style={{
@@ -238,6 +242,7 @@ function FileIcon({ name, ext }: { name: string; ext: string }): JSX.Element {
 }
 
 function FolderIcon({ expanded }: { expanded: boolean }): JSX.Element {
+  const theme = useTheme()
   return (
     <div style={{ display: 'flex', alignItems: 'center', marginRight: 5, flexShrink: 0, gap: 3 }}>
       <svg
@@ -253,7 +258,10 @@ function FolderIcon({ expanded }: { expanded: boolean }): JSX.Element {
       <svg width="14" height="12" viewBox="0 0 14 12" fill="none">
         <path
           d="M0 2.5C0 1.67 0.67 1 1.5 1H4.5L6 2.5H12.5C13.33 2.5 14 3.17 14 4V10C14 10.83 13.33 11.5 12.5 11.5H1.5C0.67 11.5 0 10.83 0 10V2.5Z"
-          fill={expanded ? '#dcb67a' : '#c09a5c'}
+          // Folder fill: semantic warm gold (VS Code convention). Anchored
+          // on theme.status.warning so it tracks contrast while keeping its
+          // categorical hue.
+          fill={expanded ? theme.status.warning : `color-mix(in srgb, ${theme.status.warning} 80%, ${theme.text.muted})`}
         />
       </svg>
     </div>
@@ -274,9 +282,9 @@ function Badge({ count }: { count: number }): JSX.Element {
       lineHeight: 1.2,
       fontWeight: 700,
       fontVariantNumeric: 'tabular-nums',
-      color: isLight ? '#1b2430' : theme.text.secondary,
-      background: isLight ? '#ffffff' : theme.surface.panelMuted,
-      border: `1px solid ${isLight ? 'rgba(15,23,42,0.18)' : theme.border.subtle}`,
+      color: theme.text.secondary,
+      background: isLight ? theme.surface.app : theme.surface.panelMuted,
+      border: `1px solid ${theme.border.subtle}`,
       borderRadius: 999,
       padding: '2px 7px',
       marginLeft: 6,
@@ -638,7 +646,7 @@ function FlatEntry({
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
             }}>
               <span style={{ fontWeight: 400 }}>{entry.name.replace(entry.ext, '')}</span>
-              <span style={{ color: '#4a4a4a' }}>{entry.ext}</span>
+              <span style={{ color: theme.text.disabled }}>{entry.ext}</span>
             </span>
             <span style={{
               fontSize: fonts.size - 1, fontFamily: 'inherit', color: theme.text.disabled,

@@ -198,7 +198,7 @@ export function MCPPanel({ onClose }: Props): JSX.Element {
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 10000,
-      background: theme.mode === 'light' ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center'
+      background: theme.mode === 'light' ? `color-mix(in srgb, #000 30%, transparent)` : `color-mix(in srgb, #000 70%, transparent)`, display: 'flex', alignItems: 'center', justifyContent: 'center'
     }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div style={{
         width: 560, maxHeight: '80vh', background: theme.surface.panel,

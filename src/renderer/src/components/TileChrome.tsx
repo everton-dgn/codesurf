@@ -677,7 +677,7 @@ function ContextPanel({ items, onAddNote, onRemoveItem }: {
       ) : (
         items.map(c => (
           <div key={c.id} style={{ padding: '4px 8px', display: 'flex', alignItems: 'flex-start', gap: 6, borderBottom: `1px solid ${theme.border.subtle}` }}>
-            <span style={{ fontSize: 9, color: c.type === 'note' ? theme.accent.base : '#e2c08d', fontWeight: 600, marginTop: 2, flexShrink: 0 }}>
+            <span style={{ fontSize: 9, color: c.type === 'note' ? theme.accent.base : theme.status.warning, fontWeight: 600, marginTop: 2, flexShrink: 0 }}>
               {c.type === 'note' ? 'N' : 'F'}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1324,11 +1324,11 @@ export function TileChrome({
   const totalActivity = pendingTasks + drawerData.tools.filter(t => t.status === 'running').length
   const tilePanelShadow = theme.mode === 'light'
     ? isSelected
-      ? `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 36%, white 16%, transparent), 0 0 0 1px rgba(15,23,42,0.17), 0 8px 18px rgba(15,23,42,0.11)`
-      : 'inset 0 0 0 1px rgba(255,255,255,0.88), 0 0 0 1px rgba(15,23,42,0.14), 0 7px 16px rgba(15,23,42,0.09)'
+      ? `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 36%, white 16%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 17%, transparent), 0 8px 18px color-mix(in srgb, ${theme.text.primary} 11%, transparent)`
+      : `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 88%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 14%, transparent), 0 7px 16px color-mix(in srgb, ${theme.text.primary} 9%, transparent)`
     : isSelected ? getEdgeShadow(theme, 'accent') : getEdgeShadow(theme, 'strong')
   const drawerPanelShadow = theme.mode === 'light'
-    ? 'inset 0 0 0 1px rgba(255,255,255,0.82), 0 0 0 1px rgba(15,23,42,0.13), 0 7px 16px rgba(15,23,42,0.08)'
+    ? `inset 0 0 0 1px color-mix(in srgb, ${theme.surface.app} 82%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.text.primary} 13%, transparent), 0 7px 16px color-mix(in srgb, ${theme.text.primary} 8%, transparent)`
     : getEdgeShadow(theme, 'strong')
 
   return (
@@ -1459,10 +1459,10 @@ export function TileChrome({
                 borderRadius: '50%',
                 flexShrink: 0,
                 marginRight: 8,
-                background: theme.mode === 'light' ? 'rgba(53, 104, 255, 0.88)' : 'rgba(123, 241, 255, 0.88)',
-                boxShadow: theme.mode === 'light'
-                  ? '0 0 8px rgba(53, 104, 255, 0.34), 0 0 0 1px rgba(53, 104, 255, 0.12)'
-                  : '0 0 8px rgba(123, 241, 255, 0.34), 0 0 0 1px rgba(123, 241, 255, 0.12)',
+                // Magnet/connection indicator dot — anchored on the theme's
+                // accent so it shifts with palette and contrast.
+                background: `color-mix(in srgb, ${theme.accent.base} 88%, transparent)`,
+                boxShadow: `0 0 8px color-mix(in srgb, ${theme.accent.base} 34%, transparent), 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 12%, transparent)`,
               }}
             />
           )}
@@ -1592,13 +1592,17 @@ export function TileChrome({
                 height: 24,
                 cursor: 'grab',
                 zIndex: 5,
-                background: 'linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0))',
+                // Drag-handle gradient overlay — pure black/white alpha is
+                // appropriate here because this overlay sits on top of
+                // arbitrary tile content (image, video, code) and needs to
+                // dim/contrast against any backdrop.
+                background: `linear-gradient(to bottom, color-mix(in srgb, #000 35%, transparent), transparent)`,
                 opacity: 0,
                 transition: 'opacity 120ms ease',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'rgba(255,255,255,0.7)',
+                color: `color-mix(in srgb, #fff 70%, transparent)`,
                 fontSize: 11,
                 letterSpacing: 1,
                 userSelect: 'none',

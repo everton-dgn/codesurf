@@ -118,13 +118,27 @@ export function getEdgeShadow(theme: Pick<AppTheme, 'mode' | 'accent'>, tone: Ed
   if (tone === 'accent') {
     return theme.mode === 'light'
       ? `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 38%, white 18%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.04)`
-      : `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 24%, white 4%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.10)`
+      // Dark-mode accent: drop the `white 4%` admixture — at low ambient
+      // brightness it shows up as a hard white halo on every accented panel.
+      // Anchor the inset purely on the accent so the highlight reads as
+      // "this is the active accent" not "this is a glowing outline".
+      : `inset 0 0 0 1px color-mix(in srgb, ${theme.accent.base} 28%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.22)`
   }
 
+  // Light mode keeps its high-alpha "paper edge" highlights — they read as
+  // the natural top-of-page lighting on a paper canvas.
+  // Dark mode used to mirror this with low-alpha white inset highlights, but
+  // those produce a visible white halo around panels in true dark themes
+  // (especially on the leftmost column of a mid-tone panel against a darker
+  // canvas). Drop the white-inset to a near-imperceptible level and let the
+  // outer dark shadow do the elevation work — that's how modern dark UIs
+  // separate layers without the "glass on glass" Tahoe look.
   const whiteAlpha = theme.mode === 'light'
     ? tone === 'strong' ? 0.92 : tone === 'subtle' ? 0.68 : 0.82
-    : tone === 'strong' ? 0.12 : tone === 'subtle' ? 0.055 : 0.085
-  const blackAlpha = theme.mode === 'light' ? 0.04 : 0.10
+    : tone === 'strong' ? 0.06 : tone === 'subtle' ? 0.02 : 0.035
+  const blackAlpha = theme.mode === 'light'
+    ? 0.04
+    : tone === 'strong' ? 0.30 : tone === 'subtle' ? 0.16 : 0.22
 
   return `inset 0 0 0 1px rgba(255, 255, 255, ${whiteAlpha}), 0 0 0 1px rgba(0, 0, 0, ${blackAlpha})`
 }
@@ -258,6 +272,241 @@ export function applyContrast(theme: AppTheme, factor: number): AppTheme {
     // shadows are mostly black with alpha — leave them; the L shift on
     // surfaces underneath them changes the perceived shadow weight naturally.
   }
+}
+
+/**
+ * Default ANSI terminal palette for dark themes. Keeps cross-theme colour
+ * recognition (red errors stay red, green diff-add stays green) while letting
+ * the surrounding chrome shift per theme. Individual themes can override
+ * any subset via `defineTheme({ terminal: {...} })`.
+ */
+const DEFAULT_DARK_ANSI: Pick<AppTheme['terminal'],
+  'red' | 'green' | 'yellow' | 'blue' | 'magenta' | 'cyan' | 'white' |
+  'brightBlack' | 'brightRed' | 'brightGreen' | 'brightYellow' | 'brightBlue' |
+  'brightMagenta' | 'brightCyan' | 'brightWhite'
+> = {
+  red: '#ff7b72',
+  green: '#56c288',
+  yellow: '#d8b66a',
+  blue: '#7aa2ff',
+  magenta: '#c792ea',
+  cyan: '#64d2ff',
+  white: '#d8dde6',
+  brightBlack: '#6e7682',
+  brightRed: '#ff9b95',
+  brightGreen: '#79d8a0',
+  brightYellow: '#e5c47f',
+  brightBlue: '#9cbcff',
+  brightMagenta: '#d8abff',
+  brightCyan: '#8adfff',
+  brightWhite: '#ffffff',
+}
+
+const DEFAULT_LIGHT_ANSI: Pick<AppTheme['terminal'],
+  'red' | 'green' | 'yellow' | 'blue' | 'magenta' | 'cyan' | 'white' |
+  'brightBlack' | 'brightRed' | 'brightGreen' | 'brightYellow' | 'brightBlue' |
+  'brightMagenta' | 'brightCyan' | 'brightWhite'
+> = {
+  red: '#c5302a',
+  green: '#247c3f',
+  yellow: '#9a6b00',
+  blue: '#1c5fcc',
+  magenta: '#9d3ea6',
+  cyan: '#0e7c7b',
+  white: '#1d2330',
+  brightBlack: '#586374',
+  brightRed: '#d83a32',
+  brightGreen: '#2e9450',
+  brightYellow: '#b88200',
+  brightBlue: '#316fda',
+  brightMagenta: '#b34ec0',
+  brightCyan: '#1a8e8c',
+  brightWhite: '#0d1117',
+}
+
+interface ThemeSpec {
+  id: string
+  label: string
+  mode: ThemeMode
+  description?: string
+  /** Canvas + grid palette. */
+  canvas: {
+    background: string
+    gridSmall: string
+    gridLarge: string
+  }
+  /** Surface tiers, ordered from outermost to innermost. */
+  surface: {
+    app: string
+    sidebar: string
+    panel: string
+    panelMuted: string
+    panelElevated: string
+    titlebar: string
+    input: string
+  }
+  /** Text tiers. `inverse` defaults to opposite-mode neutral. */
+  text: {
+    primary: string
+    secondary: string
+    muted: string
+    disabled: string
+    inverse?: string
+  }
+  /** Accent colour (e.g. `#7aa2ff`) plus its `r,g,b` triple as a string. */
+  accent: { base: string; hover: string; rgb: string }
+  /** Status colours. Defaults match `default-dark` / `paper-light`. */
+  status?: { success: string; warning: string; danger: string }
+  /** Chat surfaces. */
+  chat: {
+    background: string
+    placeholder: string
+    input: string
+    inputBorder: string
+    assistantBubble: string
+    userBubble: string
+    userBubbleBorder: string
+    dropdownBackground: string
+    dropdownBorder: string
+    dropdownHover: string
+  }
+  /** Optional ANSI overrides; defaults to mode-appropriate ANSI palette. */
+  terminalAnsi?: Partial<typeof DEFAULT_DARK_ANSI>
+  /** Border alphas. Defaults provided. */
+  border?: { subtle: string; default: string; strong: string }
+  /** Drop-shadow rgba for panel + modal. */
+  shadow?: { panel: string; modal: string }
+}
+
+/**
+ * Synthesize a full `AppTheme` from a tighter spec. Reduces the per-theme
+ * boilerplate from ~110 lines to ~30 while still letting each theme tune
+ * any field that needs hand-attention.
+ *
+ * Conventions:
+ *   - `surface.hover/selection/selectionBorder/accentSoft` derive from accent.
+ *   - `border.accent` derives from accent.
+ *   - `text.inverse` defaults to a near-pure-opposite neutral.
+ *   - Terminal ANSI defaults to a generic mode-appropriate palette unless
+ *     overridden via `terminalAnsi`.
+ *   - Editor monaco base derives from mode.
+ */
+function defineTheme(spec: ThemeSpec): AppTheme {
+  const isDark = spec.mode === 'dark'
+  const accentRgb = spec.accent.rgb
+  const status = spec.status ?? (isDark
+    ? { success: '#56c288', warning: '#ffbf5f', danger: '#ff7b72' }
+    : { success: '#1f8f5f', warning: '#c07b12', danger: '#d14a4a' })
+  const border = spec.border ?? (isDark
+    ? { subtle: 'rgba(255,255,255,0.09)', default: 'rgba(255,255,255,0.20)', strong: 'rgba(255,255,255,0.30)' }
+    : { subtle: 'rgba(15,23,42,0.06)', default: 'rgba(15,23,42,0.12)', strong: 'rgba(15,23,42,0.20)' })
+  const shadow = spec.shadow ?? (isDark
+    ? { panel: 'rgba(0,0,0,0.42)', modal: 'rgba(0,0,0,0.62)' }
+    : { panel: 'rgba(20,30,50,0.10)', modal: 'rgba(20,30,50,0.16)' })
+  const ansiBase = isDark ? DEFAULT_DARK_ANSI : DEFAULT_LIGHT_ANSI
+  const ansi = { ...ansiBase, ...(spec.terminalAnsi ?? {}) }
+
+  return {
+    id: spec.id,
+    label: spec.label,
+    mode: spec.mode,
+    description: spec.description,
+    canvas: {
+      background: spec.canvas.background,
+      backgroundEffect: '',
+      gridSmall: spec.canvas.gridSmall,
+      gridLarge: spec.canvas.gridLarge,
+      gridGlowSmall: isDark ? 'rgba(255,255,255,0.50)' : 'rgba(15,23,42,0.12)',
+      gridGlowLarge: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(15,23,42,0.18)',
+    },
+    surface: {
+      app: spec.surface.app,
+      sidebarOverlay: isDark
+        ? `rgba(${hexToRgb(spec.surface.sidebar)},0.88)`
+        : `rgba(${hexToRgb(spec.surface.sidebar)},0.92)`,
+      sidebar: spec.surface.sidebar,
+      panel: spec.surface.panel,
+      panelMuted: spec.surface.panelMuted,
+      panelElevated: spec.surface.panelElevated,
+      titlebar: spec.surface.titlebar,
+      input: spec.surface.input,
+      hover: isDark ? `rgba(${accentRgb},0.06)` : `rgba(${accentRgb},0.10)`,
+      selection: `rgba(${accentRgb},${isDark ? 0.14 : 0.18})`,
+      selectionBorder: `rgba(${accentRgb},${isDark ? 0.28 : 0.34})`,
+      accentSoft: `rgba(${accentRgb},${isDark ? 0.16 : 0.20})`,
+    },
+    border: {
+      ...border,
+      accent: `rgba(${accentRgb},0.5)`,
+    },
+    text: {
+      primary: spec.text.primary,
+      secondary: spec.text.secondary,
+      muted: spec.text.muted,
+      disabled: spec.text.disabled,
+      inverse: spec.text.inverse ?? (isDark ? '#f5f7fa' : '#0f1116'),
+    },
+    accent: {
+      base: spec.accent.base,
+      hover: spec.accent.hover,
+      soft: `rgba(${accentRgb},${isDark ? 0.16 : 0.20})`,
+    },
+    status,
+    chat: {
+      background: spec.chat.background,
+      placeholder: spec.chat.placeholder,
+      input: spec.chat.input,
+      inputBorder: spec.chat.inputBorder,
+      text: spec.text.primary,
+      textSecondary: spec.text.secondary,
+      muted: spec.text.muted,
+      subtle: spec.text.disabled,
+      divider: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)',
+      assistantBubble: spec.chat.assistantBubble,
+      assistantBubbleBorder: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(15,23,42,0.07)',
+      userBubble: spec.chat.userBubble,
+      userBubbleBorder: spec.chat.userBubbleBorder,
+      dropdownBackground: spec.chat.dropdownBackground,
+      dropdownBorder: spec.chat.dropdownBorder,
+      dropdownActiveBackground: spec.chat.dropdownHover,
+      dropdownHoverBackground: spec.chat.dropdownHover,
+    },
+    terminal: {
+      background: spec.surface.panel,
+      foreground: spec.text.primary,
+      cursor: spec.text.secondary,
+      cursorAccent: spec.surface.panel,
+      selection: `rgba(${accentRgb},${isDark ? 0.25 : 0.22})`,
+      black: isDark ? spec.canvas.background : spec.surface.app,
+      ...ansi,
+    },
+    editor: {
+      monacoBase: isDark ? 'vs-dark' : 'vs',
+      background: spec.surface.panel,
+    },
+    extension: {
+      background: spec.surface.panel,
+      panel: spec.surface.panelElevated,
+      border: isDark ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)',
+      text: spec.text.primary,
+      muted: spec.text.muted,
+      accent: spec.accent.base,
+    },
+    shadow: {
+      panel: `0 10px 36px ${shadow.panel}`,
+      modal: `0 32px 80px ${shadow.modal}`,
+    },
+  }
+}
+
+/** Helper: convert `#rrggbb` → `r,g,b` triple string for `rgba()` composition.
+ *  Falls back gracefully for shorthand or invalid input. */
+function hexToRgb(hex: string): string {
+  const m6 = hex.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i)
+  if (m6) return `${parseInt(m6[1], 16)},${parseInt(m6[2], 16)},${parseInt(m6[3], 16)}`
+  const m3 = hex.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i)
+  if (m3) return `${parseInt(m3[1] + m3[1], 16)},${parseInt(m3[2] + m3[2], 16)},${parseInt(m3[3] + m3[3], 16)}`
+  return '0,0,0'
 }
 
 function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {
@@ -2280,6 +2529,456 @@ const THEMES: Record<string, AppTheme> = {
       modal: '0 24px 56px rgba(20,36,60,0.14)',
     },
   },
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Wave 3 themes (defineTheme-built). Each preset focuses on a single
+  // dominant identity: a hue family + a paired accent. Light variants use
+  // a wider luminance ladder ("more shade") so panels and surfaces read as
+  // distinct tiers rather than collapsing into near-white sameness.
+  // ─────────────────────────────────────────────────────────────────────
+
+  // ── DARK: Forest. Deep evergreen with warm-sage accent. ──────────────
+  'forest-dark': defineTheme({
+    id: 'forest-dark',
+    label: 'Forest Dark',
+    mode: 'dark',
+    description: 'Evergreen forest floor — deep teals, warm sage accent.',
+    canvas: { background: '#0d1411', gridSmall: '#1c2a24', gridLarge: '#2a3d35' },
+    surface: {
+      app: '#0a1210',
+      sidebar: '#0c1512',
+      panel: '#0e1815',
+      panelMuted: '#13201c',
+      panelElevated: '#172722',
+      titlebar: '#152420',
+      input: '#101a17',
+    },
+    text: {
+      primary: '#e0eae3',
+      secondary: '#b6c3bb',
+      muted: '#7d8b83',
+      disabled: '#525f59',
+    },
+    accent: { base: '#8fcaa3', hover: '#a8d8b9', rgb: '143,202,163' },
+    chat: {
+      background: '#0a1310',
+      placeholder: '#5b6b64',
+      input: '#13201c',
+      inputBorder: '#1d2e29',
+      assistantBubble: '#13201c',
+      userBubble: '#152826',
+      userBubbleBorder: '#284540',
+      dropdownBackground: '#13201c',
+      dropdownBorder: '#243530',
+      dropdownHover: '#1c2c27',
+    },
+    terminalAnsi: { green: '#8fcaa3', cyan: '#7dc7c0', yellow: '#dfc777' },
+  }),
+
+  // ── DARK: Ember. Warm coal with copper accent. ──────────────────────
+  'ember-dark': defineTheme({
+    id: 'ember-dark',
+    label: 'Ember Dark',
+    mode: 'dark',
+    description: 'Warm coal — copper accent over deep umber chrome.',
+    canvas: { background: '#15110d', gridSmall: '#2a221b', gridLarge: '#3d3128' },
+    surface: {
+      app: '#100c08',
+      sidebar: '#13100c',
+      panel: '#1a1510',
+      panelMuted: '#1f1913',
+      panelElevated: '#251e17',
+      titlebar: '#221c15',
+      input: '#1a140e',
+    },
+    text: {
+      primary: '#f0e4d6',
+      secondary: '#cebda7',
+      muted: '#928274',
+      disabled: '#5e544a',
+    },
+    accent: { base: '#e8985a', hover: '#f3aa72', rgb: '232,152,90' },
+    chat: {
+      background: '#0e0a06',
+      placeholder: '#6f6356',
+      input: '#1f1913',
+      inputBorder: '#2c241c',
+      assistantBubble: '#1f1913',
+      userBubble: '#2a2018',
+      userBubbleBorder: '#4a3a2a',
+      dropdownBackground: '#1c1610',
+      dropdownBorder: '#33291f',
+      dropdownHover: '#261d15',
+    },
+    terminalAnsi: { yellow: '#e8985a', red: '#e87a52' },
+  }),
+
+  // ── DARK: Obsidian. Pure cool black, electric blue accent. ──────────
+  'obsidian-dark': defineTheme({
+    id: 'obsidian-dark',
+    label: 'Obsidian',
+    mode: 'dark',
+    description: 'Pure cool blacks with an electric cobalt accent.',
+    canvas: { background: '#08090c', gridSmall: '#1a1c22', gridLarge: '#2a2d36' },
+    surface: {
+      app: '#05060a',
+      sidebar: '#07080c',
+      panel: '#0a0c11',
+      panelMuted: '#0f1218',
+      panelElevated: '#161a23',
+      titlebar: '#11141b',
+      input: '#0c0f15',
+    },
+    text: {
+      primary: '#e8ecf5',
+      secondary: '#b8bfd0',
+      muted: '#7c849a',
+      disabled: '#4f5668',
+    },
+    accent: { base: '#5a8eff', hover: '#7aa7ff', rgb: '90,142,255' },
+    chat: {
+      background: '#04050a',
+      placeholder: '#5a6378',
+      input: '#0f1218',
+      inputBorder: '#1c2030',
+      assistantBubble: '#0f1218',
+      userBubble: '#0e1830',
+      userBubbleBorder: '#1f3260',
+      dropdownBackground: '#0d0f17',
+      dropdownBorder: '#1f2330',
+      dropdownHover: '#171b27',
+    },
+    terminalAnsi: { blue: '#5a8eff', cyan: '#48cfff' },
+  }),
+
+  // ── DARK: Mocha. Coffee browns with caramel accent. ─────────────────
+  'mocha-dark': defineTheme({
+    id: 'mocha-dark',
+    label: 'Mocha',
+    mode: 'dark',
+    description: 'Coffee browns and caramel — soft, warm, low-glare.',
+    canvas: { background: '#1a1410', gridSmall: '#2c2520', gridLarge: '#3d3530' },
+    surface: {
+      app: '#15100c',
+      sidebar: '#19140f',
+      panel: '#1f1813',
+      panelMuted: '#241d18',
+      panelElevated: '#2a221c',
+      titlebar: '#262019',
+      input: '#1d1812',
+    },
+    text: {
+      primary: '#ede1d2',
+      secondary: '#cab9a4',
+      muted: '#8d7e6c',
+      disabled: '#5f5444',
+    },
+    accent: { base: '#d4a574', hover: '#e2b78a', rgb: '212,165,116' },
+    chat: {
+      background: '#120e0a',
+      placeholder: '#6c5f51',
+      input: '#241d18',
+      inputBorder: '#332a23',
+      assistantBubble: '#241d18',
+      userBubble: '#2e251c',
+      userBubbleBorder: '#4a3c2c',
+      dropdownBackground: '#211a14',
+      dropdownBorder: '#382e25',
+      dropdownHover: '#2a2218',
+    },
+    terminalAnsi: { yellow: '#d4a574', red: '#d77a6a' },
+  }),
+
+  // ── LIGHT: Linen. Cream/oatmeal with strong panel separation. ───────
+  'linen-light': defineTheme({
+    id: 'linen-light',
+    label: 'Linen Light',
+    mode: 'light',
+    description: 'Warm linen paper with deeper panel tiers — readable, not flat.',
+    canvas: { background: '#f1ebdf', gridSmall: '#dfd5c0', gridLarge: '#cfc2a8' },
+    surface: {
+      // "More shade" — surfaces step ~3 L points apart so panels and inputs
+      // read as distinct tiers, not as the same beige blur.
+      app: '#f7f1e4',
+      sidebar: '#ebe2cf',
+      panel: '#f9f3e7',
+      panelMuted: '#ece4d2',
+      panelElevated: '#f5edd9',
+      titlebar: '#e8dfc8',
+      input: '#fdf8ec',
+    },
+    text: {
+      primary: '#2b2620',
+      secondary: '#544838',
+      muted: '#8a7a5e',
+      disabled: '#b09e80',
+      inverse: '#fbf6e8',
+    },
+    accent: { base: '#a86b3c', hover: '#c08350', rgb: '168,107,60' },
+    status: { success: '#3f7d3a', warning: '#a86b3c', danger: '#b8362a' },
+    chat: {
+      background: '#fcf6e8',
+      placeholder: '#a89878',
+      input: '#f5edd9',
+      inputBorder: '#d8c9aa',
+      assistantBubble: '#f5edd9',
+      userBubble: '#ece4d0',
+      userBubbleBorder: '#cdb98e',
+      dropdownBackground: '#fdf9ef',
+      dropdownBorder: '#dcccaa',
+      dropdownHover: '#f0e8d3',
+    },
+    border: { subtle: 'rgba(58,40,18,0.10)', default: 'rgba(58,40,18,0.18)', strong: 'rgba(58,40,18,0.28)' },
+    shadow: { panel: 'rgba(58,40,18,0.10)', modal: 'rgba(58,40,18,0.16)' },
+    terminalAnsi: { yellow: '#a86b3c', red: '#b8362a', green: '#3f7d3a' },
+  }),
+
+  // ── LIGHT: Tide. Coastal blue-grey with marked depth. ───────────────
+  'tide-light': defineTheme({
+    id: 'tide-light',
+    label: 'Tide Light',
+    mode: 'light',
+    description: 'Coastal blue-grey — measurable surface tiers, no flat washout.',
+    canvas: { background: '#dde6ee', gridSmall: '#c5d3e0', gridLarge: '#aabccd' },
+    surface: {
+      app: '#e6edf4',
+      sidebar: '#d4dee8',
+      panel: '#eef3f9',
+      panelMuted: '#dde5ee',
+      panelElevated: '#e6edf4',
+      titlebar: '#d0dae6',
+      input: '#f5f8fc',
+    },
+    text: {
+      primary: '#1a2735',
+      secondary: '#3d4f63',
+      muted: '#6c7e91',
+      disabled: '#9aa9b9',
+      inverse: '#f5f8fc',
+    },
+    accent: { base: '#1f72c4', hover: '#3084d8', rgb: '31,114,196' },
+    status: { success: '#1f8d5e', warning: '#b27308', danger: '#c2342a' },
+    chat: {
+      background: '#f4f8fc',
+      placeholder: '#8b9caf',
+      input: '#e6edf4',
+      inputBorder: '#bccbdb',
+      assistantBubble: '#e6edf4',
+      userBubble: '#dae6f3',
+      userBubbleBorder: '#a4bfdf',
+      dropdownBackground: '#f7fafd',
+      dropdownBorder: '#bccbdb',
+      dropdownHover: '#dde7f1',
+    },
+    border: { subtle: 'rgba(20,40,60,0.08)', default: 'rgba(20,40,60,0.16)', strong: 'rgba(20,40,60,0.26)' },
+    shadow: { panel: 'rgba(20,40,60,0.10)', modal: 'rgba(20,40,60,0.18)' },
+    terminalAnsi: { blue: '#1f72c4', cyan: '#0e7c7b' },
+  }),
+
+  // ── LIGHT: Clay. Peachy terracotta with warm shaded panels. ─────────
+  'clay-light': defineTheme({
+    id: 'clay-light',
+    label: 'Clay Light',
+    mode: 'light',
+    description: 'Peachy terracotta — earthen shades, visible panel hierarchy.',
+    canvas: { background: '#f3dfd1', gridSmall: '#dfc4b0', gridLarge: '#caa48a' },
+    surface: {
+      app: '#f7e6da',
+      sidebar: '#ecd4c2',
+      panel: '#fbecdf',
+      panelMuted: '#f0dcca',
+      panelElevated: '#f6e3d2',
+      titlebar: '#e7cdba',
+      input: '#fdf2e8',
+    },
+    text: {
+      primary: '#2f1f17',
+      secondary: '#5b3e2c',
+      muted: '#8e6a52',
+      disabled: '#b89880',
+      inverse: '#fdf2e8',
+    },
+    accent: { base: '#b54a2a', hover: '#cb5e3c', rgb: '181,74,42' },
+    status: { success: '#2f7036', warning: '#a85f12', danger: '#a52a1d' },
+    chat: {
+      background: '#fcefe2',
+      placeholder: '#a78068',
+      input: '#f6e3d2',
+      inputBorder: '#d8b59c',
+      assistantBubble: '#f6e3d2',
+      userBubble: '#f0d4be',
+      userBubbleBorder: '#cb9678',
+      dropdownBackground: '#fcf3ea',
+      dropdownBorder: '#d8b59c',
+      dropdownHover: '#f0dcca',
+    },
+    border: { subtle: 'rgba(60,30,18,0.10)', default: 'rgba(60,30,18,0.18)', strong: 'rgba(60,30,18,0.28)' },
+    shadow: { panel: 'rgba(60,30,18,0.12)', modal: 'rgba(60,30,18,0.18)' },
+    terminalAnsi: { red: '#b54a2a', yellow: '#a85f12' },
+  }),
+
+  // ── LIGHT: Meadow. Sage green with structured surface separation. ───
+  'meadow-light': defineTheme({
+    id: 'meadow-light',
+    label: 'Meadow Light',
+    mode: 'light',
+    description: 'Soft sage with deeper green-tinted panels — calm but legible.',
+    canvas: { background: '#dee8de', gridSmall: '#c4d4c4', gridLarge: '#a9bdaa' },
+    surface: {
+      app: '#e7efe6',
+      sidebar: '#d6e1d5',
+      panel: '#eef4ed',
+      panelMuted: '#dde7dc',
+      panelElevated: '#e6eee5',
+      titlebar: '#d2dcd0',
+      input: '#f4f8f3',
+    },
+    text: {
+      primary: '#1d2a1f',
+      secondary: '#3e503f',
+      muted: '#6d8170',
+      disabled: '#9aac9c',
+      inverse: '#f4f8f3',
+    },
+    accent: { base: '#2f7a4a', hover: '#3e8c5a', rgb: '47,122,74' },
+    status: { success: '#2f7a4a', warning: '#a36d10', danger: '#b53a2c' },
+    chat: {
+      background: '#f3f8f2',
+      placeholder: '#8a9e8d',
+      input: '#e6eee5',
+      inputBorder: '#bdcdbe',
+      assistantBubble: '#e6eee5',
+      userBubble: '#dae8db',
+      userBubbleBorder: '#a4c1a8',
+      dropdownBackground: '#f5f9f4',
+      dropdownBorder: '#bdcdbe',
+      dropdownHover: '#dde7dc',
+    },
+    border: { subtle: 'rgba(20,40,25,0.08)', default: 'rgba(20,40,25,0.16)', strong: 'rgba(20,40,25,0.26)' },
+    shadow: { panel: 'rgba(20,40,25,0.10)', modal: 'rgba(20,40,25,0.16)' },
+    terminalAnsi: { green: '#2f7a4a', cyan: '#0e7c7b' },
+  }),
+
+  // ── DARK: Nebula. Deep violet/magenta with neon-cyan accent. ────────
+  'nebula-dark': defineTheme({
+    id: 'nebula-dark',
+    label: 'Nebula',
+    mode: 'dark',
+    description: 'Deep nebular violet — magenta dust, cyan stars.',
+    canvas: { background: '#100b1a', gridSmall: '#1f1832', gridLarge: '#2c224a' },
+    surface: {
+      app: '#0c0817',
+      sidebar: '#100c1d',
+      panel: '#15102a',
+      panelMuted: '#1a1430',
+      panelElevated: '#211940',
+      titlebar: '#1c1538',
+      input: '#13102a',
+    },
+    text: {
+      primary: '#ece2ff',
+      secondary: '#bdb0d8',
+      muted: '#7e7299',
+      disabled: '#534a68',
+    },
+    accent: { base: '#c97aff', hover: '#d895ff', rgb: '201,122,255' },
+    chat: {
+      background: '#0a0717',
+      placeholder: '#5e5378',
+      input: '#1a1430',
+      inputBorder: '#2a2148',
+      assistantBubble: '#1a1430',
+      userBubble: '#221842',
+      userBubbleBorder: '#3d2a6a',
+      dropdownBackground: '#181230',
+      dropdownBorder: '#2c2348',
+      dropdownHover: '#221a3d',
+    },
+    terminalAnsi: { magenta: '#c97aff', cyan: '#5fe2ff', blue: '#7aa2ff' },
+  }),
+
+  // ── LIGHT: Pearl. Cool bluish-white paper with deep grey panels. ────
+  'pearl-light': defineTheme({
+    id: 'pearl-light',
+    label: 'Pearl Light',
+    mode: 'light',
+    description: 'Cool bluish whites — strong panel hierarchy without colour cast.',
+    canvas: { background: '#dde2ea', gridSmall: '#c4cdd9', gridLarge: '#a5b3c4' },
+    surface: {
+      app: '#e7ecf3',
+      sidebar: '#d2dae5',
+      panel: '#eff3f9',
+      panelMuted: '#dee5ee',
+      panelElevated: '#e7ecf3',
+      titlebar: '#cdd6e0',
+      input: '#f5f8fc',
+    },
+    text: {
+      primary: '#10141c',
+      secondary: '#363f4e',
+      muted: '#6a7585',
+      disabled: '#98a3b3',
+      inverse: '#f5f8fc',
+    },
+    accent: { base: '#3056b8', hover: '#4267cb', rgb: '48,86,184' },
+    status: { success: '#1d7a4a', warning: '#a86200', danger: '#bd2e25' },
+    chat: {
+      background: '#f3f6fb',
+      placeholder: '#8a96a8',
+      input: '#e7ecf3',
+      inputBorder: '#bcc8d8',
+      assistantBubble: '#e7ecf3',
+      userBubble: '#dae3f0',
+      userBubbleBorder: '#a4b6d4',
+      dropdownBackground: '#f5f8fc',
+      dropdownBorder: '#bcc8d8',
+      dropdownHover: '#dde5f0',
+    },
+    border: { subtle: 'rgba(15,25,45,0.08)', default: 'rgba(15,25,45,0.16)', strong: 'rgba(15,25,45,0.26)' },
+    shadow: { panel: 'rgba(15,25,45,0.10)', modal: 'rgba(15,25,45,0.16)' },
+  }),
+
+  // ── LIGHT: Bronze. Warm copper-amber paper with depth. ──────────────
+  'bronze-light': defineTheme({
+    id: 'bronze-light',
+    label: 'Bronze Light',
+    mode: 'light',
+    description: 'Aged bronze paper — copper accent, real surface depth.',
+    canvas: { background: '#ece0c4', gridSmall: '#d6c7a2', gridLarge: '#bba980' },
+    surface: {
+      app: '#f1e7cf',
+      sidebar: '#e5d7b6',
+      panel: '#f4ecd6',
+      panelMuted: '#e8dcc0',
+      panelElevated: '#f0e6cb',
+      titlebar: '#dfd0a8',
+      input: '#f9f3df',
+    },
+    text: {
+      primary: '#2a2110',
+      secondary: '#544428',
+      muted: '#857452',
+      disabled: '#b09f78',
+      inverse: '#f9f3df',
+    },
+    accent: { base: '#9b6520', hover: '#b27933', rgb: '155,101,32' },
+    status: { success: '#3d6f2c', warning: '#9b6520', danger: '#a82a1f' },
+    chat: {
+      background: '#faf3df',
+      placeholder: '#a09072',
+      input: '#f0e6cb',
+      inputBorder: '#d1bd8e',
+      assistantBubble: '#f0e6cb',
+      userBubble: '#e8dcc0',
+      userBubbleBorder: '#c2a878',
+      dropdownBackground: '#fbf5e3',
+      dropdownBorder: '#d1bd8e',
+      dropdownHover: '#ece0c4',
+    },
+    border: { subtle: 'rgba(58,40,8,0.10)', default: 'rgba(58,40,8,0.18)', strong: 'rgba(58,40,8,0.28)' },
+    shadow: { panel: 'rgba(58,40,8,0.10)', modal: 'rgba(58,40,8,0.16)' },
+    terminalAnsi: { yellow: '#9b6520', red: '#a82a1f' },
+  }),
 }
 
 for (const [themeId, theme] of Object.entries(THEMES)) {

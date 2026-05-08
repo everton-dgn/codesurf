@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { FontToken } from '../../../shared/types'
 import { basename, isImagePath, toFileUrl } from '../utils/dnd'
+import { useTheme } from '../ThemeContext'
 
 interface Props {
   tileId: string
@@ -34,6 +35,7 @@ function extLabel(filePath: string): string {
 }
 
 export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Props): JSX.Element {
+  const theme = useTheme()
   const [hovered, setHovered] = useState(false)
   const [stats, setStats] = useState<FileStats | null>(null)
   const [missing, setMissing] = useState(false)
@@ -79,7 +81,11 @@ export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Pro
         height: '100%',
         position: 'relative',
         overflow: 'hidden',
-        background: image ? '#090909' : 'linear-gradient(180deg, #1b1b1f 0%, #101014 100%)',
+        // Image plate is the deepest theme surface; non-image fallback uses a
+        // gradient between two theme surfaces so contrast tracks.
+        background: image
+          ? theme.surface.app
+          : `linear-gradient(180deg, ${theme.surface.panel} 0%, ${theme.surface.app} 100%)`,
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -107,7 +113,7 @@ export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Pro
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'radial-gradient(circle at 30% 20%, rgba(74,158,255,0.18), transparent 40%), linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%)',
+            background: `radial-gradient(circle at 30% 20%, color-mix(in srgb, ${theme.accent.base} 22%, transparent), transparent 40%), linear-gradient(180deg, color-mix(in srgb, ${theme.text.primary} 4%, transparent) 0%, color-mix(in srgb, ${theme.text.primary} 1%, transparent) 100%)`,
           }}
         >
           <div
@@ -116,9 +122,9 @@ export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Pro
               minHeight: 88,
               padding: '18px 20px',
               borderRadius: 24,
-              border: '1px solid rgba(255,255,255,0.08)',
-              background: 'rgba(12,12,16,0.66)',
-              boxShadow: '0 24px 48px rgba(0,0,0,0.35)',
+              border: `1px solid color-mix(in srgb, ${theme.text.primary} 8%, transparent)`,
+              background: `color-mix(in srgb, ${theme.surface.app} 66%, transparent)`,
+              boxShadow: `0 24px 48px color-mix(in srgb, #000 35%, transparent)`,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -126,7 +132,7 @@ export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Pro
           >
             <span
               style={{
-                color: '#d7ebff',
+                color: theme.accent.hover,
                 fontSize: 26,
                 fontWeight: 700,
                 letterSpacing: '0.08em',
@@ -143,9 +149,13 @@ export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Pro
         style={{
           position: 'absolute',
           inset: 0,
+          // Vignette gradient toward dark — used to ensure label legibility
+          // over arbitrary thumbnails. Anchored on #000 (deliberate) so the
+          // overlay reads consistently across image content regardless of
+          // theme.
           background: missing
-            ? 'linear-gradient(180deg, rgba(20,20,20,0.15) 0%, rgba(10,10,10,0.88) 100%)'
-            : 'linear-gradient(180deg, rgba(20,20,20,0.04) 0%, rgba(10,10,10,0.78) 100%)',
+            ? `linear-gradient(180deg, color-mix(in srgb, #000 15%, transparent) 0%, color-mix(in srgb, #000 88%, transparent) 100%)`
+            : `linear-gradient(180deg, color-mix(in srgb, #000 4%, transparent) 0%, color-mix(in srgb, #000 78%, transparent) 100%)`,
           opacity: hovered ? 1 : 0.78,
           transition: 'opacity 0.14s ease',
           pointerEvents: 'none',
@@ -175,11 +185,13 @@ export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Pro
             maxWidth: '100%',
             padding: '6px 10px',
             borderRadius: 999,
-            background: 'rgba(8,8,10,0.78)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            color: '#f3f6fb',
+            // Pill sits over the dark vignette overlay; keep it as a glass
+            // plate anchored on theme.surface.app + #fff alpha for legibility.
+            background: `color-mix(in srgb, ${theme.surface.app} 78%, transparent)`,
+            border: `1px solid color-mix(in srgb, #fff 10%, transparent)`,
+            color: `color-mix(in srgb, #fff 96%, ${theme.surface.app})`,
             cursor: 'grab',
-            boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+            boxShadow: `0 10px 24px color-mix(in srgb, #000 28%, transparent)`,
             userSelect: 'none',
             WebkitUserSelect: 'none',
             fontFamily: secondaryFont.family,
@@ -197,12 +209,16 @@ export function FileTile({ tileId, filePath, workspacePath, secondaryFont }: Pro
         </div>
         <div
           style={{
-            color: missing ? '#ffb3b3' : '#a9b5c5',
+            // Sits over the same dark vignette as the pill; anchor on white
+            // tint for missing-state and a soft #fff tint for the ok state.
+            color: missing
+              ? `color-mix(in srgb, ${theme.status.danger} 70%, #fff)`
+              : `color-mix(in srgb, #fff 70%, ${theme.text.muted})`,
             fontSize: 11,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
-            textShadow: '0 1px 10px rgba(0,0,0,0.45)',
+            textShadow: `0 1px 10px color-mix(in srgb, #000 45%, transparent)`,
           }}
         >
           {missing ? 'Missing file' : meta}

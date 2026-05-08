@@ -168,7 +168,9 @@ export function ExtensionsGallery({ onClose, workspacePath, onSettingsChange }: 
         inset: 0,
         // Match SettingsPanel backdrop so both modals feel identical
         // when opened from different entry points.
-        background: theme.mode === 'light' ? 'rgba(15,23,42,0.18)' : 'rgba(0,0,0,0.7)',
+        background: theme.mode === 'light'
+          ? `color-mix(in srgb, ${theme.text.primary} 18%, transparent)`
+          : `color-mix(in srgb, #000 70%, transparent)`,
         backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
         zIndex: 1000,

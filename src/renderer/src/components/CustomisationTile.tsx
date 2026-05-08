@@ -850,7 +850,7 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
                     return (
                       <button key={level} onClick={() => setCategoryPerm(cat, level)} style={{
                         width: 22, height: 22, borderRadius: 5, border: 'none', cursor: 'pointer',
-                        background: allMatch ? (level === 'allow' ? 'rgba(31,143,95,0.15)' : level === 'deny' ? 'rgba(209,74,74,0.15)' : 'rgba(192,123,18,0.15)') : 'transparent',
+                        background: allMatch ? (level === 'allow' ? `color-mix(in srgb, ${theme.status.success} 18%, transparent)` : level === 'deny' ? `color-mix(in srgb, ${theme.status.danger} 18%, transparent)` : `color-mix(in srgb, ${theme.status.warning} 18%, transparent)`) : 'transparent',
                         color: allMatch ? (level === 'allow' ? theme.status.success : level === 'deny' ? theme.status.danger : theme.status.warning) : theme.text.disabled,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: fonts.secondarySize,
                       }}>
@@ -884,7 +884,7 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
                           return (
                             <button key={level} onClick={() => setPerm(tool.name, level)} title={level === 'allow' ? 'Always allow' : level === 'ask' ? 'Ask each time' : 'Deny'} style={{
                               width: 22, height: 22, borderRadius: 5, border: 'none', cursor: 'pointer',
-                              background: active ? (level === 'allow' ? 'rgba(31,143,95,0.15)' : level === 'deny' ? 'rgba(209,74,74,0.15)' : 'rgba(192,123,18,0.15)') : 'transparent',
+                              background: active ? (level === 'allow' ? `color-mix(in srgb, ${theme.status.success} 18%, transparent)` : level === 'deny' ? `color-mix(in srgb, ${theme.status.danger} 18%, transparent)` : `color-mix(in srgb, ${theme.status.warning} 18%, transparent)`) : 'transparent',
                               color: active ? (level === 'allow' ? theme.status.success : level === 'deny' ? theme.status.danger : theme.status.warning) : theme.text.disabled,
                               display: 'flex', alignItems: 'center', justifyContent: 'center',
                             }}>
@@ -914,7 +914,7 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
 
       {/* ── Registry Dialog ── */}
       {showRegistry && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 999999, background: theme.mode === 'light' ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        <div style={{ position: 'fixed', inset: 0, zIndex: 999999, background: theme.mode === 'light' ? `color-mix(in srgb, #000 20%, transparent)` : `color-mix(in srgb, #000 60%, transparent)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={e => { if (e.target === e.currentTarget) setShowRegistry(false) }}>
           <div style={{
             width: 560, maxHeight: '80vh', background: theme.surface.panel,
@@ -971,7 +971,7 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
                           {srv.version && <span style={{ fontSize: fonts.secondarySize - 1, padding: '1px 6px', borderRadius: 3, background: theme.surface.panelMuted, color: theme.text.disabled }}>{srv.version}</span>}
                           {srv.remoteType && <span style={{ fontSize: fonts.secondarySize - 1, padding: '1px 6px', borderRadius: 3, background: theme.surface.panelMuted, color: theme.text.disabled }}>{srv.remoteType}</span>}
-                          {srv.source && <span style={{ fontSize: fonts.secondarySize - 1, padding: '1px 6px', borderRadius: 3, background: srv.source === 'google' ? 'rgba(53,104,255,0.1)' : 'rgba(192,123,18,0.1)', color: srv.source === 'google' ? theme.accent.base : theme.status.warning }}>{srv.source}</span>}
+                          {srv.source && <span style={{ fontSize: fonts.secondarySize - 1, padding: '1px 6px', borderRadius: 3, background: srv.source === 'google' ? `color-mix(in srgb, ${theme.accent.base} 12%, transparent)` : `color-mix(in srgb, ${theme.status.warning} 12%, transparent)`, color: srv.source === 'google' ? theme.accent.base : theme.status.warning }}>{srv.source}</span>}
                           {srv.stars != null && srv.stars > 0 && <span style={{ fontSize: fonts.secondarySize - 1, padding: '1px 6px', borderRadius: 3, background: theme.surface.panelMuted, color: theme.text.disabled }}>
                             <svg width="8" height="8" viewBox="0 0 14 14" fill="currentColor" style={{ verticalAlign: -1, marginRight: 2 }}><path d="M7 1l1.8 3.6L13 5.2l-3 2.9.7 4.1L7 10.3 3.3 12.2l.7-4.1-3-2.9 4.2-.6L7 1z" /></svg>
                             {srv.stars}

@@ -4583,13 +4583,19 @@ function App(): JSX.Element {
     setVar('--cs-th-border-strong', theme.border.strong)
     setVar('--cs-th-accent-base', theme.accent.base)
     setVar('--cs-th-status-danger', theme.status.danger)
-    // Edge shadow alpha channels — these mirror the ladder used by
-    // `getEdgeShadow()` in theme.ts so the React-side and CSS-side edges
-    // stay coherent regardless of how the slider shifts the surfaces.
-    setVar('--cs-th-edge-white-alpha', isDark ? '0.085' : '0.82')
-    setVar('--cs-th-edge-white-alpha-subtle', isDark ? '0.055' : '0.68')
-    setVar('--cs-th-edge-white-alpha-strong', isDark ? '0.12' : '0.92')
-    setVar('--cs-th-edge-black-alpha', isDark ? '0.10' : '0.04')
+    setVar('--cs-th-status-success', theme.status.success)
+    setVar('--cs-th-status-warning', theme.status.warning)
+    // Edge shadow alpha channels — mirror the ladder in `getEdgeShadow()`
+    // (theme.ts). Light mode keeps the bright white "paper edge" inset.
+    // Dark mode dropped the white-inset to near-zero (it was reading as a
+    // hard white halo around panels) and bumped the outer black so the
+    // panel-vs-canvas separation comes from the dark drop, not the highlight.
+    setVar('--cs-th-edge-white-alpha', isDark ? '0.035' : '0.82')
+    setVar('--cs-th-edge-white-alpha-subtle', isDark ? '0.02' : '0.68')
+    setVar('--cs-th-edge-white-alpha-strong', isDark ? '0.06' : '0.92')
+    setVar('--cs-th-edge-black-alpha', isDark ? '0.22' : '0.04')
+    setVar('--cs-th-edge-black-alpha-subtle', isDark ? '0.16' : '0.04')
+    setVar('--cs-th-edge-black-alpha-strong', isDark ? '0.30' : '0.04')
     // Scrollbar thumb — anchor on text colour with low alpha so it stays
     // visible against any surface and tracks contrast.
     setVar('--cs-th-scrollbar-thumb', isDark ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.22)')

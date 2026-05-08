@@ -188,10 +188,12 @@
   --cs-th-border-strong: rgba(255,255,255,0.30);
   --cs-th-accent-base: #7aa2ff;
   --cs-th-status-danger: #ff7b72;
-  --cs-th-edge-white-alpha: 0.085;
-  --cs-th-edge-white-alpha-subtle: 0.055;
-  --cs-th-edge-white-alpha-strong: 0.12;
-  --cs-th-edge-black-alpha: 0.10;
+  --cs-th-edge-white-alpha: 0.035;
+  --cs-th-edge-white-alpha-subtle: 0.02;
+  --cs-th-edge-white-alpha-strong: 0.06;
+  --cs-th-edge-black-alpha: 0.22;
+  --cs-th-edge-black-alpha-subtle: 0.16;
+  --cs-th-edge-black-alpha-strong: 0.30;
   --cs-th-scrollbar-thumb: rgba(255,255,255,0.18);
   --cs-th-scrollbar-thumb-hover: rgba(255,255,255,0.26);
   --cs-th-pulse-glow: var(--cs-th-accent-base);
@@ -208,12 +210,12 @@
     0 0 0 1px rgb(0 0 0 / var(--cs-th-edge-black-alpha));
   --cs-edge-shadow-subtle:
     inset 0 0 0 1px rgb(255 255 255 / var(--cs-th-edge-white-alpha-subtle)),
-    0 0 0 1px rgb(0 0 0 / var(--cs-th-edge-black-alpha));
+    0 0 0 1px rgb(0 0 0 / var(--cs-th-edge-black-alpha-subtle));
   --cs-edge-shadow-strong:
     inset 0 0 0 1px rgb(255 255 255 / var(--cs-th-edge-white-alpha-strong)),
-    0 0 0 1px rgb(0 0 0 / var(--cs-th-edge-black-alpha));
+    0 0 0 1px rgb(0 0 0 / var(--cs-th-edge-black-alpha-strong));
   --cs-edge-shadow-accent:
-    inset 0 0 0 1px color-mix(in srgb, var(--cs-accent) 24%, white 4%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--cs-accent) 28%, transparent),
     0 0 0 1px rgb(0 0 0 / var(--cs-th-edge-black-alpha));
 }
 

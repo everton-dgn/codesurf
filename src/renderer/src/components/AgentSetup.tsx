@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAppFonts } from '../FontContext'
+import { useTheme } from '../ThemeContext'
 
 interface AgentPathEntry {
   path: string | null
@@ -110,6 +111,7 @@ interface AgentSetupProps {
 
 export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
   const fonts = useAppFonts()
+  const theme = useTheme()
   const [config, setConfig] = useState<AgentPathsConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [detecting, setDetecting] = useState(false)
@@ -186,7 +188,7 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'rgba(0,0,0,0.6)',
+      background: `color-mix(in srgb, #000 60%, transparent)`,
       backdropFilter: 'blur(8px)',
       WebkitAppRegion: 'no-drag',
     } as React.CSSProperties}
@@ -195,21 +197,21 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
       }}
     >
       <div style={{
-        background: '#1e1e1e',
-        border: '1px solid #333',
+        background: theme.surface.panel,
+        border: `1px solid ${theme.border.subtle}`,
         borderRadius: 12,
         padding: '24px 28px',
         width: 480,
         maxHeight: '80vh',
         overflow: 'auto',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        boxShadow: `0 20px 60px color-mix(in srgb, #000 50%, transparent)`,
       }}>
         {/* Header */}
         <div style={{ marginBottom: 18 }}>
           <div style={{
             fontSize: fonts.secondarySize,
             fontWeight: 600,
-            color: '#555',
+            color: theme.text.disabled,
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
             marginBottom: 6,
@@ -218,7 +220,7 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
           </div>
           <div style={{
             fontSize: fonts.size,
-            color: '#888',
+            color: theme.text.muted,
             lineHeight: 1.4,
           }}>
             Detected coding agents on your system. Confirm the paths or set them manually.
@@ -228,13 +230,13 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
         {/* Error */}
         {error && (
           <div style={{
-            background: 'rgba(255,80,80,0.08)',
-            border: '1px solid rgba(255,80,80,0.2)',
+            background: `color-mix(in srgb, ${theme.status.danger} 12%, transparent)`,
+            border: `1px solid color-mix(in srgb, ${theme.status.danger} 30%, transparent)`,
             borderRadius: 6,
             padding: '6px 10px',
             marginBottom: 12,
             fontSize: fonts.secondarySize,
-            color: '#ff8080',
+            color: theme.status.danger,
           }}>
             {error}
           </div>
@@ -249,8 +251,8 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
 
             return (
               <div key={agent.id} style={{
-                background: '#161616',
-                border: '1px solid #1f1f1f',
+                background: theme.surface.panelMuted,
+                border: `1px solid ${theme.border.subtle}`,
                 borderRadius: 8,
                 padding: '10px 12px',
               }}>
@@ -278,15 +280,15 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                       <span style={{
                         fontSize: fonts.size,
                         fontWeight: 500,
-                        color: '#e0e0e0',
+                        color: theme.text.primary,
                       }}>
                         {agent.label}
                       </span>
                       {found ? (
                         <span style={{
                           fontSize: 10,
-                          color: '#4ade80',
-                          background: 'rgba(74,222,128,0.08)',
+                          color: theme.status.success,
+                          background: `color-mix(in srgb, ${theme.status.success} 12%, transparent)`,
                           padding: '1px 5px',
                           borderRadius: 3,
                         }}>
@@ -295,8 +297,8 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                       ) : (
                         <span style={{
                           fontSize: 10,
-                          color: '#666',
-                          background: 'rgba(136,136,136,0.08)',
+                          color: theme.text.muted,
+                          background: `color-mix(in srgb, ${theme.text.muted} 12%, transparent)`,
                           padding: '1px 5px',
                           borderRadius: 3,
                         }}>
@@ -307,7 +309,7 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                     {found && !isEditing && (
                       <div style={{
                         fontSize: 10,
-                        color: '#555',
+                        color: theme.text.disabled,
                         marginTop: 2,
                         fontFamily: 'monospace',
                         overflow: 'hidden',
@@ -318,7 +320,7 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                       </div>
                     )}
                     {!found && !isEditing && (
-                      <div style={{ fontSize: 10, color: '#444', marginTop: 2 }}>
+                      <div style={{ fontSize: 10, color: theme.text.disabled, marginTop: 2 }}>
                         <code style={{ fontSize: 10 }}>{agent.installHint}</code>
                       </div>
                     )}
@@ -332,9 +334,9 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                       }}
                       style={{
                         background: 'transparent',
-                        border: '1px solid #333',
+                        border: `1px solid ${theme.border.default}`,
                         borderRadius: 6,
-                        color: '#888',
+                        color: theme.text.muted,
                         fontSize: fonts.secondarySize,
                         padding: '3px 8px',
                         cursor: 'pointer',
@@ -362,10 +364,10 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                         }}
                         style={{
                           flex: 1,
-                          background: '#1a1a1a',
-                          border: '1px solid #333',
+                          background: theme.surface.input,
+                          border: `1px solid ${theme.border.default}`,
                           borderRadius: 6,
-                          color: '#e0e0e0',
+                          color: theme.text.primary,
                           fontSize: fonts.secondarySize,
                           fontFamily: 'monospace',
                           padding: '5px 8px',
@@ -375,10 +377,10 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                       <button
                         onClick={() => handleSetPath(agent.id, editPath)}
                         style={{
-                          background: '#222',
-                          border: '1px solid #333',
+                          background: theme.surface.panelElevated,
+                          border: `1px solid ${theme.border.default}`,
                           borderRadius: 6,
-                          color: '#ccc',
+                          color: theme.text.secondary,
                           fontSize: fonts.secondarySize,
                           padding: '4px 10px',
                           cursor: 'pointer',
@@ -390,9 +392,9 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                         onClick={() => setEditingAgent(null)}
                         style={{
                           background: 'transparent',
-                          border: '1px solid #333',
+                          border: `1px solid ${theme.border.default}`,
                           borderRadius: 6,
-                          color: '#888',
+                          color: theme.text.muted,
                           fontSize: fonts.secondarySize,
                           padding: '4px 8px',
                           cursor: 'pointer',
@@ -407,7 +409,7 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
                         style={{
                           background: 'transparent',
                           border: 'none',
-                          color: '#555',
+                          color: theme.text.disabled,
                           fontSize: 10,
                           padding: '3px 0',
                           cursor: 'pointer',
@@ -436,9 +438,9 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
             disabled={detecting}
             style={{
               background: 'transparent',
-              border: '1px solid #333',
+              border: `1px solid ${theme.border.default}`,
               borderRadius: 6,
-              color: '#888',
+              color: theme.text.muted,
               fontSize: fonts.secondarySize,
               padding: '5px 12px',
               cursor: detecting ? 'wait' : 'pointer',
@@ -450,10 +452,10 @@ export function AgentSetup({ onComplete, onDismiss }: AgentSetupProps) {
           <button
             onClick={handleConfirmAll}
             style={{
-              background: '#222',
-              border: '1px solid #333',
+              background: theme.surface.panelElevated,
+              border: `1px solid ${theme.border.default}`,
               borderRadius: 6,
-              color: '#e0e0e0',
+              color: theme.text.primary,
               fontSize: fonts.secondarySize,
               fontWeight: 500,
               padding: '6px 18px',

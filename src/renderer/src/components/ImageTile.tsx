@@ -340,7 +340,9 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
       <div style={{
         position: 'absolute',
         inset: 0,
-        background: '#111111',
+        // Letterbox plate behind images — use the deepest theme surface so
+        // contrast tracks while the image keeps a neutral viewing backdrop.
+        background: theme.surface.app,
         overflow: 'hidden',
         borderRadius,
         display: 'flex',
@@ -427,8 +429,11 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
                 height: 14,
                 borderRadius: 3,
                 background: color,
-                border: '1px solid rgba(255,255,255,0.26)',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                // Border/shadow for palette swatches sit next to arbitrary
+                // colours sampled from images — use neutral white/black alpha
+                // so they read on every hue.
+                border: `1px solid color-mix(in srgb, #fff 26%, transparent)`,
+                boxShadow: `0 1px 4px color-mix(in srgb, #000 45%, transparent)`,
               }} />
             ))}
           </div>
@@ -446,7 +451,9 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
               transformOrigin: 'left center',
               transform: `translateY(-50%) scale(${1 / zoom})`,
               width: 200,
-              color: 'rgba(255,255,255,0.78)',
+              // Metadata text overlays the canvas next to images; keep neutral
+              // white-on-glass since the backdrop is unpredictable.
+              color: `color-mix(in srgb, #fff 78%, transparent)`,
               fontSize: 10,
               lineHeight: 1.55,
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
@@ -495,8 +502,10 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
                     height: 8,
                     padding: 0,
                     borderRadius: 999,
-                    border: '1px solid rgba(255,255,255,0.45)',
-                    background: index === activeIndex ? 'rgba(207,246,255,0.95)' : 'rgba(255,255,255,0.24)',
+                    border: `1px solid color-mix(in srgb, #fff 45%, transparent)`,
+                    background: index === activeIndex
+                      ? `color-mix(in srgb, ${theme.accent.base} 65%, #fff)`
+                      : `color-mix(in srgb, #fff 24%, transparent)`,
                     cursor: 'pointer',
                   }}
                 />
@@ -525,9 +534,12 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
               display: 'flex',
               alignItems: 'center',
               gap: 6,
-              background: 'rgba(11, 13, 15, 0.78)',
-              border: '1px solid rgba(255,255,255,0.14)',
-              boxShadow: '0 8px 28px rgba(0,0,0,0.38)',
+              // Edit-pill: glass over arbitrary image content, anchored on
+              // theme surface so it tracks contrast while still reading
+              // legibly against any image.
+              background: `color-mix(in srgb, ${theme.surface.app} 78%, transparent)`,
+              border: `1px solid color-mix(in srgb, ${theme.text.primary} 14%, transparent)`,
+              boxShadow: `0 8px 28px color-mix(in srgb, #000 38%, transparent)`,
               padding: '4px 5px 4px 14px',
               borderRadius: 999,
               backdropFilter: 'blur(14px)',
@@ -546,7 +558,7 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
                 background: 'transparent',
                 border: 0,
                 outline: 'none',
-                color: 'rgba(244,244,245,0.94)',
+                color: theme.text.primary,
                 fontSize: 12,
               }}
             />
@@ -556,9 +568,9 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
               style={{
                 width: 28,
                 height: 28,
-                border: '1px solid rgba(144,224,239,0.28)',
-                background: 'rgba(144,224,239,0.10)',
-                color: 'rgba(207,246,255,0.9)',
+                border: `1px solid color-mix(in srgb, ${theme.accent.base} 38%, transparent)`,
+                background: `color-mix(in srgb, ${theme.accent.base} 14%, transparent)`,
+                color: theme.accent.base,
                 borderRadius: '50%',
                 padding: 0,
                 display: 'flex',
@@ -587,16 +599,18 @@ export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, is
             gap: 7,
             padding: '4px 8px',
             borderRadius: 6,
-            border: `1px solid ${editStatus.status === 'error' ? 'rgba(255, 116, 92, 0.36)' : 'rgba(144, 224, 239, 0.22)'}`,
-            background: editStatus.status === 'error' ? 'rgba(48, 18, 16, 0.62)' : 'rgba(10, 18, 22, 0.58)',
-            color: editStatus.status === 'error' ? 'rgba(255, 185, 174, 0.95)' : 'rgba(207,246,255,0.92)',
+            border: `1px solid ${editStatus.status === 'error' ? `color-mix(in srgb, ${theme.status.danger} 50%, transparent)` : `color-mix(in srgb, ${theme.accent.base} 30%, transparent)`}`,
+            background: editStatus.status === 'error'
+              ? `color-mix(in srgb, ${theme.status.danger} 26%, ${theme.surface.app})`
+              : `color-mix(in srgb, ${theme.surface.app} 78%, transparent)`,
+            color: editStatus.status === 'error' ? theme.status.danger : theme.accent.base,
             fontSize: 11,
             lineHeight: 1.25,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             pointerEvents: 'none',
-            boxShadow: '0 6px 20px rgba(0,0,0,0.28)',
+            boxShadow: `0 6px 20px color-mix(in srgb, #000 28%, transparent)`,
             backdropFilter: 'blur(12px)',
           }}
           title={editStatus.message}

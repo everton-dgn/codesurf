@@ -180,11 +180,33 @@ export function ArrangeToolbar({
 
   const isLight = theme.mode === 'light'
   const inCanvasMode = !isTabbedView
-  const dividerBg = isLight ? 'rgba(0,0,0,0.14)' : (inCanvasMode ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.08)')
-  const zoomBg = isLight ? 'rgba(255,255,255,0.78)' : (inCanvasMode ? 'rgba(33,36,43,0.92)' : 'rgba(20,20,20,0.56)')
-  const zoomBgHover = isLight ? 'rgba(255,255,255,0.9)' : (inCanvasMode ? 'rgba(40,43,51,0.98)' : 'rgba(20,20,20,0.68)')
-  const zoomBorder = isLight ? 'rgba(0,0,0,0.14)' : (inCanvasMode ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.08)')
-  const zoomBorderHover = isLight ? 'rgba(0,0,0,0.2)' : (inCanvasMode ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.14)')
+  // Toolbar palette anchored on theme tokens — text.primary alpha for
+  // dividers and outlines, surface.app/panelMuted for the glass plate.
+  const dividerBg = isLight
+    ? `color-mix(in srgb, ${theme.text.primary} 14%, transparent)`
+    : (inCanvasMode
+        ? `color-mix(in srgb, ${theme.text.primary} 16%, transparent)`
+        : `color-mix(in srgb, ${theme.text.primary} 8%, transparent)`)
+  const zoomBg = isLight
+    ? `color-mix(in srgb, ${theme.surface.app} 78%, transparent)`
+    : (inCanvasMode
+        ? `color-mix(in srgb, ${theme.surface.panelElevated} 92%, transparent)`
+        : `color-mix(in srgb, ${theme.surface.panelMuted} 56%, transparent)`)
+  const zoomBgHover = isLight
+    ? `color-mix(in srgb, ${theme.surface.app} 92%, transparent)`
+    : (inCanvasMode
+        ? `color-mix(in srgb, ${theme.surface.panel} 98%, transparent)`
+        : `color-mix(in srgb, ${theme.surface.panelMuted} 68%, transparent)`)
+  const zoomBorder = isLight
+    ? `color-mix(in srgb, ${theme.text.primary} 14%, transparent)`
+    : (inCanvasMode
+        ? `color-mix(in srgb, ${theme.text.primary} 14%, transparent)`
+        : `color-mix(in srgb, ${theme.text.primary} 8%, transparent)`)
+  const zoomBorderHover = isLight
+    ? `color-mix(in srgb, ${theme.text.primary} 20%, transparent)`
+    : (inCanvasMode
+        ? `color-mix(in srgb, ${theme.text.primary} 22%, transparent)`
+        : `color-mix(in srgb, ${theme.text.primary} 14%, transparent)`)
   const zoomTextColor = inCanvasMode ? theme.text.primary : (zoom === 1 ? theme.accent.base : theme.text.muted)
 
   const run = async (mode: Mode) => {

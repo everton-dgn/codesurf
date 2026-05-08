@@ -243,10 +243,10 @@ export function ensureCodeBlockLayoutStyles(): void {
     }
     [data-streamdown="code-block-actions"] button:hover {
       opacity: 1;
-      background: var(--chat-code-header-bg, rgba(0,0,0,0.06)) !important;
+      background: var(--chat-code-header-bg, color-mix(in srgb, var(--cs-th-text-primary) 6%, transparent)) !important;
     }
     [data-streamdown="code-block-actions"] button:focus-visible {
-      outline: 1px solid var(--chat-code-border, #d7dde4) !important;
+      outline: 1px solid var(--chat-code-border, var(--cs-th-border-default)) !important;
       outline-offset: 1px !important;
     }
     /* Kill any wrapper a future streamdown version might put around the
@@ -320,7 +320,7 @@ export function ensureCodeBlockLayoutStyles(): void {
        inline pills used a different (lighter) grey than the block, which
        looked disjointed in light mode. */
     .chat-md :not(pre) > code {
-      background: var(--chat-code-inline-bg, rgba(127,127,127,0.12)) !important;
+      background: var(--chat-code-inline-bg, color-mix(in srgb, var(--cs-th-text-primary) 12%, transparent)) !important;
       color: var(--chat-code-inline-color, inherit) !important;
       border: 1px solid var(--chat-code-inline-border, transparent) !important;
       padding: 1px 5px !important;
@@ -337,10 +337,10 @@ export function ensureCodeBlockLayoutStyles(): void {
       cursor: pointer !important;
     }
     .chat-md.chat-md--path-mod :not(pre) > code[data-codesurf-local-path]:hover {
-      background: var(--chat-path-hover-bg, rgba(59, 130, 246, 0.12)) !important;
-      border-color: var(--chat-path-hover-border, rgba(59, 130, 246, 0.4)) !important;
+      background: var(--chat-path-hover-bg, color-mix(in srgb, var(--cs-th-accent-base) 14%, transparent)) !important;
+      border-color: var(--chat-path-hover-border, color-mix(in srgb, var(--cs-th-accent-base) 45%, transparent)) !important;
       color: var(--chat-path-hover-color, inherit) !important;
-      box-shadow: 0 0 0 1px var(--chat-path-hover-border, rgba(59, 130, 246, 0.4)) !important;
+      box-shadow: 0 0 0 1px var(--chat-path-hover-border, color-mix(in srgb, var(--cs-th-accent-base) 45%, transparent)) !important;
     }
   `
   document.head.appendChild(style)

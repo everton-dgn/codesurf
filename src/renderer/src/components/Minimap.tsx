@@ -1,5 +1,16 @@
 import React, { useRef, useEffect, useCallback } from 'react'
 import type { TileState } from '../../../shared/types'
+import { useTheme } from '../ThemeContext'
+import { parseColor } from '../colorMath'
+
+/** Convert a parseable colour string + alpha to an `rgba(...)` literal usable
+ *  by Canvas2D. Returns the original input unchanged if parsing fails. */
+function withAlpha(input: string, alpha: number): string {
+  const parsed = parseColor(input)
+  if (!parsed) return input
+  const { r, g, b } = parsed.rgba
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
 
 interface Props {
   tiles: TileState[]
@@ -22,6 +33,7 @@ const H = 100
 const PAD = 20
 
 export function Minimap({ tiles, viewport, canvasSize, onPan }: Props): JSX.Element | null {
+  const theme = useTheme()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const dragging = useRef(false)
 
@@ -74,12 +86,18 @@ export function Minimap({ tiles, viewport, canvasSize, onPan }: Props): JSX.Elem
     const vy = (-viewport.ty / viewport.zoom) * scale + offY
     const vw = (canvasSize.w / viewport.zoom) * scale
     const vh = (canvasSize.h / viewport.zoom) * scale
-    ctx.strokeStyle = 'rgba(255,255,255,0.3)'
+    // Viewport rect anchored on text.primary so it tracks contrast.
+    // Canvas2D doesn't accept color-mix(), so we read the resolved CSS
+    // variable off documentElement. Falls back to text.primary string if
+    // the var hasn't been published yet (first paint).
+    const css = getComputedStyle(document.documentElement)
+    const tp = css.getPropertyValue('--cs-th-text-primary').trim() || theme.text.primary
+    ctx.strokeStyle = withAlpha(tp, 0.3)
     ctx.lineWidth = 1
     ctx.strokeRect(vx, vy, vw, vh)
-    ctx.fillStyle = 'rgba(255,255,255,0.04)'
+    ctx.fillStyle = withAlpha(tp, 0.04)
     ctx.fillRect(vx, vy, vw, vh)
-  }, [tiles, viewport, canvasSize, getBounds])
+  }, [tiles, viewport, canvasSize, getBounds, theme.text.primary])
 
   const panTo = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current
@@ -108,12 +126,12 @@ export function Minimap({ tiles, viewport, canvasSize, onPan }: Props): JSX.Elem
   return (
     <div style={{
       position: 'absolute', bottom: 16, left: 16,
-      background: 'rgba(18,18,18,0.88)',
-      border: '1px solid #2d2d2d',
+      background: `color-mix(in srgb, ${theme.surface.panel} 88%, transparent)`,
+      border: `1px solid ${theme.border.subtle}`,
       borderRadius: 6,
       overflow: 'hidden',
       zIndex: 500,
-      boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+      boxShadow: `0 4px 16px color-mix(in srgb, #000 40%, transparent)`,
       cursor: 'crosshair',
     }}>
       <canvas

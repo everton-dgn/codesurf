@@ -384,7 +384,27 @@ export function KanbanCard({
         flexShrink: 0,
         border: `1.5px solid ${dragOver ? theme.accent.base : card.justMoved ? theme.status.success : card.color}`,
         opacity: dragging ? 0.3 : 1,
-        boxShadow: card.justMoved ? `0 10px 24px ${theme.mode === 'light' ? 'rgba(15,23,42,0.10)' : 'rgba(0,0,0,0.18)'}, 0 0 12px ${theme.status.success}66, 0 0 0 0.5px ${theme.mode === 'light' ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)'}` : expanded ? `${theme.shadow.panel}, 0 10px 24px ${theme.mode === 'light' ? 'rgba(15,23,42,0.08)' : 'rgba(0,0,0,0.14)'}, 0 0 0 0.5px ${theme.mode === 'light' ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)'}` : `0 6px 16px ${theme.mode === 'light' ? 'rgba(15,23,42,0.06)' : 'rgba(0,0,0,0.12)'}, 0 0 0 0.5px ${theme.mode === 'light' ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)'}`,
+        boxShadow: (() => {
+          // Drop-shadow & hairline derive from theme tokens: dark drop on
+          // light themes is anchored on text.primary at low alpha, dark
+          // themes use #000 (canonical drop), edge highlight on text.primary
+          // mid-alpha. Each branch keeps the same visual structure but
+          // tracks the contrast slider through theme.text.primary.
+          const drop = (alphaLight: number, alphaDark: number) =>
+            theme.mode === 'light'
+              ? `color-mix(in srgb, ${theme.text.primary} ${alphaLight}%, transparent)`
+              : `color-mix(in srgb, #000 ${alphaDark}%, transparent)`
+          const edge = theme.mode === 'light'
+            ? `color-mix(in srgb, ${theme.surface.app} 45%, transparent)`
+            : `color-mix(in srgb, ${theme.text.primary} 22%, transparent)`
+          if (card.justMoved) {
+            return `0 10px 24px ${drop(10, 18)}, 0 0 12px ${theme.status.success}66, 0 0 0 0.5px ${edge}`
+          }
+          if (expanded) {
+            return `${theme.shadow.panel}, 0 10px 24px ${drop(8, 14)}, 0 0 0 0.5px ${edge}`
+          }
+          return `0 6px 16px ${drop(6, 12)}, 0 0 0 0.5px ${edge}`
+        })(),
         transition: 'border-color 0.15s, box-shadow 0.15s',
         overflow: 'hidden',
         outline: dragOver ? `1px dashed ${theme.accent.base}44` : 'none',
@@ -457,7 +477,7 @@ export function KanbanCard({
                 fontFamily: 'inherit', fontWeight: 800, fontSize: 16,
               }}
             >
-              <span style={{ color: theme.text.primary, textShadow: `0 1px 0 ${theme.mode === 'light' ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)'}`, transform: 'translateY(3px)', display: 'inline-block' }}>
+              <span style={{ color: theme.text.primary, textShadow: `0 1px 0 ${theme.mode === 'light' ? `color-mix(in srgb, ${theme.surface.app} 35%, transparent)` : `color-mix(in srgb, #000 35%, transparent)`}`, transform: 'translateY(3px)', display: 'inline-block' }}>
                 {card.launched ? '❚❚' : '►'}
               </span>
             </button>
@@ -473,9 +493,9 @@ export function KanbanCard({
           </div>
           {(card.tools.length > 0 || card.fileRefs.length > 0 || card.cardRefs.length > 0) && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-              {card.tools.map(t => <Chip key={t} label={t} prefix="@" bg={theme.mode === 'light' ? 'rgba(59,130,246,0.10)' : '#0d2137'} fg={theme.mode === 'light' ? '#1d4ed8' : '#58a6ff'} />)}
-              {card.fileRefs.map(f => <Chip key={f} label={f.split('/').pop() ?? f} prefix="@" bg="#1a1508" fg="#d7ba7d" title={f} neutral />)}
-              {card.cardRefs.map(r => <Chip key={r} label={r} prefix="→" bg="#1a0d2a" fg="#c586c0" neutral />)}
+              {card.tools.map(t => <Chip key={t} label={t} prefix="@" bg={`color-mix(in srgb, ${theme.accent.base} ${theme.mode === 'light' ? 12 : 22}%, transparent)`} fg={theme.accent.base} />)}
+              {card.fileRefs.map(f => <Chip key={f} label={f.split('/').pop() ?? f} prefix="@" bg={`color-mix(in srgb, ${theme.status.warning} ${theme.mode === 'light' ? 12 : 22}%, transparent)`} fg={theme.status.warning} title={f} neutral />)}
+              {card.cardRefs.map(r => <Chip key={r} label={r} prefix="→" bg={`color-mix(in srgb, ${theme.accent.base} ${theme.mode === 'light' ? 8 : 16}%, transparent)`} fg={theme.accent.hover} neutral />)}
             </div>
           )}
         </div>
@@ -836,16 +856,16 @@ function ChipInput({ values, onChange, prefix, placeholder, sublabel, suggestion
     setInput(''); setShowSugg(false)
   }
 
-  const prefixColor = prefix === '@'
-    ? (theme.mode === 'light' ? '#1d4ed8' : '#58a6ff')
+  // Chip prefix categorical palette: @ (mention) → accent, / (command) →
+  // success, default ($, others) → warning. Sourced from theme so the
+  // distinct hue per category survives palette/contrast changes.
+  const chipBaseColor = prefix === '@'
+    ? theme.accent.base
     : prefix === '/'
-      ? (theme.mode === 'light' ? '#15803d' : '#3fb950')
-      : (theme.mode === 'light' ? '#92400e' : '#d7ba7d')
-  const chipBg = prefix === '@'
-    ? (theme.mode === 'light' ? 'rgba(59,130,246,0.10)' : '#0d2137')
-    : prefix === '/'
-      ? (theme.mode === 'light' ? 'rgba(34,197,94,0.10)' : '#0d2a1a')
-      : (theme.mode === 'light' ? 'rgba(245,158,11,0.10)' : '#1a1508')
+      ? theme.status.success
+      : theme.status.warning
+  const prefixColor = chipBaseColor
+  const chipBg = `color-mix(in srgb, ${chipBaseColor} ${theme.mode === 'light' ? 12 : 22}%, transparent)`
 
   return (
     <div>
@@ -946,8 +966,11 @@ function Label({ children }: { children: React.ReactNode }): JSX.Element {
 function Chip({ label, prefix, bg, fg, title, neutral = false }: { label: string; prefix: string; bg: string; fg: string; title?: string; neutral?: boolean }): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
-  const neutralBg = theme.mode === 'light' ? '#111111' : '#ffffff'
-  const neutralFg = theme.mode === 'light' ? '#ffffff' : '#111111'
+  // Neutral chip = high-contrast inverted pair: dark plate in light theme,
+  // light plate in dark theme. Anchored on text.primary and text.inverse so
+  // both shift with the contrast slider.
+  const neutralBg = theme.text.primary
+  const neutralFg = theme.text.inverse
   const neutralBorder = theme.mode === 'light' ? '#ffffff22' : '#00000022'
   return (
     <span title={title} style={{

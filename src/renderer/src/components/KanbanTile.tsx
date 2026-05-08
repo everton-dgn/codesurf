@@ -468,7 +468,7 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
         const lastCol = columns[columns.length - 1]
         const note = { id: `c-${Date.now()}`, text: `Error: ${data.reason}`, ts: Date.now() }
         return prev.map(c => c.id === data.cardId
-          ? { ...c, columnId: lastCol.id, color: theme.mode === 'light' ? 'rgba(239,68,68,0.18)' : 'rgba(248,113,113,0.15)', comments: [...c.comments, note] }
+          ? { ...c, columnId: lastCol.id, color: `color-mix(in srgb, ${theme.status.danger} ${theme.mode === 'light' ? 22 : 18}%, transparent)`, comments: [...c.comments, note] }
           : c)
       })
     }
