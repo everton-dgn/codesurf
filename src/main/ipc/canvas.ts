@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { promises as fs } from 'fs'
-import { dirname, join } from 'path'
+import { dirname } from 'path'
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk'
 import type { AggregatedSessionEntry, SessionEntryHint } from '../../shared/session-types'
 import type { TileState } from '../../shared/types'
@@ -70,10 +70,6 @@ function truncateSessionText(text: string | null | undefined, length = 120): str
   if (!text) return null
   const normalized = text.replace(/\s+/g, ' ').trim()
   return normalized.length > length ? normalized.slice(0, length) : normalized
-}
-
-function sessionTitleFromText(text: string | null | undefined, provider: string): string {
-  return cleanSessionTitleCandidate(text) ?? `${provider} session`
 }
 
 function extractInitialSessionTitle(messages: Record<string, unknown>[]): string | null {
@@ -346,7 +342,7 @@ async function loadSessionStateForTitleGeneration(
     return {
       provider: external.provider,
       model: external.model,
-      messages: external.messages as Record<string, unknown>[],
+      messages: external.messages as unknown as Record<string, unknown>[],
     }
   }
 
@@ -545,15 +541,6 @@ function broadcastSessionsChangedNow(workspaceId: string, reason: string = 'expl
   // eslint-disable-next-line no-console
   console.log(`[sessions] broadcast(now) workspaceId=${workspaceId || '(empty)'} reason=${reason}`)
   broadcastToRenderer('canvas:sessionsChanged', { workspaceId })
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await fs.access(path)
-    return true
-  } catch {
-    return false
-  }
 }
 
 async function readWorkspaceArchivedSessionIds(workspaceId: string): Promise<Set<string>> {

@@ -3505,10 +3505,12 @@ function chatHermes(req: ChatRequest): void {
   const toolsets = modeMap[req.mode ?? ''] ?? 'terminal,file,web'
 
   // Hermes requires the `chat` subcommand for non-interactive prompts.
-  // `--quiet` suppresses banners/spinners but still prints the final response.
-  // Provider-prefixed CodeSurf model ids (for example openai-codex/gpt-5.5)
-  // are split into Hermes' separate --provider / --model flags by the shared
-  // contract helper.
+  // We request NDJSON event streaming via `--stream-json` so tool calls,
+  // text deltas, and thinking blocks surface in real time (the old `--quiet`
+  // mode nulled Hermes' streaming callbacks and the UI went silent until
+  // the final response). Provider-prefixed CodeSurf model ids (for example
+  // openai-codex/gpt-5.5) are split into Hermes' separate --provider /
+  // --model flags by the shared contract helper.
   //
   // First-turn injection: Hermes has no system-prompt flag, so the CodeSurf
   // output convention rides along with the first user message. Session
@@ -3522,6 +3524,7 @@ function chatHermes(req: ChatRequest): void {
     model: req.model,
     resumeSessionId: existingSessionId,
     toolsets,
+    streamJson: true,
   })
 
   const proc = spawn(hermesBin, args, {
@@ -3532,34 +3535,110 @@ function chatHermes(req: ChatRequest): void {
 
   activeProcesses.set(req.cardId, proc)
 
+  // NDJSON line dispatcher. Hermes' --stream-json mode emits one JSON event
+  // per line on stdout, mapping directly to CodeSurf's existing stream event
+  // schema (type: text | thinking | tool_start | tool_input | tool_summary
+  // | session | error | done). Unparseable lines are treated as raw text so
+  // an older Hermes binary that doesn't recognise --stream-json (and falls
+  // through to plain output) still produces *something* in the UI rather
+  // than silence.
   let stdoutBuf = ''
-  const flushHermesOutput = (text: string, flushPartial = false): void => {
-    stdoutBuf += text
+  const dispatchHermesEvents = (chunk: string, flushPartial = false): void => {
+    stdoutBuf += chunk
     const lines = stdoutBuf.split(/\r?\n/)
     stdoutBuf = flushPartial ? '' : (lines.pop() ?? '')
 
     for (const line of lines) {
       const trimmed = line.trim()
-      const sessionMatch = trimmed.match(/^(?:session_id|session)\s*:\s*(\S+)$/i)
-      if (sessionMatch?.[1]) {
-        const sid = sessionMatch[1]
+      if (!trimmed) continue
+
+      // Legacy fallback: plain "session_id: …" sentinel from a binary
+      // without --stream-json. Surface it the way the old streamer did.
+      const sessionLineMatch = trimmed.match(/^(?:session_id|session)\s*:\s*(\S+)$/i)
+      if (sessionLineMatch?.[1]) {
+        const sid = sessionLineMatch[1]
         hermesSessionIds.set(req.cardId, sid)
         sendStream(req.cardId, { type: 'session', sessionId: sid })
         continue
       }
-      sendStream(req.cardId, { type: 'text', text: line + '\n' })
+
+      let evt: any
+      try {
+        evt = JSON.parse(trimmed)
+      } catch {
+        sendStream(req.cardId, { type: 'text', text: line + '\n' })
+        continue
+      }
+      if (!evt || typeof evt !== 'object' || typeof evt.type !== 'string') {
+        continue
+      }
+
+      switch (evt.type) {
+        case 'session':
+          if (typeof evt.sessionId === 'string' && evt.sessionId.trim()) {
+            const sid = evt.sessionId.trim()
+            hermesSessionIds.set(req.cardId, sid)
+            sendStream(req.cardId, { type: 'session', sessionId: sid })
+          }
+          break
+        case 'text':
+          if (typeof evt.text === 'string') {
+            sendStream(req.cardId, { type: 'text', text: evt.text })
+          }
+          break
+        case 'thinking':
+          if (typeof evt.text === 'string') {
+            sendStream(req.cardId, { type: 'thinking', text: evt.text })
+          }
+          break
+        case 'tool_start':
+          sendStream(req.cardId, {
+            type: 'tool_start',
+            toolId: typeof evt.toolId === 'string' ? evt.toolId : undefined,
+            toolName: typeof evt.toolName === 'string' ? evt.toolName : 'tool',
+          })
+          break
+        case 'tool_input':
+          sendStream(req.cardId, {
+            type: 'tool_input',
+            toolId: typeof evt.toolId === 'string' ? evt.toolId : undefined,
+            text: typeof evt.text === 'string' ? evt.text : '',
+          })
+          break
+        case 'tool_summary':
+          sendStream(req.cardId, {
+            type: 'tool_summary',
+            toolId: typeof evt.toolId === 'string' ? evt.toolId : undefined,
+            toolName: typeof evt.toolName === 'string' ? evt.toolName : undefined,
+            text: typeof evt.text === 'string' ? evt.text : '',
+          })
+          break
+        case 'error':
+          sendStream(req.cardId, {
+            type: 'error',
+            error: typeof evt.error === 'string' ? evt.error : 'Unknown Hermes error',
+          })
+          break
+        case 'done':
+          // Suppressed here — emitted from proc.on('close') below so we
+          // always get a final 'done' even if Hermes exits mid-stream.
+          break
+        default:
+          // Forward unrecognized event verbatim; the renderer can filter.
+          sendStream(req.cardId, evt as Record<string, unknown>)
+      }
     }
   }
 
   proc.stdout?.on('data', (chunk: Buffer) => {
-    flushHermesOutput(chunk.toString(), false)
+    dispatchHermesEvents(chunk.toString(), false)
   })
 
   let stderrBuf = ''
   proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString() })
 
   proc.on('close', (code) => {
-    flushHermesOutput('', true)
+    dispatchHermesEvents('', true)
     activeProcesses.delete(req.cardId)
     if (code !== 0 && stderrBuf.trim()) {
       sendStream(req.cardId, { type: 'error', error: sanitizeAgentCliDiagnostic(stderrBuf.trim()) })

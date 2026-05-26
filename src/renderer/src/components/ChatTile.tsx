@@ -4165,6 +4165,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       const msg = e.data
       if (!msg || typeof msg !== 'object') return
       const sourceWin = e.source as Window | null
+      const sourceIsChatSurface = Object.values(chatSurfaceIframeRefs.current)
+        .some(frame => frame?.contentWindow === sourceWin)
       const reply = (result: unknown, error?: string) => {
         sourceWin?.postMessage({ type: 'contex-rpc-response', id: msg.id, result: error ? undefined : result, error }, '*')
       }
@@ -4172,6 +4174,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       if (msg.type === 'contex-bridge-ready' && typeof msg.tileId === 'string') {
         const surface = openChatSurfacesRef.current.find(candidate => candidate.instanceId === msg.tileId)
         if (!surface) return
+        if (getChatSurfaceIframe(surface.instanceId)?.contentWindow !== sourceWin) return
         sourceWin?.postMessage({ type: 'contex-theme-vars', vars: chatSurfaceThemeVars }, '*')
         for (const peer of getChatSurfacePeerEntries(surface.instanceId)) {
           for (const entry of peer.contextEntries) {
@@ -4186,6 +4189,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       }
 
       if (msg.type === 'contex-action-result' && typeof msg.requestId === 'string') {
+        if (!sourceIsChatSurface) return
         const pending = pendingChatSurfaceActionResultsRef.current.get(msg.requestId)
         if (!pending) return
         pendingChatSurfaceActionResultsRef.current.delete(msg.requestId)
@@ -4197,6 +4201,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       if (msg.type !== 'contex-rpc' || typeof msg.tileId !== 'string') return
       const surface = openChatSurfacesRef.current.find(candidate => candidate.instanceId === msg.tileId)
       if (!surface) return
+      if (getChatSurfaceIframe(surface.instanceId)?.contentWindow !== sourceWin) return
 
       try {
         const basicRpc = await handleBasicChatSurfaceRpc({
@@ -4377,7 +4382,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [chatSurfaceThemeColors, chatSurfaceThemeVars, getChatSurfacePeerEntries, postToChatSurface])
+  }, [chatSurfaceThemeColors, chatSurfaceThemeVars, getChatSurfaceIframe, getChatSurfacePeerEntries, postToChatSurface])
 
   const handleTileDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     // Ignore our own internal drags (queued-turn reorder, etc.) — they
@@ -4730,14 +4735,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       try {
         await new Promise<void>((resolve) => {
           let done = false
-          const ack = () => { if (done) return; done = true; resolve() }
+          const ack = () => {
+            if (done) return
+            done = true
+            window.removeEventListener('message', onceAck)
+            clearTimeout(timeout)
+            resolve()
+          }
           const timeout = setTimeout(ack, 1200)
           const onceAck = (e: MessageEvent) => {
+            if (getChatSurfaceIframe(surface.instanceId)?.contentWindow !== e.source) return
             const msg = e.data
             if (!msg || typeof msg !== 'object') return
             if (msg.type === 'contex-rpc' && msg.method === 'surface.setPayload' && msg.tileId === surface.instanceId) {
-              window.removeEventListener('message', onceAck)
-              clearTimeout(timeout)
               ack()
             }
           }
@@ -4803,7 +4813,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     await dispatchMessageContent(messageContent)
-  }, [isStreaming, input, attachments, implicitPeerImageAttachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, postToChatSurface])
+  }, [isStreaming, input, attachments, implicitPeerImageAttachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, getChatSurfaceIframe, postToChatSurface])
 
   const insertSteerMessageIntoStream = useCallback((content: string) => {
     const trimmed = content.trim()
@@ -6726,4 +6736,3 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     </ChatDispatchCtx.Provider>
   )
 }
-

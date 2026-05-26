@@ -95,7 +95,7 @@ function dispatchWebviewCompatEvent(target: EventTarget, type: string, detail: u
 function createFallbackWebview(src: string, bgColor = '#111317'): Electron.WebviewTag {
   const frame = document.createElement('iframe') as HTMLIFrameElement & Electron.WebviewTag & { __codesurfFallbackWebview?: true }
   frame.__codesurfFallbackWebview = true
-  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads')
+  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-downloads')
   frame.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen; microphone; camera')
   frame.style.cssText =
     `position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; border: none; background: ${bgColor};`
@@ -233,8 +233,8 @@ function createElectrobunWebview(src: string, bgColor = '#111317'): Electron.Web
   }
   webview.getURL = () => currentUrl || String(webview.getAttribute('src') ?? '')
   webview.getTitle = () => currentUrl || 'Browser'
-  webview.canGoBack = () => canGoBack
-  webview.canGoForward = () => canGoForward
+  ;(webview as Electron.WebviewTag).canGoBack = () => canGoBack
+  ;(webview as Electron.WebviewTag).canGoForward = () => canGoForward
   webview.isLoading = () => loading
   webview.stop = () => {
     loading = false
@@ -266,7 +266,6 @@ function createManagedWebview(tileId: string, src: string, bgColor = '#111317'):
   if (!hasElectronWebviewApi) return createElectrobunWebview(src, bgColor) ?? createFallbackWebview(src, bgColor)
 
   const webview = candidate as Electron.WebviewTag
-  webview.setAttribute('allowpopups', '')
   webview.setAttribute('partition', `persist:browser-tile-${tileId}`)
   webview.setAttribute('useragent', DESKTOP_UA)
   // backgroundColor sets the Chromium compositor surface color — prevents white flash before content loads
@@ -686,14 +685,34 @@ function isLikelyUrl(value: string): boolean {
   return false
 }
 
+function isAllowedBrowserUrl(value: string): boolean {
+  if (value === 'about:blank') return true
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function shouldInjectHostBridge(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]')
+  } catch {
+    return false
+  }
+}
+
 function normalizeUrl(value: string): string {
   const trimmed = value.trim()
   if (!trimmed) return HOMEPAGE
   if (trimmed === 'about:blank') return trimmed
-  if (trimmed.startsWith('file://')) return trimmed
-  if (trimmed.startsWith('/')) return trimmed
   if (isLikelyUrl(trimmed)) {
-    if (/^[a-z][a-z\d+\-.]*:\/\//i.test(trimmed)) return trimmed
+    if (/^[a-z][a-z\d+\-.]*:\/\//i.test(trimmed)) {
+      return isAllowedBrowserUrl(trimmed) ? trimmed : HOMEPAGE
+    }
     if (/^localhost(?::\d+)?(\/|$)/i.test(trimmed) || /^127\.0\.0\.1(?::\d+)?(\/|$)/.test(trimmed))
       return `http://${trimmed}`
     return `https://${trimmed}`
@@ -1094,8 +1113,10 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       setIsClusoActiveRef.current(false)
       injectCluso()
       // Inject bus bridge so webview content can publish to the EventBus
-      executeInWebview(createBusBridgeScript(tileId))
-        .catch(err => console.warn('[BrowserTile] Bus bridge injection failed:', err))
+      if (shouldInjectHostBridge(webview.getURL())) {
+        executeInWebview(createBusBridgeScript(tileId))
+          .catch(err => console.warn('[BrowserTile] Bus bridge injection failed:', err))
+      }
     }
 
     const onFailLoad = () => {
@@ -1106,6 +1127,12 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
 
     const onNavigate = () => updateNav()
     const onNavigateInPage = () => updateNav()
+    const onWillNavigate = (e: Event) => {
+      const ev = e as Event & { url?: string }
+      if (!ev.url || isAllowedBrowserUrl(ev.url)) return
+      e.preventDefault()
+      void webview.loadURL(HOMEPAGE)
+    }
 
     const onNewWindow = (e: Event) => {
       const ev = e as Event & { url?: string }
@@ -1177,6 +1204,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
     webview.addEventListener('did-start-loading', onStartLoad)
     webview.addEventListener('did-stop-loading', onStopLoad)
     webview.addEventListener('did-fail-load', onFailLoad)
+    webview.addEventListener('will-navigate', onWillNavigate)
     webview.addEventListener('did-navigate', onNavigate)
     webview.addEventListener('did-navigate-in-page', onNavigateInPage)
     webview.addEventListener('new-window', onNewWindow)
@@ -1222,8 +1250,10 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
           }
         }
         tryInject(0)
-        executeInWebview(createBusBridgeScript(tileId))
-          .catch(err => console.warn('[BrowserTile] Bus bridge reinjection failed:', err))
+        if (shouldInjectHostBridge(webview.getURL())) {
+          executeInWebview(createBusBridgeScript(tileId))
+            .catch(err => console.warn('[BrowserTile] Bus bridge reinjection failed:', err))
+        }
       })
     }
 
@@ -1232,6 +1262,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       webview.removeEventListener('did-start-loading', onStartLoad)
       webview.removeEventListener('did-stop-loading', onStopLoad)
       webview.removeEventListener('did-fail-load', onFailLoad)
+      webview.removeEventListener('will-navigate', onWillNavigate)
       webview.removeEventListener('did-navigate', onNavigate)
       webview.removeEventListener('did-navigate-in-page', onNavigateInPage)
       webview.removeEventListener('new-window', onNewWindow)

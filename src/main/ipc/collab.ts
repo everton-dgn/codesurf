@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { ipcMain, BrowserWindow } from 'electron'
 import { promises as fs } from 'fs'
-import { join, basename } from 'path'
+import { join, basename, resolve, relative, isAbsolute } from 'path'
 import type {
   CollabState,
   CollabSkills,
@@ -24,15 +24,45 @@ import {
 
 const MESSAGE_PROTOCOL = 'contex-message/v1' as const
 const MESSAGE_MAILBOXES: CollabMailbox[] = ['inbox', 'sent', 'memory', 'bin']
+const MESSAGE_MAILBOX_SET = new Set<string>(MESSAGE_MAILBOXES)
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+function assertSafeWorkspacePath(workspacePath: string): string {
+  const resolved = resolve(String(workspacePath ?? '').trim())
+  if (!resolved) throw new Error('Invalid workspace path')
+  return resolved
+}
+
+function assertSafePathSegment(value: string, label: string): string {
+  const segment = String(value ?? '').trim()
+  if (!segment || segment === '.' || segment === '..' || segment.includes('/') || segment.includes('\\') || segment.includes('\0')) {
+    throw new Error(`Invalid ${label}`)
+  }
+  return segment
+}
+
+function assertSafeMailbox(mailbox: CollabMailbox): CollabMailbox {
+  if (!MESSAGE_MAILBOX_SET.has(String(mailbox))) throw new Error('Invalid mailbox')
+  return mailbox
+}
+
+function resolveInside(root: string, ...segments: string[]): string {
+  const base = resolve(root)
+  const target = resolve(base, ...segments)
+  const rel = relative(base, target)
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('Path escapes expected directory')
+  }
+  return target
+}
+
 function collabDir(workspacePath: string, tileId: string): string {
-  return workspaceTileDir(workspacePath, tileId)
+  return workspaceTileDir(assertSafeWorkspacePath(workspacePath), assertSafePathSegment(tileId, 'tileId'))
 }
 
 function legacyCollabDir(workspacePath: string, tileId: string): string {
-  return legacyWorkspaceTileDir(workspacePath, tileId)
+  return legacyWorkspaceTileDir(assertSafeWorkspacePath(workspacePath), assertSafePathSegment(tileId, 'tileId'))
 }
 
 function contextDir(workspacePath: string, tileId: string): string {
@@ -48,7 +78,19 @@ function messagesDir(workspacePath: string, tileId: string): string {
 }
 
 function mailboxDir(workspacePath: string, tileId: string, mailbox: CollabMailbox): string {
-  return workspaceTileMessageMailboxDir(workspacePath, tileId, mailbox)
+  return workspaceTileMessageMailboxDir(assertSafeWorkspacePath(workspacePath), assertSafePathSegment(tileId, 'tileId'), assertSafeMailbox(mailbox))
+}
+
+function contextFilePath(workspacePath: string, tileId: string, filename: string): string {
+  return resolveInside(contextDir(workspacePath, tileId), assertSafePathSegment(filename, 'filename'))
+}
+
+function legacyContextFilePath(workspacePath: string, tileId: string, filename: string): string {
+  return resolveInside(legacyContextDir(workspacePath, tileId), assertSafePathSegment(filename, 'filename'))
+}
+
+function messageFilePath(workspacePath: string, tileId: string, mailbox: CollabMailbox, filename: string): string {
+  return resolveInside(mailboxDir(workspacePath, tileId, mailbox), assertSafePathSegment(filename, 'filename'))
 }
 
 async function ensureTileProtocolDirs(workspacePath: string, tileId: string): Promise<void> {
@@ -406,13 +448,13 @@ export function registerCollabIPC(): void {
   ipcMain.handle('collab:addContext', async (_, workspacePath: string, tileId: string, filename: string, content: string) => {
     const dir = contextDir(workspacePath, tileId)
     await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(join(dir, filename), content)
+    await fs.writeFile(contextFilePath(workspacePath, tileId, filename), content)
     return true
   })
 
   ipcMain.handle('collab:removeContext', async (_, workspacePath: string, tileId: string, filename: string) => {
     try {
-      await fs.unlink(join(contextDir(workspacePath, tileId), filename))
+      await fs.unlink(contextFilePath(workspacePath, tileId, filename))
       return true
     } catch {
       return false
@@ -436,10 +478,10 @@ export function registerCollabIPC(): void {
 
   ipcMain.handle('collab:readContext', async (_, workspacePath: string, tileId: string, filename: string) => {
     try {
-      return await fs.readFile(join(contextDir(workspacePath, tileId), filename), 'utf8')
+      return await fs.readFile(contextFilePath(workspacePath, tileId, filename), 'utf8')
     } catch {
       try {
-        return await fs.readFile(join(legacyContextDir(workspacePath, tileId), filename), 'utf8')
+        return await fs.readFile(legacyContextFilePath(workspacePath, tileId, filename), 'utf8')
       } catch {
         return null
       }
@@ -466,7 +508,7 @@ export function registerCollabIPC(): void {
   })
 
   ipcMain.handle('collab:readMessage', async (_, workspacePath: string, tileId: string, mailbox: CollabMailbox, filename: string) => {
-    return readMessageFile(join(mailboxDir(workspacePath, tileId, mailbox), filename), mailbox, filename)
+    return readMessageFile(messageFilePath(workspacePath, tileId, mailbox, filename), mailbox, assertSafePathSegment(filename, 'filename'))
   })
 
   ipcMain.handle('collab:sendMessage', async (_, workspacePath: string, fromTileId: string, draft: CollabMessageDraft) => {
@@ -499,8 +541,8 @@ export function registerCollabIPC(): void {
     const senderMeta: CollabMessageMeta = { ...baseMeta, status: 'sent' }
     const recipientMeta: CollabMessageMeta = { ...baseMeta, status: 'unread' }
 
-    const senderPath = join(mailboxDir(workspacePath, fromTileId, 'sent'), filename)
-    const recipientPath = join(mailboxDir(workspacePath, draft.toTileId, 'inbox'), filename)
+    const senderPath = messageFilePath(workspacePath, fromTileId, 'sent', filename)
+    const recipientPath = messageFilePath(workspacePath, draft.toTileId, 'inbox', filename)
 
     await Promise.all([
       fs.writeFile(senderPath, renderMessageMarkdown(senderMeta, draft.body, draft.data)),
@@ -519,7 +561,7 @@ export function registerCollabIPC(): void {
   })
 
   ipcMain.handle('collab:updateMessageStatus', async (_, workspacePath: string, tileId: string, mailbox: CollabMailbox, filename: string, status: CollabMessageStatus) => {
-    const path = join(mailboxDir(workspacePath, tileId, mailbox), filename)
+    const path = messageFilePath(workspacePath, tileId, mailbox, filename)
     const existing = await readMessageFile(path, mailbox, filename)
     if (!existing) return false
 
@@ -539,9 +581,9 @@ export function registerCollabIPC(): void {
   })
 
   ipcMain.handle('collab:moveMessage', async (_, workspacePath: string, tileId: string, fromMailbox: CollabMailbox, toMailbox: CollabMailbox, filename: string) => {
-    const source = join(mailboxDir(workspacePath, tileId, fromMailbox), filename)
+    const source = messageFilePath(workspacePath, tileId, fromMailbox, filename)
     const targetDir = mailboxDir(workspacePath, tileId, toMailbox)
-    const target = join(targetDir, basename(filename))
+    const target = resolveInside(targetDir, basename(assertSafePathSegment(filename, 'filename')))
 
     try {
       await fs.mkdir(targetDir, { recursive: true })
@@ -585,10 +627,13 @@ export function registerCollabIPC(): void {
   })
 
   ipcMain.handle('collab:pruneOrphanedTileDirs', async (_, workspacePath: string, tileIds: string[]) => {
-    const validTileIds = new Set(tileIds)
+    const workspaceRoot = assertSafeWorkspacePath(workspacePath)
+    const validTileIds = new Set(tileIds.map(id => {
+      try { return assertSafePathSegment(id, 'tileId') } catch { return '' }
+    }).filter(Boolean))
     const removed = await Promise.all([
-      pruneOrphanedTileDirs(join(workspacePath, '.contex'), validTileIds),
-      pruneOrphanedTileDirs(join(workspacePath, '.collab'), validTileIds),
+      pruneOrphanedTileDirs(join(workspaceRoot, '.contex'), validTileIds),
+      pruneOrphanedTileDirs(join(workspaceRoot, '.collab'), validTileIds),
     ])
     return {
       removed: Array.from(new Set([...removed[0], ...removed[1]])).sort(),

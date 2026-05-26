@@ -1,6 +1,6 @@
 import { net, protocol } from 'electron'
 import { existsSync, promises as fs } from 'fs'
-import { isAbsolute, join, relative, extname } from 'path'
+import { isAbsolute, join, relative, extname, resolve } from 'path'
 import { pathToFileURL } from 'url'
 import type { ExtensionRegistry } from './registry'
 import { getBridgeScript } from './bridge'
@@ -63,6 +63,20 @@ function injectBridge(html: string, bridgeScript: string): string {
   return `${tag}\n${html}`
 }
 
+function isPathInside(root: string, candidate: string): boolean {
+  const resolvedRoot = resolve(root)
+  const resolvedCandidate = resolve(candidate)
+  const rel = relative(resolvedRoot, resolvedCandidate)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+function isExtensionResourcePath(registry: ExtensionRegistry, candidate: string): boolean {
+  return registry.getAll().some(ext => {
+    const root = ext._path
+    return Boolean(root && ext._enabled !== false && isPathInside(root, candidate))
+  })
+}
+
 export function registerExtensionProtocol(registry: ExtensionRegistry): void {
   protocol.handle('contex-ext', async request => {
     try {
@@ -76,7 +90,10 @@ export function registerExtensionProtocol(registry: ExtensionRegistry): void {
 
       // ── __runext_resource__ — serve absolute file paths from extension assets ──
       if (firstSegment === '__runext_resource__') {
-        const absPath = '/' + restSegments.join('/')
+        const absPath = resolve('/' + restSegments.join('/'))
+        if (!isExtensionResourcePath(registry, absPath)) {
+          return new Response('Forbidden', { status: 403 })
+        }
         if (!existsSync(absPath)) {
           return new Response('Resource not found', { status: 404 })
         }

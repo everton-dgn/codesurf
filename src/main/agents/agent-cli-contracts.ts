@@ -123,8 +123,18 @@ export function buildHermesChatArgs(request: {
   ignoreRules?: boolean
   ignoreUserConfig?: boolean
   bypassPermissions?: boolean
+  /**
+   * When true, request NDJSON event streaming from Hermes
+   * (`--stream-json`) instead of plain `--quiet` batch output.
+   * Consumers must parse stdout line-by-line as JSON events.
+   * Requires Hermes >= the version that ships `--stream-json` on the
+   * `chat` subcommand. Falls back to `--quiet` when false/unset so
+   * older Hermes binaries keep working.
+   */
+  streamJson?: boolean
 }): string[] {
-  const args = ['chat', '--query', request.prompt, '--quiet', '--source', 'tool']
+  const outputFlag = request.streamJson ? '--stream-json' : '--quiet'
+  const args = ['chat', '--query', request.prompt, outputFlag, '--source', 'tool']
   const selection = resolveHermesModelSelection(request.model, request.provider)
   pushFlag(args, '--model', selection.model)
   pushFlag(args, '--provider', selection.provider)
@@ -157,6 +167,62 @@ export function parseHermesOutput(stdout: string): ParsedAgentCliOutput {
   return {
     text: visibleLines.join('\n').trim(),
     sessionId,
+  }
+}
+
+/**
+ * Parse Hermes NDJSON event stream produced by `hermes chat --stream-json`.
+ *
+ * Each non-blank stdout line is a JSON event with a `type` field. The events
+ * we care about for batch consumption:
+ *  - `{type:'text', text}`           → assistant text delta (concatenate)
+ *  - `{type:'session', sessionId}`   → session id (latest wins)
+ *  - `{type:'error', error}`         → set on parsed.raw; caller decides
+ *
+ * Tool events (`tool_start`/`tool_input`/`tool_summary`/`thinking`) are kept
+ * in `raw` for downstream consumers but do not contribute to `text`.
+ *
+ * Non-JSON lines (e.g. stray prints from an older binary) are ignored.
+ */
+export function parseHermesStreamJsonOutput(stdout: string): ParsedAgentCliOutput {
+  const raw: unknown[] = []
+  const textParts: string[] = []
+  let sessionId: string | null = null
+
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let evt: any
+    try {
+      evt = JSON.parse(trimmed)
+    } catch {
+      // Older Hermes binaries (no --stream-json support) fall back to plain
+      // text. Treat unparseable lines as raw text so we don't lose content
+      // when a misconfigured environment routes through this parser.
+      textParts.push(line)
+      continue
+    }
+    raw.push(evt)
+    if (!evt || typeof evt !== 'object') continue
+    if (typeof evt.type !== 'string') continue
+    switch (evt.type) {
+      case 'text':
+        if (typeof evt.text === 'string') textParts.push(evt.text)
+        break
+      case 'session':
+        if (typeof evt.sessionId === 'string' && evt.sessionId.trim()) {
+          sessionId = evt.sessionId.trim()
+        }
+        break
+      default:
+        break
+    }
+  }
+
+  return {
+    text: textParts.join('').trim(),
+    sessionId,
+    raw,
   }
 }
 

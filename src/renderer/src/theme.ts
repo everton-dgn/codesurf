@@ -1,4 +1,5 @@
 import { shiftLAway } from './colorMath'
+import { resolveThemeIdForAppearance } from './themeResolution'
 
 export type ThemeMode = 'dark' | 'light'
 
@@ -2997,20 +2998,8 @@ export function resolveEffectiveThemeId(
   themeId: string,
   systemPrefersDark: boolean,
 ): string {
-  const a = appearance ?? 'dark'
   const theme = THEMES[themeId]
-  if (a === 'light') {
-    // Use the selected theme if it's a light theme, otherwise fall back to paper-light
-    return theme?.mode === 'light' ? themeId : 'paper-light'
-  }
-  if (a === 'system') {
-    if (systemPrefersDark) {
-      return theme?.mode === 'dark' ? themeId : DEFAULT_THEME_ID
-    }
-    return theme?.mode === 'light' ? themeId : 'paper-light'
-  }
-  // Dark mode — use selected if dark, otherwise default
-  return theme?.mode === 'dark' ? themeId : (THEMES[themeId] ? themeId : DEFAULT_THEME_ID)
+  return resolveThemeIdForAppearance(appearance, themeId, theme?.mode, systemPrefersDark, DEFAULT_THEME_ID, 'paper-light')
 }
 
 export const DEFAULT_THEME_ID = 'default-dark'

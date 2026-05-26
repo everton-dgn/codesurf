@@ -34,10 +34,11 @@
     "build": "cross-env EV_BUILD_TARGET=main electron-vite build && cross-env EV_BUILD_TARGET=preload electron-vite build && cross-env EV_BUILD_TARGET=renderer electron-vite build",
     "build:npm": "bun run scripts/build-npm-package.mjs",
     "dist:mac": "npm run build && electron-builder --mac dmg zip",
+    "release:mac": "node scripts/verify-mac-release-env.mjs && npm run build && electron-builder --mac dmg zip",
     "dist:windows": "npm run build && electron-builder --win nsis portable",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb",
     "build:icon": "node scripts/create-ico.js",
-    "release:github": "npm run build && electron-builder --mac dmg zip --publish always",
+    "release:github": "node scripts/verify-mac-release-env.mjs && npm run build && electron-builder --mac dmg zip --publish always",
     "dogfood": "electron-vite build && electron-vite preview",
     "preview": "electron-vite preview",
     "dev:electrobun": "npm run build:renderer && electrobun dev",
@@ -154,7 +155,12 @@
       },
       {
         "from": "bundled-extensions",
-        "to": "bundled-extensions"
+        "to": "bundled-extensions",
+        "filter": [
+          "**/*",
+          "!agent-kanban",
+          "!agent-kanban/**"
+        ]
       }
     ],
     "beforeBuild": "scripts/before-build.js",
@@ -174,7 +180,17 @@
         "dmg",
         "zip"
       ],
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "forceCodeSigning": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "CodeSurf uses the microphone for voice dictation and agent voice features.",
+        "NSCameraUsageDescription": "CodeSurf uses the camera for workspace browser and extension surfaces that request camera access."
+      }
     },
     "win": {
       "icon": "resources/icon.ico",

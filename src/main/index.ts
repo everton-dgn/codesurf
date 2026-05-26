@@ -781,7 +781,7 @@ app.whenReady().then(async () => {
     try {
       const { promises: fsP } = await import('fs')
       const raw = await fsP.readFile(mcpConfigPath, 'utf8')
-      const cfg = JSON.parse(raw) as { mcpServers?: Record<string, unknown>, url?: string }
+      const cfg = JSON.parse(raw) as { mcpServers?: Record<string, unknown>, url?: string, updatedAt?: string }
       const contexBase = (typeof cfg.url === 'string' ? `${cfg.url.replace(/\/$/, '')}/mcp` : undefined) ?? getRuntimeContexBase()
       const globalServers = cfg.mcpServers ?? {}
       const normalizedServers = normalizeMcpServers(globalServers, (name) => {
@@ -799,7 +799,7 @@ app.whenReady().then(async () => {
     try {
       const { promises: fsP } = await import('fs')
       const raw = await fsP.readFile(mcpConfigPath, 'utf8')
-      const cfg = JSON.parse(raw) as { mcpServers?: Record<string, unknown>, url?: string }
+      const cfg = JSON.parse(raw) as { mcpServers?: Record<string, unknown>, url?: string, updatedAt?: string }
       const contexBase = (typeof cfg.url === 'string' ? `${cfg.url.replace(/\/$/, '')}/mcp` : undefined) ?? getRuntimeContexBase()
       const contexServer = normalizeMcpServer(cfg.mcpServers?.contex ?? { url: contexBase }, contexBase)
       const customServers = normalizeMcpServers(servers)

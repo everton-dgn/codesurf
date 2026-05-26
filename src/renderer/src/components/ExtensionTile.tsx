@@ -497,13 +497,16 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
     const onMessage = async (event: MessageEvent) => {
       const message = event.data
       if (!message || typeof message !== 'object') return
-      // Filter by tileId instead of event.source — more reliable with custom protocols
+      // Filter by tileId and source so sibling frames cannot spoof extension RPC.
       if (message.tileId && message.tileId !== tileId) return
+
+      const iframeWindow = iframeRef.current?.contentWindow
+      if (!iframeWindow || event.source !== iframeWindow) return
 
       if (message.type === 'contex-bridge-ready' && message.tileId === tileId) {
         bridgeReadyRef.current = true
-        iframeRef.current?.contentWindow?.postMessage({ type: 'contex-theme-vars', vars: themeCssVarsRef.current }, '*')
-        iframeRef.current?.contentWindow?.postMessage({
+        iframeWindow.postMessage({ type: 'contex-theme-vars', vars: themeCssVarsRef.current }, '*')
+        iframeWindow.postMessage({
           type: 'contex-event',
           event: 'tile.resize',
           data: { width: contentWidth, height: contentHeight },
@@ -529,9 +532,9 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
 
       try {
         const result = await rpcHandler(String(message.method ?? ''), message.params)
-        iframeRef.current?.contentWindow?.postMessage({ type: 'contex-rpc-response', id: message.id, result }, '*')
+        iframeWindow.postMessage({ type: 'contex-rpc-response', id: message.id, result }, '*')
       } catch (err) {
-        iframeRef.current?.contentWindow?.postMessage({
+        iframeWindow.postMessage({
           type: 'contex-rpc-response',
           id: message.id,
           error: err instanceof Error ? err.message : String(err),

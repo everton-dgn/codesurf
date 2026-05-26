@@ -9,6 +9,7 @@ import {
   buildOpenClawAgentArgs,
   buildOpenCodeRunArgs,
   parseHermesOutput,
+  parseHermesStreamJsonOutput,
   parseOpenClawOutput,
   parseOpenCodeRunOutput,
   sanitizeAgentCliDiagnostic,
@@ -431,6 +432,12 @@ async function runHermesTurn(participantId: string, spawnRequest: RelaySpawnRequ
       resumeSessionId: existingSessionId,
       ignoreRules: true,
       bypassPermissions: spawnRequest.mode === 'bypassPermissions',
+      // Relay path is batch (Promise<string>); we still use --stream-json so
+      // the consumer sees a faithful event log if it ever taps stdout, and
+      // so a single Hermes binary version is required across both chat and
+      // relay paths. The NDJSON parser concatenates text deltas into the
+      // final string we return here.
+      streamJson: true,
     })
 
     const proc = spawn(hermesBin, args, {
@@ -463,8 +470,17 @@ async function runHermesTurn(participantId: string, spawnRequest: RelaySpawnRequ
         reject(new Error(sanitizeAgentCliDiagnostic(stderr.trim() || `Hermes exited with ${code}`)))
         return
       }
-      const parsed = parseHermesOutput(stdout)
+      const parsed = parseHermesStreamJsonOutput(stdout)
       if (parsed.sessionId) hermesSessions.set(participantId, parsed.sessionId)
+      // If --stream-json produced no parsable events (e.g. Hermes binary
+      // predates the flag), fall back to the legacy text parser so the
+      // relay turn returns something sensible.
+      if (!parsed.text && (!parsed.raw || parsed.raw.length === 0)) {
+        const legacy = parseHermesOutput(stdout)
+        if (legacy.sessionId) hermesSessions.set(participantId, legacy.sessionId)
+        resolve(legacy.text)
+        return
+      }
       resolve(parsed.text)
     })
   })

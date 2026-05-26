@@ -21,6 +21,21 @@ interface BrowserTileState {
 // windowId → tileId → state
 const tiles = new Map<number, Map<string, BrowserTileState>>()
 
+function isAllowedBrowserUrl(value: string): boolean {
+  if (value === 'about:blank') return true
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function safeBrowserUrl(value: string | undefined): string {
+  if (!value) return HOMEPAGE
+  return isAllowedBrowserUrl(value) ? value : HOMEPAGE
+}
+
 function getWindowTiles(windowId: number): Map<string, BrowserTileState> {
   if (!tiles.has(windowId)) tiles.set(windowId, new Map())
   return tiles.get(windowId)!
@@ -32,7 +47,7 @@ function applyMode(state: BrowserTileState): void {
   wc.setZoomFactor(1)
 }
 
-function applyBounds(state: BrowserTileState, win: BrowserWindow): void {
+function applyBounds(state: BrowserTileState): void {
   const { left, top, width, height } = state.bounds
   if (width > 0 && height > 0) {
     state.view.setBounds({
@@ -58,6 +73,13 @@ function sendEvent(win: BrowserWindow, tileId: string, view: BrowserView): void 
 
 function attachListeners(state: BrowserTileState, win: BrowserWindow): void {
   const wc = state.view.webContents
+
+  wc.on('will-navigate', (event, url) => {
+    if (isAllowedBrowserUrl(url)) return
+    event.preventDefault()
+    state.currentUrl = HOMEPAGE
+    void wc.loadURL(HOMEPAGE)
+  })
 
   wc.on('did-navigate', () => {
     state.currentUrl = wc.getURL()
@@ -109,7 +131,7 @@ function getOrCreateTile(
     windowId,
     tileId,
     mode,
-    currentUrl: initialUrl || HOMEPAGE,
+    currentUrl: safeBrowserUrl(initialUrl),
     bounds: { left: 0, top: 0, width: 1, height: 1 }
   }
 
@@ -144,7 +166,7 @@ export function registerBrowserTileIPC(): void {
     // Do NOT navigate here: did-start-loading sends the stale pre-commit URL
     // back to the renderer which would otherwise cause an infinite reload loop.
     state.bounds = payload.bounds
-    applyBounds(state, win)
+    applyBounds(state)
   })
 
   // command: back/forward/reload/stop/home/navigate/mode
@@ -182,8 +204,9 @@ export function registerBrowserTileIPC(): void {
         break
       case 'navigate':
         if (payload.url) {
-          state.currentUrl = payload.url
-          void wc.loadURL(payload.url)
+          const nextUrl = safeBrowserUrl(payload.url)
+          state.currentUrl = nextUrl
+          void wc.loadURL(nextUrl)
         }
         break
       case 'mode':

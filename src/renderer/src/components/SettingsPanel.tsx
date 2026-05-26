@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS, withDefaultSettings } from '../../../shared/types'
 import { Settings, Type, Monitor, FolderOpen, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, Puzzle, RefreshCw, Star, Wrench, Users, FileText, Globe, Eye, EyeOff, PanelRight, Pin, Shield, KeyRound, Image as ImageIcon, Video, Mic } from 'lucide-react'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
-import { THEME_OPTIONS, getThemeCanvasDefaults, resolveEffectiveThemeId, getThemeById, type AppearanceMode } from '../theme'
+import { DEFAULT_THEME_ID, THEME_OPTIONS, getThemeCanvasDefaults, resolveEffectiveThemeId, getThemeById, type AppearanceMode } from '../theme'
 import { ChromeSyncSection } from './settings/ChromeSyncSection'
 import { DisplaySettingsEditor } from './settings/DisplaySettingsEditor'
 import { VoiceSettingsEditor } from './settings/VoiceSettingsEditor'
@@ -602,22 +602,12 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
   }, [updateSettingsPatch])
 
   const applyAppearanceMode = useCallback((mode: AppearanceMode) => {
-    const currentThemeId = settings.themeId
-    if (mode === 'light') {
-      const canvas = getThemeCanvasDefaults('paper-light')
-      updateSettingsPatch({
-        appearance: mode,
-        themeId: 'paper-light',
-        canvasBackground: canvas.background,
-        gridColorSmall: canvas.gridSmall,
-        gridColorLarge: canvas.gridLarge,
-      })
-      return
-    }
-    let nextThemeId = currentThemeId
-    if (currentThemeId === 'paper-light') {
-      nextThemeId = 'default-dark'
-    }
+    const currentThemeId = settingsRef.current.themeId
+    const currentTheme = getThemeById(currentThemeId)
+    const shouldUseLightTheme = mode === 'light' || (mode === 'system' && !systemPrefersDark)
+    const nextThemeId = shouldUseLightTheme
+      ? (currentTheme.mode === 'light' ? currentThemeId : 'paper-light')
+      : (currentTheme.mode === 'dark' ? currentThemeId : DEFAULT_THEME_ID)
     const canvas = getThemeCanvasDefaults(nextThemeId)
     updateSettingsPatch({
       appearance: mode,
@@ -626,7 +616,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
       gridColorSmall: canvas.gridSmall,
       gridColorLarge: canvas.gridLarge,
     })
-  }, [settings.themeId, updateSettingsPatch])
+  }, [systemPrefersDark, updateSettingsPatch])
 
   // Close on Escape
   useEffect(() => {

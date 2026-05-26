@@ -1,6 +1,7 @@
 import { net, protocol } from 'electron'
-import { extname } from 'path'
+import { extname, resolve } from 'path'
 import { pathToFileURL } from 'url'
+import { homedir } from 'os'
 
 // Renderer-safe scheme for loading arbitrary local files as <img>/<video>/<audio>
 // sources. The dev renderer origin is http://localhost:..., which means direct
@@ -15,6 +16,7 @@ import { pathToFileURL } from 'url'
 // loading work correctly for large media files.
 
 const SCHEME = 'contex-file'
+const SENSITIVE_HOME_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.config'])
 
 const MIME_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
@@ -47,6 +49,30 @@ function inferMimeType(filePath: string): string {
   return MIME_TYPES[extname(filePath).toLowerCase()] || 'application/octet-stream'
 }
 
+function isSensitiveHomePath(filePath: string): boolean {
+  const home = resolve(homedir())
+  const resolved = resolve(filePath)
+  if (resolved === home) return false
+  if (!resolved.startsWith(`${home}/`)) return false
+  const firstSegment = resolved.slice(home.length + 1).split(/[\/]/)[0]
+  return SENSITIVE_HOME_DIRS.has(firstSegment)
+}
+
+function validateRequestPath(filePath: string): string {
+  const resolved = resolve(filePath)
+  const mimeType = inferMimeType(resolved)
+
+  if (mimeType === 'application/octet-stream') {
+    throw new Error(`Unsupported contex-file type: ${extname(resolved) || '(none)'}`)
+  }
+
+  if (isSensitiveHomePath(resolved)) {
+    throw new Error('Access denied: sensitive home directory')
+  }
+
+  return resolved
+}
+
 function decodeRequestPath(url: URL): string {
   const host = decodeURIComponent(url.host || '')
   const pathname = decodeURIComponent(url.pathname || '')
@@ -69,7 +95,6 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
       corsEnabled: true,
       stream: true,
-      bypassCSP: true,
     },
   },
 ])
@@ -78,7 +103,7 @@ export function registerFileProtocol(): void {
   protocol.handle(SCHEME, async (request) => {
     try {
       const url = new URL(request.url)
-      const filePath = decodeRequestPath(url)
+      const filePath = validateRequestPath(decodeRequestPath(url))
 
       // Forward range headers so video seeking works without loading the whole file
       const rangeHeader = request.headers.get('range')
