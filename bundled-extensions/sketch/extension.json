@@ -10,12 +10,20 @@
     "chatSurfaces": [{
       "id": "sketch",
       "label": "Sketch",
-      "description": "Draw a quick sketch and attach it to your next message.",
+      "description": "Draw or import a screenshot and attach it to your next message or Builder pass.",
       "icon": "pencil",
       "entry": "surface/index.html",
       "emits": "image",
       "defaultHeight": 280,
       "minHeight": 180
-    }]
+    }],
+    "context": {
+      "produces": ["ctx:sketch:image", "ctx:sketch:design_handoff"],
+      "consumes": ["ctx:builder:visual_refs"]
+    },
+    "actions": [
+      { "name": "getPayload", "description": "Return the current sketch image payload and design handoff metadata." },
+      { "name": "clear", "description": "Clear the current sketch canvas." }
+    ]
   }
 }

@@ -139,13 +139,31 @@
 
   function $(id) { return document.getElementById(id) }
 
+  function publishQaContext(data) {
+    if (!window.contex || !window.contex.context) return
+    if (!data) {
+      window.contex.context.set('ctx:qa-workbench:report', null).catch(() => {})
+      return
+    }
+    const browserMatch = data.match(/^Browsers: (\d+)/m)
+    const issueMatch = data.match(/^Issues: (\d+)/m)
+    window.contex.context.set('ctx:qa-workbench:report', {
+      report: data,
+      browserCount: browserMatch ? Number(browserMatch[1]) : 0,
+      issueCount: issueMatch ? Number(issueMatch[1]) : 0,
+      generatedAt: Date.now(),
+    }).catch(() => {})
+  }
+
   function publishPayload() {
     if (!window.contex || !window.contex.surface) return
     if (!state.payload || !state.payload.data) {
       window.contex.surface.clear()
+      publishQaContext(null)
       return
     }
     window.contex.surface.setPayload(state.payload)
+    publishQaContext(String(state.payload.data || ''))
   }
 
   function render() {

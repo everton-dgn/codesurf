@@ -117,6 +117,27 @@ describe('chatSurfaceHostRpc', () => {
     })
   })
 
+  test('handleBasicChatSurfaceRpc can request another chat surface from inside a chat surface', async () => {
+    const requests: unknown[] = []
+    const result = await handleBasicChatSurfaceRpc({
+      method: 'chat.openSurface',
+      params: { request: { extId: 'qa-workbench', surfaceId: 'qa-report', preferredTileId: 'chat-1' } },
+      surface,
+      connectedPeerIds: [],
+      workspaceId: 'ws-1',
+      workspacePath: '/tmp/demo',
+      themeColors: {},
+      extensionsApi: {},
+      openChatSurface: async (request) => {
+        requests.push(request)
+        return true
+      },
+    })
+
+    expect(result).toEqual({ handled: true, result: true })
+    expect(requests).toEqual([{ extId: 'qa-workbench', surfaceId: 'qa-report', preferredTileId: 'chat-1', sourceTileId: 'surf-123' }])
+  })
+
   test('handleBasicChatSurfaceRpc returns normalized payload and workspace path', async () => {
     const payloadResult = await handleBasicChatSurfaceRpc({
       method: 'surface.setPayload',

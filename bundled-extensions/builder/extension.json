@@ -42,8 +42,23 @@
       { "key": "baseUrl", "label": "API Base URL", "type": "string", "default": "https://openrouter.ai/api/v1" }
     ],
     "context": {
-      "produces": ["ctx:builder"],
-      "consumes": ["ctx:design", "ctx:code", "ctx:research", "ctx:web", "ctx:sketch"]
+      "produces": [
+        "ctx:builder",
+        "ctx:builder:visual_refs",
+        "ctx:builder:visual_verification_prompt",
+        "ctx:builder:qa_handoff"
+      ],
+      "consumes": [
+        "ctx:design",
+        "ctx:code",
+        "ctx:research",
+        "ctx:web",
+        "ctx:sketch",
+        "ctx:sketch:image",
+        "ctx:qa-workbench:report",
+        "ctx:browser:evidence_summary",
+        "ctx:browser:page_health"
+      ]
     },
     "actions": [
       { "name": "generate", "description": "Generate builder variants from a prompt. Params: { prompt: string, variantCount?: 1|2|3 }" },
@@ -51,6 +66,9 @@
       { "name": "getHtml", "description": "Get the selected builder HTML" },
       { "name": "getStatus", "description": "Get current builder generation status" },
       { "name": "setPrompt", "description": "Set the current builder prompt without generating. Params: { prompt: string }" },
+      { "name": "addVisualReference", "description": "Attach a screenshot or sketch reference. Params: { dataUrl: string, label?: string, mime?: string, source?: string, note?: string }" },
+      { "name": "clearVisualReferences", "description": "Remove imported screenshot/sketch references from Builder." },
+      { "name": "buildVisualVerificationPrompt", "description": "Create a screenshot/QA-aware visual verification prompt. Params: { mode?: 'match-screenshot'|'visual-verify'|'qa-fix' }" },
       { "name": "setSettings", "description": "Update builder API settings. Params: { model?: string, baseUrl?: string, apiKey?: string }" }
     ]
   },

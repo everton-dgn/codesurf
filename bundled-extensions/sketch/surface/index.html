@@ -148,11 +148,17 @@
     <button id="redo" title="Redo">&#8631;</button>
     <button id="delete" title="Delete selection">&#128465;</button>
     <button id="clear" title="Clear all">&#10060;</button>
+
+    <div class="sep"></div>
+
+    <button id="importImage" title="Import screenshot/image">&#8682;</button>
+    <button id="sendBuilder" title="Open Builder with this sketch as visual context">&#10022;</button>
+    <input id="imageInput" type="file" accept="image/*" multiple hidden />
   </div>
   <div class="canvas-wrap" id="wrap">
     <canvas id="c"></canvas>
     <div class="status" id="status"></div>
-    <div class="drop-hint">Drop image to insert</div>
+    <div class="drop-hint">Drop screenshot or image to insert</div>
   </div>
 
   <script>
@@ -163,6 +169,7 @@
       const toolbar = document.getElementById('toolbar')
       const thicknessEl = document.getElementById('thickness')
       const statusEl = document.getElementById('status')
+      const imageInput = document.getElementById('imageInput')
 
       // ── State ────────────────────────────────────────────────────────────
       let tool = 'pen'
@@ -545,6 +552,19 @@
       canvas.addEventListener('pointercancel', endDraw)
       canvas.addEventListener('pointerleave', endDraw)
 
+      function clearSketch() {
+        pushUndo()
+        shapes = []
+        selectedIdx = -1
+        render()
+      }
+
+      function openBuilderWithSketch() {
+        notifyPayload()
+        if (!window.contex || !window.contex.chat || typeof window.contex.chat.openSurface !== 'function') return
+        window.contex.chat.openSurface({ extId: 'builder', surfaceId: 'builder' }).catch(() => {})
+      }
+
       // ── Toolbar ──────────────────────────────────────────────────────────
       toolbar.addEventListener('click', (e) => {
         const btn = e.target.closest('button')
@@ -575,17 +595,24 @@
           }
           return
         }
-        if (btn.id === 'clear') {
-          pushUndo()
-          shapes = []
-          selectedIdx = -1
-          render()
-          return
-        }
+        if (btn.id === 'clear') { clearSketch(); return }
+        if (btn.id === 'importImage') { imageInput.click(); return }
+        if (btn.id === 'sendBuilder') { openBuilderWithSketch(); return }
       })
 
       thicknessEl.addEventListener('input', () => {
         thickness = parseInt(thicknessEl.value, 10) || 2
+      })
+
+      imageInput.addEventListener('change', async (event) => {
+        const files = Array.from(event.target.files || []).filter(f => /^image\//.test(f.type))
+        for (const file of files) {
+          try {
+            const dataUrl = await fileToDataUrl(file)
+            insertImageFromDataUrl(dataUrl, null)
+          } catch (_) { /* ignore */ }
+        }
+        imageInput.value = ''
       })
 
       function pushUndo() {
@@ -814,21 +841,67 @@
         return off.toDataURL('image/png')
       }
 
+      function buildSketchPayload() {
+        const dataUrl = exportPng()
+        if (!dataUrl) return null
+        const base64 = dataUrl.replace(/^data:image\/png;base64,/, '')
+        return {
+          kind: 'image',
+          data: base64,
+          dataUrl,
+          mime: 'image/png',
+          ext: 'png',
+          label: 'Sketch screenshot',
+          width: Math.round(canvas.getBoundingClientRect().width),
+          height: Math.round(canvas.getBoundingClientRect().height),
+          shapeCount: shapes.length,
+          updatedAt: Date.now(),
+        }
+      }
+
+      function publishSketchContext(payload) {
+        if (!window.contex || !window.contex.context) return
+        if (!payload) {
+          window.contex.context.set('ctx:sketch:image', null).catch(() => {})
+          window.contex.context.set('ctx:sketch:design_handoff', null).catch(() => {})
+          return
+        }
+        window.contex.context.set('ctx:sketch:image', {
+          label: payload.label,
+          data: payload.data,
+          dataUrl: payload.dataUrl,
+          mime: payload.mime,
+          width: payload.width,
+          height: payload.height,
+          shapeCount: payload.shapeCount,
+          updatedAt: payload.updatedAt,
+        }).catch(() => {})
+        window.contex.context.set('ctx:sketch:design_handoff', {
+          prompt: 'Use ctx:sketch:image as a visual reference in Builder. Match layout intent, annotations, arrows, and imported screenshots.',
+          imageLabel: payload.label,
+          width: payload.width,
+          height: payload.height,
+          shapeCount: payload.shapeCount,
+          updatedAt: payload.updatedAt,
+        }).catch(() => {})
+      }
+
       function notifyPayload() {
         try {
           if (!window.contex || !window.contex.surface) return
-          const dataUrl = exportPng()
-          if (!dataUrl) {
+          const payload = buildSketchPayload()
+          if (!payload) {
             window.contex.surface.clear()
+            publishSketchContext(null)
             return
           }
-          const base64 = dataUrl.replace(/^data:image\/png;base64,/, '')
           window.contex.surface.setPayload({
             kind: 'image',
-            data: base64,
-            mime: 'image/png',
-            ext: 'png',
+            data: payload.data,
+            mime: payload.mime,
+            ext: payload.ext,
           })
+          publishSketchContext(payload)
         } catch (_) { /* ignore */ }
       }
 
@@ -846,11 +919,19 @@
           notifyPayload()
         })
         window.contex.surface.onClear(() => {
-          pushUndo()
-          shapes = []
-          selectedIdx = -1
-          render()
+          clearSketch()
         })
+        if (window.contex.actions) {
+          window.contex.actions.register('getPayload', 'Return the current sketch image payload and design handoff metadata', () => {
+            const payload = buildSketchPayload()
+            publishSketchContext(payload)
+            return payload ? { ok: true, payload } : { ok: false, error: 'Sketch is empty' }
+          })
+          window.contex.actions.register('clear', 'Clear the current sketch canvas', () => {
+            clearSketch()
+            return { ok: true }
+          })
+        }
       })
     })()
   </script>

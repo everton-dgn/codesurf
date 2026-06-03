@@ -18,6 +18,13 @@ export type ExtensionsApiLike = {
   setSettings?: (extId: string, settings: Record<string, unknown>) => Promise<boolean>
 }
 
+export type ChatSurfaceOpenRequest = {
+  extId: string
+  surfaceId: string
+  preferredTileId?: string
+  sourceTileId?: string
+}
+
 export type BasicChatSurfaceRpcArgs = {
   method: string
   params: any
@@ -27,6 +34,7 @@ export type BasicChatSurfaceRpcArgs = {
   workspacePath: string | null
   themeColors: Record<string, unknown>
   extensionsApi: ExtensionsApiLike
+  openChatSurface?: (request: ChatSurfaceOpenRequest) => Promise<unknown> | unknown
 }
 
 export type BasicChatSurfaceRpcResult =
@@ -70,7 +78,7 @@ export function buildChatSurfaceMeta(
 }
 
 export async function handleBasicChatSurfaceRpc(args: BasicChatSurfaceRpcArgs): Promise<BasicChatSurfaceRpcResult> {
-  const { method, params, surface, connectedPeerIds, workspaceId, workspacePath, themeColors, extensionsApi } = args
+  const { method, params, surface, connectedPeerIds, workspaceId, workspacePath, themeColors, extensionsApi, openChatSurface } = args
 
   if (method === 'surface.setPayload') {
     return {
@@ -128,6 +136,27 @@ export async function handleBasicChatSurfaceRpc(args: BasicChatSurfaceRpcArgs): 
       handled: true,
       result: await extensionsApi.invoke?.(surface.extId, invokedMethod, ...invokeArgs),
     }
+  }
+
+  if (method === 'chat.openSurface') {
+    const request = params?.request ?? params ?? {}
+    const extId = typeof request.extId === 'string' ? request.extId.trim() : ''
+    const surfaceId = typeof (request.surfaceId ?? request.id) === 'string' ? String(request.surfaceId ?? request.id).trim() : ''
+    const preferredTileId = typeof request.preferredTileId === 'string' ? request.preferredTileId.trim() : ''
+    const sourceTileId = typeof request.sourceTileId === 'string' ? request.sourceTileId.trim() : surface.instanceId
+    if (!extId || !surfaceId) {
+      throw new Error('Missing chat surface target')
+    }
+    if (!openChatSurface) {
+      return { handled: false }
+    }
+    await openChatSurface({
+      extId,
+      surfaceId,
+      ...(preferredTileId ? { preferredTileId } : {}),
+      ...(sourceTileId ? { sourceTileId } : {}),
+    })
+    return { handled: true, result: true }
   }
 
   return { handled: false }

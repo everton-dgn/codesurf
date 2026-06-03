@@ -297,6 +297,89 @@
     line-height: 1;
   }
 
+  .design-mode-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px;
+    border-radius: 14px;
+    border: 1px solid var(--ct-border, rgba(0,0,0,.1));
+    background: color-mix(in srgb, var(--ct-panel-2, rgba(0,0,0,.06)) 72%, transparent);
+  }
+
+  .design-mode-head,
+  .prompt-chip-row,
+  .visual-refs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .design-mode-title {
+    font-size: 10px;
+    font-weight: 780;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ct-dim, #999);
+    margin-right: auto;
+  }
+
+  .prompt-chip,
+  .visual-ref-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    border-radius: 999px;
+    border: 1px solid var(--ct-border, rgba(0,0,0,.1));
+    background: var(--ct-panel, rgba(0,0,0,.04));
+    color: var(--ct-text, #111);
+    font-size: 10px;
+  }
+
+  .prompt-chip {
+    padding: 0 9px;
+  }
+
+  .visual-ref-card {
+    max-width: 210px;
+    padding: 3px 7px 3px 3px;
+  }
+
+  .visual-ref-card img {
+    width: 26px;
+    height: 18px;
+    border-radius: 6px;
+    object-fit: cover;
+    border: 1px solid var(--ct-border, rgba(0,0,0,.1));
+    background: var(--ct-panel-2, rgba(0,0,0,.06));
+    flex-shrink: 0;
+  }
+
+  .visual-ref-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .visual-ref-card button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--ct-dim, #999);
+    cursor: pointer;
+    padding: 0;
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .design-drop-active .design-mode-panel {
+    border-color: color-mix(in srgb, var(--ct-accent, #4f46e5) 42%, transparent);
+    background: var(--ct-accent-s, rgba(79,70,229,.12));
+  }
+
   .composer-frame {
     display: flex;
     flex-direction: column;
@@ -577,7 +660,21 @@
       </div>
 
       <div class="composer">
+        <input id="screenshotInput" type="file" accept="image/*" multiple hidden>
         <div id="wantedChips" class="wanted-chips"></div>
+        <div class="design-mode-panel" id="designModePanel">
+          <div class="design-mode-head">
+            <div class="design-mode-title">Frontend / design mode</div>
+            <button id="screenshotBtn" type="button" class="control-btn" title="Import screenshots">＋ Screenshot</button>
+            <button id="qaHandoffBtn" type="button" class="control-btn" title="Open QA/browser evidence report">QA evidence</button>
+          </div>
+          <div class="prompt-chip-row">
+            <button type="button" class="prompt-chip" data-template="match-screenshot">Match screenshot</button>
+            <button type="button" class="prompt-chip" data-template="visual-verify">Visual verify</button>
+            <button type="button" class="prompt-chip" data-template="qa-fix">Fix QA/browser issues</button>
+          </div>
+          <div id="visualRefs" class="visual-refs"></div>
+        </div>
         <div class="composer-frame">
           <textarea id="prompt" class="composer-input" rows="2" placeholder="Describe the design you want, or request changes to wanted variants."></textarea>
           <div class="composer-row">
@@ -643,6 +740,13 @@
   var DEFAULTS = { apiKey: '', model: 'anthropic/claude-sonnet-4', baseUrl: 'https://openrouter.ai/api/v1' };
   var STATE_VERSION = 1;
   var HISTORY_LIMIT = 30;
+  var MAX_VISUAL_REFS = 6;
+  var MAX_VISUAL_REF_EDGE = 1600;
+  var PROMPT_TEMPLATES = {
+    'match-screenshot': 'Use the imported screenshot(s) as the visual source of truth. Recreate the visible layout, density, hierarchy, spacing, radius, typography scale, color mood, and responsive behavior. Keep the output as production-ready HTML only.',
+    'visual-verify': 'Run a visual verification pass against the imported screenshot(s), sketch context, wanted variants, and current QA evidence. Internally identify mismatches in spacing, hierarchy, contrast, overflow, copy, and interaction states, then return a corrected polished HTML variant only.',
+    'qa-fix': 'Use the QA/browser evidence context to fix runtime issues, console errors, load failures, broken interactions, overflow, responsive bugs, and missing visible states. Preserve the intended screenshot DNA while returning only corrected HTML.'
+  };
   var STATE_STORAGE_PREFIX = 'builder-state-v1:';
   var TILE_STATE_KEY = 'builderState';
   var persistTimer = null;
@@ -657,6 +761,8 @@
     variants: [],
     activeVariantId: null,
     wantedRefs: [],
+    visualRefs: [],
+    lastVisualPrompt: '',
     expandedVariantId: null,
     currentBuildId: null,
     history: [],
@@ -759,6 +865,44 @@
     };
   }
 
+  function isImageDataUrl(value) {
+    return typeof value === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(value);
+  }
+
+  function cloneVisualRef(ref) {
+    if (!ref || typeof ref !== 'object') return null;
+    var dataUrl = typeof ref.dataUrl === 'string' ? ref.dataUrl : '';
+    if (!isImageDataUrl(dataUrl)) return null;
+    return {
+      id: typeof ref.id === 'string' && ref.id ? ref.id : uid('visual'),
+      label: typeof ref.label === 'string' && ref.label ? ref.label : 'Screenshot',
+      dataUrl: dataUrl,
+      mime: typeof ref.mime === 'string' && ref.mime ? ref.mime : ((dataUrl.match(/^data:([^;]+)/) || [])[1] || 'image/png'),
+      width: Number(ref.width) || null,
+      height: Number(ref.height) || null,
+      source: typeof ref.source === 'string' && ref.source ? ref.source : 'import',
+      note: typeof ref.note === 'string' ? ref.note : '',
+      createdAt: Number(ref.createdAt) || Date.now()
+    };
+  }
+
+  function visualRefPublic(ref, includeDataUrl) {
+    var item = cloneVisualRef(ref);
+    if (!item) return null;
+    return {
+      id: item.id,
+      label: item.label,
+      mime: item.mime,
+      width: item.width,
+      height: item.height,
+      source: item.source,
+      note: item.note,
+      createdAt: item.createdAt,
+      hasDataUrl: !!item.dataUrl,
+      dataUrl: includeDataUrl === false ? undefined : item.dataUrl
+    };
+  }
+
   function sanitizeVariants(value) {
     if (!Array.isArray(value)) return [];
     return value.map(cloneVariant).filter(Boolean).slice(0, 3);
@@ -767,6 +911,11 @@
   function sanitizeWantedRefs(value) {
     if (!Array.isArray(value)) return [];
     return value.map(cloneWantedRef).filter(function(item) { return item && item.html; }).slice(0, 12);
+  }
+
+  function sanitizeVisualRefs(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map(cloneVisualRef).filter(Boolean).slice(0, MAX_VISUAL_REFS);
   }
 
   function currentPromptValue() {
@@ -846,6 +995,7 @@
       variants: sanitizeVariants(state.variants),
       activeVariantId: state.activeVariantId,
       wantedRefs: sanitizeWantedRefs(state.wantedRefs),
+      visualRefs: sanitizeVisualRefs(state.visualRefs),
       history: sanitizeHistory(state.history),
       updatedAt: Date.now()
     };
@@ -863,6 +1013,7 @@
       ? saved.activeVariantId
       : (variants[0] ? variants[0].id : null);
     state.wantedRefs = sanitizeWantedRefs(saved.wantedRefs);
+    state.visualRefs = sanitizeVisualRefs(saved.visualRefs);
     state.expandedVariantId = null;
     if (typeof saved.prompt === 'string' && $('prompt')) {
       $('prompt').value = saved.prompt;
@@ -1087,6 +1238,13 @@
     window.contex.context.set('ctx:builder:variantCount', state.variantCount);
     window.contex.context.set('ctx:builder:currentBuildId', state.currentBuildId);
     window.contex.context.set('ctx:builder:history', historySummaries);
+    window.contex.context.set('ctx:builder:visual_refs', allVisualRefs().map(function(ref) { return visualRefPublic(ref, true); }).filter(Boolean));
+    window.contex.context.set('ctx:builder:visual_verification_prompt', buildVisualVerificationPrompt('visual-verify'));
+    window.contex.context.set('ctx:builder:qa_handoff', {
+      prompt: buildVisualVerificationPrompt('qa-fix'),
+      reportContextCount: findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:browser:evidence_summary', 'ctx:browser:page_health']).length,
+      updatedAt: Date.now()
+    });
     if (errorMessage !== undefined) window.contex.context.set('ctx:artifact:error', errorMessage || null);
     publishChatSurfacePayload(selected ? selected.html : '');
   }
@@ -1111,6 +1269,90 @@
     }).join('\n\n');
   }
 
+  function findPeerContextEntries(keys) {
+    var wanted = Array.isArray(keys) ? keys : [keys];
+    var entries = [];
+    Object.keys(state.peerContext || {}).forEach(function(peerId) {
+      var bucket = state.peerContext[peerId] || {};
+      Object.keys(bucket).forEach(function(key) {
+        if (wanted.indexOf(key) < 0) return;
+        entries.push({ peerId: peerId, key: key, value: bucket[key] });
+      });
+    });
+    return entries;
+  }
+
+  function dataUrlFromContextValue(value) {
+    if (typeof value === 'string' && isImageDataUrl(value)) return value;
+    if (!value || typeof value !== 'object') return '';
+    if (typeof value.dataUrl === 'string' && isImageDataUrl(value.dataUrl)) return value.dataUrl;
+    if (typeof value.image === 'string' && isImageDataUrl(value.image)) return value.image;
+    if (typeof value.data === 'string') {
+      if (isImageDataUrl(value.data)) return value.data;
+      var mime = typeof value.mime === 'string' && /^image\//.test(value.mime) ? value.mime : 'image/png';
+      if (/^[A-Za-z0-9+/=\s]+$/.test(value.data.slice(0, 80))) return 'data:' + mime + ';base64,' + value.data.replace(/\s+/g, '');
+    }
+    return '';
+  }
+
+  function peerVisualRefs() {
+    return findPeerContextEntries('ctx:sketch:image').map(function(entry, index) {
+      var dataUrl = dataUrlFromContextValue(entry.value);
+      if (!dataUrl) return null;
+      var value = entry.value && typeof entry.value === 'object' ? entry.value : {};
+      return cloneVisualRef({
+        id: 'peer-' + entry.peerId + '-' + index,
+        label: value.label || value.title || 'Sketch screenshot',
+        dataUrl: dataUrl,
+        mime: value.mime || ((dataUrl.match(/^data:([^;]+)/) || [])[1] || 'image/png'),
+        width: value.width,
+        height: value.height,
+        source: 'ctx:sketch:image',
+        note: value.note || 'Imported from Sketch context',
+        createdAt: value.createdAt || Date.now()
+      });
+    }).filter(Boolean);
+  }
+
+  function allVisualRefs() {
+    var seen = {};
+    return sanitizeVisualRefs(state.visualRefs.concat(peerVisualRefs())).filter(function(ref) {
+      var key = ref.dataUrl.slice(0, 180);
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).slice(0, MAX_VISUAL_REFS);
+  }
+
+  function buildVisualContextText() {
+    var refs = allVisualRefs();
+    if (!refs.length) return '';
+    return '\n\nImported screenshots / sketch references attached as image inputs:\n' + refs.map(function(ref, index) {
+      var size = ref.width && ref.height ? (' — ' + ref.width + '×' + ref.height) : '';
+      var note = ref.note ? (' — ' + ref.note) : '';
+      return 'Screenshot ' + (index + 1) + ': ' + ref.label + size + ' [' + ref.source + ']' + note;
+    }).join('\n');
+  }
+
+  function buildQaEvidenceContextText() {
+    var entries = findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:browser:evidence_summary', 'ctx:browser:page_health']);
+    if (!entries.length) return '';
+    return '\n\nQA/browser evidence context:\n' + entries.map(function(entry) {
+      var rendered = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
+      return '[' + entry.peerId + '] ' + entry.key + ': ' + truncate(rendered, 2200);
+    }).join('\n');
+  }
+
+  function buildVisualVerificationPrompt(mode) {
+    var key = PROMPT_TEMPLATES[mode] ? mode : 'visual-verify';
+    var refs = allVisualRefs();
+    var qaEntries = findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:browser:evidence_summary', 'ctx:browser:page_health']);
+    var lines = [PROMPT_TEMPLATES[key]];
+    if (refs.length) lines.push('Use ' + refs.length + ' attached screenshot/sketch image reference' + (refs.length === 1 ? '' : 's') + ' as visual evidence.');
+    if (qaEntries.length) lines.push('Also include the available QA/browser evidence context in the fix.');
+    return lines.join(' ');
+  }
+
   function buildUserPrompt(basePrompt, index, total) {
     var mode = currentThemeMode();
     var hasWanted = state.wantedRefs.length > 0;
@@ -1130,8 +1372,19 @@
       'Scope rule: if this prompt describes a component or partial UI, return only that component at natural bounds. Do not generate a full phone screen, browser shell, or empty page chrome unless explicitly requested.',
       basePrompt.trim(),
       buildWantedContextText(),
+      buildVisualContextText(),
+      buildQaEvidenceContextText(),
       peerContextText()
     ].filter(Boolean).join('\n\n');
+  }
+
+  function buildUserMessageContent(basePrompt, index, total) {
+    var text = buildUserPrompt(basePrompt, index, total);
+    var refs = allVisualRefs();
+    if (!refs.length) return text;
+    return [{ type: 'text', text: text }].concat(refs.map(function(ref) {
+      return { type: 'image_url', image_url: { url: ref.dataUrl } };
+    }));
   }
 
   async function generateVariants() {
@@ -1173,7 +1426,7 @@
             max_tokens: 16384,
             messages: [
               { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'user', content: buildUserPrompt(prompt, i, state.variantCount) }
+              { role: 'user', content: buildUserMessageContent(prompt, i, state.variantCount) }
             ]
           }),
           signal: state.abortCtrl.signal
@@ -1225,6 +1478,142 @@
       setGenerating(false);
       render();
     }
+  }
+
+  function loadImageElement(dataUrl) {
+    return new Promise(function(resolve, reject) {
+      var img = new Image();
+      img.onload = function() { resolve(img); };
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
+
+  function downscaleDataUrl(dataUrl, mime) {
+    return loadImageElement(dataUrl).then(function(img) {
+      var width = img.naturalWidth || img.width || 1;
+      var height = img.naturalHeight || img.height || 1;
+      var scale = Math.min(1, MAX_VISUAL_REF_EDGE / Math.max(width, height));
+      if (scale >= 1) return { dataUrl: dataUrl, width: width, height: height, mime: mime || ((dataUrl.match(/^data:([^;]+)/) || [])[1] || 'image/png') };
+      var canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      var outMime = mime === 'image/jpeg' || mime === 'image/webp' ? mime : 'image/png';
+      return { dataUrl: canvas.toDataURL(outMime, 0.92), width: canvas.width, height: canvas.height, mime: outMime };
+    });
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function() { resolve(String(reader.result || '')); };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function addVisualReference(params) {
+    var raw = params && (params.dataUrl || params.image || params.url || params.data) ? String(params.dataUrl || params.image || params.url || params.data) : '';
+    var mime = params && typeof params.mime === 'string' ? params.mime : '';
+    var dataUrl = isImageDataUrl(raw) ? raw : (raw && /^image\//.test(mime) ? 'data:' + mime + ';base64,' + raw.replace(/\s+/g, '') : '');
+    if (!isImageDataUrl(dataUrl)) return Promise.resolve({ ok: false, error: 'Missing image data URL' });
+    return downscaleDataUrl(dataUrl, mime).then(function(normalized) {
+      var ref = cloneVisualRef({
+        id: uid('visual'),
+        label: params && params.label ? String(params.label) : 'Screenshot ' + (state.visualRefs.length + 1),
+        dataUrl: normalized.dataUrl,
+        mime: normalized.mime,
+        width: normalized.width,
+        height: normalized.height,
+        source: params && params.source ? String(params.source) : 'import',
+        note: params && params.note ? String(params.note) : '',
+        createdAt: Date.now()
+      });
+      state.visualRefs = [ref].concat(state.visualRefs).slice(0, MAX_VISUAL_REFS);
+      render();
+      schedulePersistBuilderState();
+      return { ok: true, ref: visualRefPublic(ref, false) };
+    }).catch(function(error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    });
+  }
+
+  function importVisualFiles(files) {
+    var list = Array.prototype.slice.call(files || []).filter(function(file) { return file && /^image\//.test(file.type || ''); });
+    if (!list.length) return;
+    Promise.all(list.slice(0, MAX_VISUAL_REFS).map(function(file) {
+      return fileToDataUrl(file).then(function(dataUrl) {
+        return addVisualReference({ dataUrl: dataUrl, mime: file.type || 'image/png', label: file.name || 'Screenshot', source: 'file' });
+      });
+    })).then(function() { hideError(); render(); });
+  }
+
+  function removeVisualRef(id) {
+    state.visualRefs = state.visualRefs.filter(function(ref) { return ref.id !== id; });
+    render();
+    schedulePersistBuilderState();
+  }
+
+  function clearVisualReferences() {
+    state.visualRefs = [];
+    render();
+    schedulePersistBuilderState();
+    return { ok: true };
+  }
+
+  function appendPromptText(text) {
+    var input = $('prompt');
+    var current = input.value.trim();
+    input.value = current ? (current + '\n\n' + text) : text;
+    state.lastVisualPrompt = text;
+    syncPromptHeight();
+    render();
+  }
+
+  function applyPromptTemplate(mode) {
+    var prompt = buildVisualVerificationPrompt(mode);
+    appendPromptText(prompt);
+    return prompt;
+  }
+
+  function openQaReport() {
+    if (!window.contex || !window.contex.chat || typeof window.contex.chat.openSurface !== 'function') {
+      showError('Chat surface launcher unavailable for QA evidence.');
+      return;
+    }
+    window.contex.chat.openSurface({ extId: 'qa-workbench', surfaceId: 'qa-report' }).catch(function(error) {
+      showError(error && error.message ? error.message : String(error));
+    });
+  }
+
+  function renderVisualRefs() {
+    var root = $('visualRefs');
+    if (!root) return;
+    var refs = allVisualRefs();
+    root.innerHTML = '';
+    root.style.display = refs.length ? 'flex' : 'none';
+    refs.forEach(function(ref) {
+      var card = document.createElement('div');
+      card.className = 'visual-ref-card';
+      var img = document.createElement('img');
+      img.alt = ref.label;
+      img.src = ref.dataUrl;
+      var label = document.createElement('span');
+      label.className = 'visual-ref-label';
+      label.textContent = ref.label + (ref.width && ref.height ? ' · ' + ref.width + '×' + ref.height : '');
+      card.appendChild(img);
+      card.appendChild(label);
+      if (String(ref.source || '').indexOf('ctx:') !== 0) {
+        var close = document.createElement('button');
+        close.type = 'button';
+        close.textContent = '×';
+        close.onclick = function(event) { event.stopPropagation(); removeVisualRef(ref.id); };
+        card.appendChild(close);
+      }
+      root.appendChild(card);
+    });
   }
 
   function renderWantedChips() {
@@ -1300,6 +1689,11 @@
       count += Object.keys(state.peerContext[peerId] || {}).length;
     });
 
+    if (allVisualRefs().length > 0) {
+      $('peerContextSummary').textContent = allVisualRefs().length + ' visual reference' + (allVisualRefs().length === 1 ? '' : 's') + ' will be sent as image input.';
+      return;
+    }
+
     if (state.wantedRefs.length > 0) {
       $('peerContextSummary').textContent = 'Wanted chips will be used as reference context for the next generation.';
       return;
@@ -1344,6 +1738,7 @@
   function render() {
     syncCurrentBuildToHistory();
     renderWantedChips();
+    renderVisualRefs();
     renderGrid();
     renderHistoryControls();
     renderContextSummary();
@@ -1441,6 +1836,22 @@
         return { ok: true };
       });
 
+      window.contex.actions.register('addVisualReference', 'Attach a screenshot or sketch reference', function(params) {
+        return addVisualReference(params || {});
+      });
+
+      window.contex.actions.register('clearVisualReferences', 'Remove imported screenshot/sketch references', function() {
+        return clearVisualReferences();
+      });
+
+      window.contex.actions.register('buildVisualVerificationPrompt', 'Create a screenshot/QA-aware prompt', function(params) {
+        var mode = params && params.mode ? String(params.mode) : 'visual-verify';
+        var prompt = buildVisualVerificationPrompt(mode);
+        state.lastVisualPrompt = prompt;
+        render();
+        return { ok: true, prompt: prompt, visualRefCount: allVisualRefs().length };
+      });
+
       window.contex.actions.register('setSettings', 'Update Builder settings', function(params) {
         if (params.model) state.config.model = String(params.model);
         if (params.baseUrl) state.config.baseUrl = String(params.baseUrl);
@@ -1462,6 +1873,7 @@
         state.variants = [];
         state.activeVariantId = null;
         state.wantedRefs = [];
+        state.visualRefs = [];
         state.expandedVariantId = null;
         state.currentBuildId = null;
         state.generating = false;
@@ -1491,6 +1903,45 @@
 
     setVariantCount(state.variantCount);
     $('generateBtn').onclick = generateVariants;
+    $('screenshotBtn').onclick = function() { $('screenshotInput').click(); };
+    $('screenshotInput').onchange = function(event) { importVisualFiles(event.target.files); event.target.value = ''; };
+    $('qaHandoffBtn').onclick = openQaReport;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-template]'), function(button) {
+      button.onclick = function() { applyPromptTemplate(button.getAttribute('data-template') || 'visual-verify'); };
+    });
+    var surfaceEl = document.querySelector('.surface');
+    if (surfaceEl) {
+      ['dragenter', 'dragover'].forEach(function(type) {
+        surfaceEl.addEventListener(type, function(event) {
+          var files = event.dataTransfer && Array.prototype.slice.call(event.dataTransfer.files || []);
+          var hasImage = files && files.some(function(file) { return /^image\//.test(file.type || ''); });
+          if (!hasImage && event.dataTransfer && Array.prototype.slice.call(event.dataTransfer.items || []).some(function(item) { return item.kind === 'file' && /^image\//.test(item.type || ''); })) hasImage = true;
+          if (!hasImage) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+          surfaceEl.classList.add('design-drop-active');
+        });
+      });
+      ['dragleave', 'drop'].forEach(function(type) {
+        surfaceEl.addEventListener(type, function(event) {
+          if (type === 'dragleave' && surfaceEl.contains(event.relatedTarget)) return;
+          surfaceEl.classList.remove('design-drop-active');
+        });
+      });
+      surfaceEl.addEventListener('drop', function(event) {
+        var files = event.dataTransfer && event.dataTransfer.files;
+        if (!files || !files.length) return;
+        event.preventDefault();
+        importVisualFiles(files);
+      });
+    }
+    window.addEventListener('paste', function(event) {
+      var items = Array.prototype.slice.call((event.clipboardData && event.clipboardData.items) || []);
+      var files = items.filter(function(item) { return item.kind === 'file' && /^image\//.test(item.type || ''); }).map(function(item) { return item.getAsFile(); }).filter(Boolean);
+      if (!files.length) return;
+      event.preventDefault();
+      importVisualFiles(files);
+    });
     $('settingsBtn').onclick = openSettings;
     $('settingsCancelBtn').onclick = closeSettings;
     $('settingsSaveBtn').onclick = saveSettingsFromUI;

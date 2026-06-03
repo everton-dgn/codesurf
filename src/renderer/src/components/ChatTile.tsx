@@ -4244,6 +4244,18 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             getSettings: window.electron?.extensions?.getSettings,
             setSettings: window.electron?.extensions?.setSettings,
           },
+          openChatSurface: async (request) => {
+            let entry = chatSurfaceMenu.find(candidate => candidate.extId === request.extId && candidate.surfaceId === request.surfaceId)
+            if (!entry) {
+              const rawEntries = await window.electron?.extensions?.listChatSurfaces?.().catch(() => [])
+              entry = (rawEntries ?? [])
+                .map(normalizeChatSurfaceMenuEntry)
+                .find(candidate => candidate.extId === request.extId && candidate.surfaceId === request.surfaceId)
+            }
+            if (!entry) throw new Error(`Chat surface ${request.extId}:${request.surfaceId} not found`)
+            await openChatSurface(entry)
+            return true
+          },
         })
         if (basicRpc.handled) {
           if ('payload' in basicRpc) {
@@ -4409,7 +4421,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [chatSurfaceThemeColors, chatSurfaceThemeVars, getChatSurfaceIframe, getChatSurfacePeerEntries, postToChatSurface])
+  }, [chatSurfaceMenu, chatSurfaceThemeColors, chatSurfaceThemeVars, getChatSurfaceIframe, getChatSurfacePeerEntries, openChatSurface, postToChatSurface])
 
   const handleTileDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     // Ignore our own internal drags (queued-turn reorder, etc.) — they
