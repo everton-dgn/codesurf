@@ -1,8 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, RotateCcw, RotateCw, Home, Globe, Monitor, Smartphone, Crosshair } from 'lucide-react'
+import { Activity, ArrowLeft, ArrowRight, ClipboardList, Crosshair, Globe, Home, Monitor, RotateCcw, RotateCw, Smartphone, Trash2 } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
 import { useAppFonts } from '../FontContext'
 import { dispatchOpenLink } from '../utils/links'
+import {
+  appendBrowserEvidence,
+  createBrowserEvidenceEvent,
+  createBrowserEvidenceSnapshot,
+  createBrowserPageHealth,
+  formatBrowserEvidenceReport,
+  summarizeBrowserEvidence,
+  type BrowserEvidenceEvent,
+  type BrowserEvidenceInput,
+} from '../../../shared/browserEvidence'
 import clusoEmbedJs from '../assets/cluso/cluso-embed.js?raw'
 import clusoEmbedCss from '../assets/cluso/cluso-embed.css?raw'
 
@@ -806,6 +816,22 @@ interface Props {
 }
 
 type BrowserMode = 'desktop' | 'mobile'
+type BrowserEvidenceFilter = 'all' | 'issues' | 'console' | 'load-failure' | 'lifecycle'
+
+const BROWSER_EVIDENCE_FILTERS: Array<{ id: BrowserEvidenceFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'issues', label: 'Issues' },
+  { id: 'console', label: 'Console' },
+  { id: 'load-failure', label: 'Loads' },
+  { id: 'lifecycle', label: 'Lifecycle' },
+]
+
+function matchesEvidenceFilter(event: BrowserEvidenceEvent, filter: BrowserEvidenceFilter): boolean {
+  if (filter === 'all') return true
+  if (filter === 'issues') return event.severity === 'error' || event.severity === 'warning'
+  return event.kind === filter
+}
+
 
 // ---------------------------------------------------------------------------
 // BrowserTile
@@ -826,6 +852,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
   const clusoToggleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const peerRelayUnsubscribeRef = useRef<(() => void) | null>(null)
   const mcpCommandUnsubscribeRef = useRef<(() => void) | null>(null)
+  const browserEvidenceRef = useRef<BrowserEvidenceEvent[]>([])
 
   // Track component mount state for async cleanup
   useEffect(() => {
@@ -853,6 +880,85 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
   const [isToolbarHovered, setIsToolbarHovered] = useState(false)
   const [isAddressFocused, setIsAddressFocused] = useState(false)
   const [stateLoaded, setStateLoaded] = useState(!workspaceId)
+  const [pageTitle, setPageTitle] = useState('')
+  const [browserEvidence, setBrowserEvidence] = useState<BrowserEvidenceEvent[]>([])
+  const [isEvidenceDrawerOpen, setIsEvidenceDrawerOpen] = useState(false)
+  const [evidenceFilter, setEvidenceFilter] = useState<BrowserEvidenceFilter>('issues')
+  const [copyStatus, setCopyStatus] = useState('')
+  const [lastSnapshotAt, setLastSnapshotAt] = useState<number | null>(null)
+  const browserPageStateRef = useRef({ url: startUrl, title: '', isLoading: false, mode: 'desktop' as BrowserMode })
+  browserPageStateRef.current = { url: currentUrl, title: pageTitle, isLoading, mode }
+
+  const createCurrentEvidenceSnapshot = useCallback((events = browserEvidenceRef.current) => {
+    const page = browserPageStateRef.current
+    return createBrowserEvidenceSnapshot({
+      tileId,
+      url: page.url,
+      title: page.title,
+      isLoading: page.isLoading,
+      mode: page.mode,
+      events,
+    })
+  }, [tileId])
+
+  const publishEvidenceSnapshot = useCallback((reason: string, events = browserEvidenceRef.current) => {
+    const snapshot = createCurrentEvidenceSnapshot(events)
+    const report = formatBrowserEvidenceReport(snapshot)
+    setLastSnapshotAt(snapshot.capturedAt)
+    window.electron?.bus?.publish(
+      `tile:${tileId}`,
+      'browser.evidence.snapshot',
+      `browser:${tileId}`,
+      { reason, snapshot, report },
+    )
+    window.electron?.bus?.publish(
+      `tile:${tileId}`,
+      'browser.page_health',
+      `browser:${tileId}`,
+      {
+        reason,
+        health: snapshot.health,
+        page: snapshot.page,
+        summary: snapshot.summary,
+      },
+    )
+    return snapshot
+  }, [createCurrentEvidenceSnapshot, tileId])
+
+  const recordBrowserEvidence = useCallback((input: Omit<BrowserEvidenceInput, 'tileId'>) => {
+    const event = createBrowserEvidenceEvent({ tileId, ...input })
+    const next = appendBrowserEvidence(browserEvidenceRef.current, event)
+    browserEvidenceRef.current = next
+    setBrowserEvidence(next)
+    const snapshot = createCurrentEvidenceSnapshot(next)
+    window.electron?.bus?.publish(
+      `tile:${tileId}`,
+      'browser.evidence',
+      `browser:${tileId}`,
+      { event, summary: snapshot.summary, health: snapshot.health, page: snapshot.page },
+    )
+    window.electron?.bus?.publish(
+      `tile:${tileId}`,
+      'browser.page_health',
+      `browser:${tileId}`,
+      { reason: 'evidence-recorded', health: snapshot.health, page: snapshot.page, summary: snapshot.summary },
+    )
+  }, [createCurrentEvidenceSnapshot, tileId])
+
+  const browserEvidenceSummary = summarizeBrowserEvidence(browserEvidence)
+  const browserPageHealth = createBrowserPageHealth(browserEvidenceSummary, isLoading)
+  const filteredBrowserEvidence = browserEvidence
+    .filter(event => matchesEvidenceFilter(event, evidenceFilter))
+    .slice()
+    .reverse()
+  const issueBadgeCount = browserEvidenceSummary.errorCount || browserEvidenceSummary.warningCount || browserEvidenceSummary.total
+  const evidenceHealthColor = browserPageHealth.status === 'error'
+    ? theme.status.danger
+    : browserPageHealth.status === 'warning'
+      ? theme.status.warning
+      : browserPageHealth.status === 'loading'
+        ? theme.accent.base
+        : theme.status.success
 
   useEffect(() => {
     setStateLoaded(!workspaceId)
@@ -894,17 +1000,21 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
     if (!workspaceId || !window.electron?.tileContext) return
     void Promise.allSettled([
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:url', currentUrl),
+      window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:title', pageTitle),
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:mode', mode),
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:loading', isLoading),
+      window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:evidence_summary', browserEvidenceSummary),
+      window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:page_health', browserPageHealth),
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:navigation', {
         currentUrl,
+        title: pageTitle,
         canGoBack,
         canGoForward,
         isLoading,
         mode,
       }),
     ])
-  }, [workspaceId, tileId, currentUrl, mode, isLoading, canGoBack, canGoForward])
+  }, [workspaceId, tileId, currentUrl, pageTitle, mode, isLoading, canGoBack, canGoForward, browserEvidenceSummary.total, browserEvidenceSummary.errorCount, browserEvidenceSummary.warningCount, browserPageHealth.status])
 
   // Fan-out bus traffic from this browser tile to canvas peers (unrelated to ContexRelay mailbox).
   useEffect(() => {
@@ -963,6 +1073,8 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
   // Stable setter refs — avoid re-adding event listeners when state changes
   const setCurrentUrlRef = useRef(setCurrentUrl)
   setCurrentUrlRef.current = setCurrentUrl
+  const setPageTitleRef = useRef(setPageTitle)
+  setPageTitleRef.current = setPageTitle
   const setAddressBarRef = useRef(setAddressBar)
   setAddressBarRef.current = setAddressBar
   const setCanGoBackRef = useRef(setCanGoBack)
@@ -1075,6 +1187,8 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
             { kind: 'navigation', event: 'navigated', url }
           )
         }
+        const title = wvRef.current.getTitle?.() || ''
+        setPageTitleRef.current(title)
         setCanGoBackRef.current(wvRef.current.canGoBack())
         setCanGoForwardRef.current(wvRef.current.canGoForward())
         setIsLoadingRef.current(wvRef.current.isLoading())
@@ -1119,10 +1233,40 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       }
     }
 
-    const onFailLoad = () => {
+    const onFrameFinishLoad = (e: Event) => {
+      const ev = e as Event & { isMainFrame?: boolean }
+      if (ev.isMainFrame === false) return
+      updateNav()
+      recordBrowserEvidence({
+        kind: 'lifecycle',
+        message: 'Frame finished loading',
+        url: webview.getURL(),
+        details: {
+          title: webview.getTitle?.() || '',
+          isLoading: webview.isLoading(),
+        },
+      })
+    }
+
+    const onFailLoad = (e: Event) => {
       setIsLoadingRef.current(false)
       setIsClusoReadyRef.current(false)
       setIsClusoActiveRef.current(false)
+
+      const ev = e as Event & {
+        errorCode?: number
+        errorDescription?: string
+        validatedURL?: string
+        url?: string
+        isMainFrame?: boolean
+      }
+      recordBrowserEvidence({
+        kind: 'load-failure',
+        message: ev.errorDescription || `Load failed${typeof ev.errorCode === 'number' ? ` (${ev.errorCode})` : ''}`,
+        url: ev.validatedURL || ev.url || webview.getURL(),
+        errorCode: ev.errorCode,
+        details: typeof ev.isMainFrame === 'boolean' ? { isMainFrame: ev.isMainFrame } : undefined,
+      })
     }
 
     const onNavigate = () => updateNav()
@@ -1144,7 +1288,13 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
 
     // ---- console message handler (bus bridge + cluso) -------------------
     const onConsoleMessage = (e: Electron.ConsoleMessageEvent) => {
-      const { message } = e
+      const consoleEvent = e as Electron.ConsoleMessageEvent & {
+        level?: string | number
+        sourceId?: string
+        line?: number
+        column?: number
+      }
+      const { message } = consoleEvent
 
       if (message.startsWith('{"__contex"')) {
         try {
@@ -1166,7 +1316,18 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
         return
       }
 
-      if (!message.startsWith('__CLUSO_')) return
+      if (!message.startsWith('__CLUSO_')) {
+        recordBrowserEvidence({
+          kind: 'console',
+          message,
+          level: consoleEvent.level,
+          source: consoleEvent.sourceId,
+          line: consoleEvent.line,
+          column: consoleEvent.column,
+          url: webview.getURL(),
+        })
+        return
+      }
 
       if (message.startsWith('__CLUSO_READY__')) {
         setIsClusoReadyRef.current(true)
@@ -1203,6 +1364,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
     webview.addEventListener('dom-ready', onDomReady)
     webview.addEventListener('did-start-loading', onStartLoad)
     webview.addEventListener('did-stop-loading', onStopLoad)
+    webview.addEventListener('did-frame-finish-load', onFrameFinishLoad)
     webview.addEventListener('did-fail-load', onFailLoad)
     webview.addEventListener('will-navigate', onWillNavigate)
     webview.addEventListener('did-navigate', onNavigate)
@@ -1261,6 +1423,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       webview.removeEventListener('dom-ready', onDomReady)
       webview.removeEventListener('did-start-loading', onStartLoad)
       webview.removeEventListener('did-stop-loading', onStopLoad)
+      webview.removeEventListener('did-frame-finish-load', onFrameFinishLoad)
       webview.removeEventListener('did-fail-load', onFailLoad)
       webview.removeEventListener('will-navigate', onWillNavigate)
       webview.removeEventListener('did-navigate', onNavigate)
@@ -1277,7 +1440,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       wvReadyRef.current = false
       scheduleManagedWebviewDisposal(tileId, webview)
     }
-  }, [tileId, injectCluso, stateLoaded])
+  }, [tileId, injectCluso, recordBrowserEvidence, stateLoaded])
 
   // Keep webview background in sync with theme (avoids white flash on theme change)
   useEffect(() => {
@@ -1358,6 +1521,29 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
     }
   }, [])
 
+  const captureEvidenceSnapshot = useCallback(() => {
+    publishEvidenceSnapshot('user-capture')
+  }, [publishEvidenceSnapshot])
+
+  const clearBrowserEvidence = useCallback(() => {
+    browserEvidenceRef.current = []
+    setBrowserEvidence([])
+    setCopyStatus('Evidence cleared')
+    publishEvidenceSnapshot('user-clear', [])
+  }, [publishEvidenceSnapshot])
+
+  const copyEvidenceReport = useCallback(() => {
+    const snapshot = publishEvidenceSnapshot('copy-report')
+    const report = formatBrowserEvidenceReport(snapshot)
+    if (!navigator.clipboard?.writeText) {
+      setCopyStatus('Clipboard unavailable')
+      return
+    }
+    navigator.clipboard.writeText(report)
+      .then(() => setCopyStatus('Report copied'))
+      .catch(() => setCopyStatus('Copy failed'))
+  }, [publishEvidenceSnapshot])
+
   // ---- MCP/peer command bridge -----------------------------------------
   useEffect(() => {
     if (!window.electron?.bus) return
@@ -1390,6 +1576,10 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       }
       if (command === 'browser_set_mode' && (payload.mode === 'desktop' || payload.mode === 'mobile')) {
         switchMode(payload.mode)
+        return
+      }
+      if (command === 'browser_get_evidence' || command === 'browser_capture_snapshot') {
+        publishEvidenceSnapshot(command)
       }
     })
 
@@ -1401,7 +1591,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
         mcpCommandUnsubscribeRef.current = null
       }
     }
-  }, [tileId, navigate, reload, goBack, goForward, switchMode])
+  }, [tileId, navigate, reload, goBack, goForward, switchMode, publishEvidenceSnapshot])
 
   // Toggle cluso element selector.
   // Uses a retry loop outside the webview (via setTimeout) so that:
@@ -1572,6 +1762,38 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
         >
           <Crosshair size={12} />
         </ToolbarButton>
+        <ToolbarButton
+          label="Browser evidence"
+          title={`Browser evidence: ${browserPageHealth.label}`}
+          active={isEvidenceDrawerOpen}
+          onClick={() => setIsEvidenceDrawerOpen(prev => !prev)}
+        >
+          <span style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Activity size={12} />
+            {issueBadgeCount > 0 && (
+              <span
+                aria-label={`${issueBadgeCount} evidence events`}
+                style={{
+                  position: 'absolute',
+                  right: -7,
+                  top: -7,
+                  minWidth: 12,
+                  height: 12,
+                  padding: '0 3px',
+                  borderRadius: 99,
+                  background: evidenceHealthColor,
+                  color: theme.text.inverse,
+                  fontSize: 8,
+                  lineHeight: '12px',
+                  fontWeight: 700,
+                  boxShadow: `0 0 0 1px ${browserToolbarBackground}`,
+                }}
+              >
+                {issueBadgeCount > 99 ? '99+' : issueBadgeCount}
+              </span>
+            )}
+          </span>
+        </ToolbarButton>
 
       </div>
     </form>
@@ -1589,6 +1811,192 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
           zIndex: 2,
         }}>
           {toolbar}
+        </div>
+      )}
+
+      {isEvidenceDrawerOpen && !hideNavbar && (
+        <div
+          aria-label="Evidence drawer"
+          onMouseDown={e => {
+            e.stopPropagation()
+            setIsToolbarHovered(true)
+          }}
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: 42,
+            right: 8,
+            width: Math.min(Math.max(width - 24, 260), 430),
+            maxHeight: Math.max(160, height - 54),
+            zIndex: 4,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: 10,
+            borderRadius: 12,
+            border: `1px solid ${theme.border.strong}`,
+            background: theme.surface.panelElevated,
+            boxShadow: theme.shadow.modal,
+            color: theme.text.primary,
+            fontSize: fonts.secondarySize,
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 99, background: evidenceHealthColor }} />
+                Browser evidence
+              </div>
+              <div style={{ color: theme.text.muted, fontSize: fonts.secondarySize - 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {browserPageHealth.label} · {browserEvidenceSummary.total} events · {pageTitle || currentUrl || 'No page title'}
+              </div>
+            </div>
+            <button
+              type="button"
+              aria-label="Close evidence drawer"
+              onClick={() => setIsEvidenceDrawerOpen(false)}
+              style={{
+                border: 'none',
+                borderRadius: 6,
+                background: theme.surface.hover,
+                color: theme.text.secondary,
+                cursor: 'pointer',
+                padding: '3px 7px',
+                fontSize: fonts.secondarySize,
+              }}
+            >
+              Close
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+            {BROWSER_EVIDENCE_FILTERS.map(filter => (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() => setEvidenceFilter(filter.id)}
+                style={{
+                  border: `1px solid ${evidenceFilter === filter.id ? theme.border.accent : theme.border.default}`,
+                  borderRadius: 999,
+                  background: evidenceFilter === filter.id ? theme.surface.selection : 'transparent',
+                  color: evidenceFilter === filter.id ? theme.text.primary : theme.text.secondary,
+                  cursor: 'pointer',
+                  padding: '3px 8px',
+                  fontSize: fonts.secondarySize - 1,
+                }}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+            <button
+              type="button"
+              title="Capture snapshot"
+              onClick={captureEvidenceSnapshot}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 5,
+                border: `1px solid ${theme.border.default}`,
+                borderRadius: 8,
+                background: theme.surface.input,
+                color: theme.text.secondary,
+                cursor: 'pointer',
+                padding: '6px 7px',
+                fontSize: fonts.secondarySize - 1,
+              }}
+            >
+              <ClipboardList size={12} />
+              Capture snapshot
+            </button>
+            <button
+              type="button"
+              title="Copy report"
+              onClick={copyEvidenceReport}
+              style={{
+                border: `1px solid ${theme.border.default}`,
+                borderRadius: 8,
+                background: theme.surface.input,
+                color: theme.text.secondary,
+                cursor: 'pointer',
+                padding: '6px 7px',
+                fontSize: fonts.secondarySize - 1,
+              }}
+            >
+              Copy report
+            </button>
+            <button
+              type="button"
+              title="Clear evidence"
+              onClick={clearBrowserEvidence}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 5,
+                border: `1px solid ${theme.border.default}`,
+                borderRadius: 8,
+                background: theme.surface.input,
+                color: theme.text.secondary,
+                cursor: 'pointer',
+                padding: '6px 7px',
+                fontSize: fonts.secondarySize - 1,
+              }}
+            >
+              <Trash2 size={12} />
+              Clear evidence
+            </button>
+          </div>
+
+          {(copyStatus || lastSnapshotAt) && (
+            <div style={{ color: theme.text.muted, fontSize: fonts.secondarySize - 1 }}>
+              {copyStatus || 'Snapshot captured'}{lastSnapshotAt ? ` · ${new Date(lastSnapshotAt).toLocaleTimeString()}` : ''}
+            </div>
+          )}
+
+          <div style={{ overflow: 'auto', minHeight: 72, borderTop: `1px solid ${theme.border.subtle}`, paddingTop: 8 }}>
+            {filteredBrowserEvidence.length === 0 ? (
+              <div style={{ color: theme.text.muted, padding: '12px 4px' }}>
+                No browser evidence matches this filter yet.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {filteredBrowserEvidence.slice(0, 50).map(event => (
+                  <div
+                    key={event.id}
+                    style={{
+                      border: `1px solid ${theme.border.subtle}`,
+                      borderLeft: `3px solid ${event.severity === 'error' ? theme.status.danger : event.severity === 'warning' ? theme.status.warning : theme.border.accent}`,
+                      borderRadius: 8,
+                      background: theme.surface.panel,
+                      padding: '7px 8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ color: event.severity === 'error' ? theme.status.danger : event.severity === 'warning' ? theme.status.warning : theme.text.secondary, fontWeight: 700 }}>
+                        {event.kind} · {event.severity}
+                      </span>
+                      <span style={{ color: theme.text.muted, fontSize: fonts.secondarySize - 2 }}>
+                        {new Date(event.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: 4, color: theme.text.primary, lineHeight: 1.35, wordBreak: 'break-word' }}>
+                      {event.message}
+                    </div>
+                    {(event.url || event.source || typeof event.line === 'number') && (
+                      <div style={{ marginTop: 4, color: theme.text.muted, fontSize: fonts.secondarySize - 1, lineHeight: 1.3, wordBreak: 'break-word' }}>
+                        {event.url || event.source}{typeof event.line === 'number' ? `:${event.line}` : ''}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
