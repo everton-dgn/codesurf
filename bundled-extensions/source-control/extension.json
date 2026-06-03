@@ -1,0 +1,113 @@
+{
+  "id": "source-control",
+  "name": "Git Review Workbench",
+  "version": "1.0.0",
+  "description": "Safe Git graph and review workbench for CodeSurf. Compares branches, summarizes changed-file graphs, generates review handoff markdown, and exposes MCP-readable git state.",
+  "author": "contex",
+  "tier": "power",
+  "ui": { "mode": "native" },
+  "main": "main.js",
+  "contributes": {
+    "tiles": [
+      {
+        "type": "source-control-panel",
+        "label": "Git Review",
+        "icon": "git-branch",
+        "entry": "tile/index.html",
+        "defaultSize": { "w": 860, "h": 640 },
+        "minSize": { "w": 500, "h": 380 }
+      }
+    ],
+    "contextMenu": [
+      { "label": "New Git Review", "action": "createTile", "tileType": "ext:source-control-panel" }
+    ],
+    "context": {
+      "produces": [
+        "ctx:git:state",
+        "ctx:git:branch_compare",
+        "ctx:git:changed_file_graph",
+        "ctx:git:review_handoff",
+        "ctx:git:selectedFile",
+        "ctx:git:selectedCommit"
+      ],
+      "consumes": ["ctx:workspace", "ctx:code-index:repo_map", "ctx:test-loop:last_run"]
+    },
+    "actions": [
+      { "name": "getGitState", "description": "Return current branch, upstream/ahead-behind, working-tree status, recent history, compare summary, and changed-file graph. Params: { workspacePath: string, baseRef?: string, headRef?: string }" },
+      { "name": "compareBranches", "description": "Compare two refs without switching branches. Params: { workspacePath: string, baseRef: string, headRef?: string }" },
+      { "name": "getChangedFileGraph", "description": "Return graph nodes/edges for files changed between refs. Params: { workspacePath: string, baseRef: string, headRef?: string }" },
+      { "name": "generateReviewHandoff", "description": "Generate markdown review handoff without writing files. Params: { workspacePath: string, baseRef?: string, headRef?: string }" },
+      { "name": "writeReviewHandoff", "description": "Write review handoff markdown under .codesurf/reviews. Params: { workspacePath: string, baseRef?: string, headRef?: string }" },
+      { "name": "getFileDiff", "description": "Return bounded diff for a file between refs. Params: { workspacePath: string, path: string, baseRef?: string, headRef?: string }" }
+    ],
+    "mcpTools": [
+      {
+        "name": "git_state",
+        "description": "Return MCP-readable git state, status, recent commits, branch compare, and changed-file graph. Params: { workspacePath: string, baseRef?: string, headRef?: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "baseRef": { "type": "string" },
+            "headRef": { "type": "string" }
+          },
+          "required": ["workspacePath"]
+        }
+      },
+      {
+        "name": "branch_compare",
+        "description": "Compare refs and return changed files/commits without changing checkout. Params: { workspacePath: string, baseRef: string, headRef?: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "baseRef": { "type": "string" },
+            "headRef": { "type": "string" }
+          },
+          "required": ["workspacePath", "baseRef"]
+        }
+      },
+      {
+        "name": "changed_file_graph",
+        "description": "Return markdown summary of changed-file graph for a ref comparison. Params: { workspacePath: string, baseRef: string, headRef?: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "baseRef": { "type": "string" },
+            "headRef": { "type": "string" }
+          },
+          "required": ["workspacePath", "baseRef"]
+        }
+      },
+      {
+        "name": "review_handoff",
+        "description": "Return markdown review handoff for a branch/ref comparison. Params: { workspacePath: string, baseRef?: string, headRef?: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "baseRef": { "type": "string" },
+            "headRef": { "type": "string" }
+          },
+          "required": ["workspacePath"]
+        }
+      },
+      {
+        "name": "file_diff",
+        "description": "Return a bounded diff for one file between refs. Params: { workspacePath: string, path: string, baseRef?: string, headRef?: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "path": { "type": "string" },
+            "baseRef": { "type": "string" },
+            "headRef": { "type": "string" }
+          },
+          "required": ["workspacePath", "path"]
+        }
+      }
+    ]
+  },
+  "permissions": ["filesystem:read", "process"]
+}
