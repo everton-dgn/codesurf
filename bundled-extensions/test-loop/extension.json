@@ -1,0 +1,80 @@
+{
+  "id": "test-loop",
+  "name": "Test Loop",
+  "version": "1.0.0",
+  "description": "Agent-observable test runner for CodeSurf. Detects safe project test profiles, runs them with bounded logs, supports cancel/rerun, and publishes the latest result as context.",
+  "author": "contex",
+  "tier": "power",
+  "ui": { "mode": "native" },
+  "main": "main.js",
+  "contributes": {
+    "tiles": [
+      {
+        "type": "test-loop",
+        "label": "Test Loop",
+        "icon": "terminal",
+        "entry": "tile/index.html",
+        "defaultSize": { "w": 720, "h": 560 },
+        "minSize": { "w": 420, "h": 320 }
+      }
+    ],
+    "contextMenu": [
+      { "label": "New Test Loop", "action": "createTile", "tileType": "ext:test-loop" }
+    ],
+    "context": {
+      "produces": ["ctx:test-loop:last_run"],
+      "consumes": ["ctx:qa-workbench:report", "ctx:browser:evidence_summary"]
+    },
+    "actions": [
+      { "name": "detectProfiles", "description": "Detect runnable project test/build/typecheck profiles for the active workspace." },
+      { "name": "startRun", "description": "Start a bounded test loop run for a detected profile. Params: { profileId: string }" },
+      { "name": "cancelRun", "description": "Cancel the active test loop run." },
+      { "name": "getLastRun", "description": "Return the latest test loop run and bounded output." }
+    ],
+    "mcpTools": [
+      {
+        "name": "detect_profiles",
+        "description": "Detect safe test/build/typecheck profiles for a workspace. Params: { workspacePath: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "workspacePath": { "type": "string" } },
+          "required": ["workspacePath"]
+        }
+      },
+      {
+        "name": "start_run",
+        "description": "Start a bounded run for a detected profile. Params: { workspacePath: string, profileId: string, timeoutMs?: number }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "profileId": { "type": "string" },
+            "timeoutMs": { "type": "number" }
+          },
+          "required": ["workspacePath", "profileId"]
+        }
+      },
+      {
+        "name": "get_last_run",
+        "description": "Return the latest Test Loop run for a workspace. Params: { workspacePath: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "workspacePath": { "type": "string" } },
+          "required": ["workspacePath"]
+        }
+      },
+      {
+        "name": "cancel_run",
+        "description": "Cancel a Test Loop run. Params: { workspacePath?: string, runId?: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "runId": { "type": "string" }
+          }
+        }
+      }
+    ]
+  },
+  "permissions": ["filesystem:read", "process"]
+}

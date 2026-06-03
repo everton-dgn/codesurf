@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Test Loop</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101113;
+      --panel: #17191d;
+      --panel-2: #1f2228;
+      --border: rgba(255,255,255,.10);
+      --muted: #8d96a4;
+      --text: #eef2f8;
+      --accent: #7dd3fc;
+      --good: #6ee7a8;
+      --warn: #fbbf24;
+      --bad: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, rgba(125,211,252,.12), transparent 34%), var(--bg);
+      color: var(--text);
+      font: 12px/1.4 ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .shell { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+    header {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(16,17,19,.82);
+      backdrop-filter: blur(16px);
+    }
+    .title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+    .status-pill {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      padding: 4px 9px;
+      background: rgba(255,255,255,.04);
+      white-space: nowrap;
+    }
+    .sub { margin-top: 5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    main { display: grid; grid-template-columns: minmax(220px, 270px) 1fr; min-height: 0; }
+    aside { border-right: 1px solid var(--border); background: rgba(255,255,255,.025); min-height: 0; display: flex; flex-direction: column; }
+    .section-title { padding: 12px 12px 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: 10px; }
+    .profiles { min-height: 0; overflow: auto; padding: 0 10px 10px; display: grid; gap: 7px; }
+    .profile {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      text-align: left;
+      padding: 9px 10px;
+      cursor: pointer;
+    }
+    .profile:hover, .profile.active { border-color: rgba(125,211,252,.55); background: rgba(125,211,252,.10); }
+    .profile .name { font-weight: 650; }
+    .profile .meta { color: var(--muted); font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .content { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr; }
+    .toolbar {
+      padding: 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,.018);
+    }
+    button {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      padding: 7px 10px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: rgba(255,255,255,.20); background: rgba(255,255,255,.09); }
+    button.primary { border-color: rgba(125,211,252,.52); background: rgba(125,211,252,.16); }
+    button.danger { border-color: rgba(251,113,133,.36); color: #fecdd3; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .run-panel { min-height: 0; overflow: auto; padding: 14px; }
+    .run-card { border: 1px solid var(--border); border-radius: 16px; background: rgba(255,255,255,.04); overflow: hidden; }
+    .run-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    .run-name { font-weight: 700; font-size: 13px; }
+    .run-meta { color: var(--muted); margin-top: 4px; }
+    .badge { border-radius: 999px; padding: 4px 8px; border: 1px solid var(--border); color: var(--muted); background: rgba(255,255,255,.04); }
+    .badge.running { color: var(--accent); border-color: rgba(125,211,252,.36); }
+    .badge.passed { color: var(--good); border-color: rgba(110,231,168,.36); }
+    .badge.failed, .badge.timed_out { color: var(--bad); border-color: rgba(251,113,133,.36); }
+    .badge.canceled, .badge.canceling { color: var(--warn); border-color: rgba(251,191,36,.36); }
+    pre {
+      margin: 0;
+      padding: 14px;
+      min-height: 260px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #d8dee9;
+      background: #0b0c0e;
+    }
+    footer { border-top: 1px solid var(--border); padding: 8px 12px; color: var(--muted); background: rgba(16,17,19,.84); }
+    .empty { color: var(--muted); padding: 22px; text-align: center; }
+    @media (max-width: 560px) {
+      main { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--border); max-height: 180px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="title">
+        <h1>Test Loop</h1>
+        <div id="statusBadge" class="status-pill">Idle</div>
+      </div>
+      <div id="workspaceLine" class="sub">Resolving workspace…</div>
+    </header>
+    <main>
+      <aside>
+        <div class="section-title">Detected profiles</div>
+        <div id="profiles" class="profiles"></div>
+      </aside>
+      <section class="content">
+        <div class="toolbar">
+          <button id="refreshBtn" type="button">Refresh profiles</button>
+          <button id="runBtn" type="button" class="primary">Run selected</button>
+          <button id="rerunBtn" type="button">Rerun</button>
+          <button id="cancelBtn" type="button" class="danger">Cancel</button>
+          <button id="copyBtn" type="button">Copy summary</button>
+        </div>
+        <div class="run-panel">
+          <div id="runHost" class="run-card"></div>
+        </div>
+      </section>
+    </main>
+    <footer id="statusLine">Ready.</footer>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id)
+    const state = {
+      workspacePath: '',
+      profiles: [],
+      selectedProfileId: '',
+      lastRun: null,
+      pollTimer: null,
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+    }
+
+    function setStatus(message) {
+      $('statusLine').textContent = message
+    }
+
+    function isRunning(run) {
+      return run && (run.status === 'running' || run.status === 'canceling')
+    }
+
+    async function publishRunContext(run) {
+      if (!run || !window.contex || !window.contex.context) return
+      await window.contex.context.set('ctx:test-loop:last_run', {
+        id: run.id,
+        status: run.status,
+        profileId: run.profileId,
+        profile: run.profile,
+        exitCode: run.exitCode,
+        durationMs: run.durationMs,
+        workspacePath: run.workspacePath,
+        output: run.output,
+        summary: run.summary,
+        updatedAt: run.updatedAt,
+      }).catch(() => {})
+    }
+
+    function renderProfiles() {
+      const host = $('profiles')
+      if (!state.profiles.length) {
+        host.innerHTML = '<div class="empty">No package/test profiles detected.</div>'
+        return
+      }
+      host.innerHTML = state.profiles.map(profile => `
+        <button type="button" class="profile ${profile.id === state.selectedProfileId ? 'active' : ''}" data-profile-id="${escapeHtml(profile.id)}">
+          <div class="name">${escapeHtml(profile.label)}</div>
+          <div class="meta">${escapeHtml(profile.kind)} · ${escapeHtml(profile.source)}</div>
+        </button>
+      `).join('')
+      host.querySelectorAll('[data-profile-id]').forEach(button => {
+        button.onclick = () => {
+          state.selectedProfileId = button.getAttribute('data-profile-id') || ''
+          render()
+        }
+      })
+    }
+
+    function renderRun() {
+      const host = $('runHost')
+      const run = state.lastRun
+      $('statusBadge').textContent = run ? run.status : 'Idle'
+      $('statusBadge').className = 'status-pill badge ' + (run ? run.status : '')
+      $('cancelBtn').disabled = !isRunning(run)
+      $('runBtn').disabled = !state.selectedProfileId || isRunning(run)
+      $('rerunBtn').disabled = !state.selectedProfileId || isRunning(run)
+      $('copyBtn').disabled = !run
+
+      if (!run) {
+        host.innerHTML = '<div class="empty">Select a profile and run it. Output will stream here after the run starts.</div>'
+        return
+      }
+
+      host.innerHTML = `
+        <div class="run-head">
+          <div>
+            <div class="run-name">${escapeHtml(run.profile && run.profile.label || run.profileId)}</div>
+            <div class="run-meta">${escapeHtml(run.id)} · ${run.durationMs == null ? 'running' : escapeHtml(run.durationMs + 'ms')}</div>
+          </div>
+          <div class="badge ${escapeHtml(run.status)}">${escapeHtml(run.status)}</div>
+        </div>
+        <pre>${escapeHtml(run.output || '')}</pre>
+      `
+      host.querySelector('pre').scrollTop = host.querySelector('pre').scrollHeight
+    }
+
+    function render() {
+      $('workspaceLine').textContent = state.workspacePath || 'No workspace path available'
+      renderProfiles()
+      renderRun()
+    }
+
+    async function refreshProfiles() {
+      if (!state.workspacePath) return
+      const detected = await window.contex.ext.invoke('detectProfiles', state.workspacePath)
+      state.profiles = detected.profiles || []
+      if (!state.selectedProfileId || !state.profiles.some(profile => profile.id === state.selectedProfileId)) {
+        state.selectedProfileId = state.profiles[0] ? state.profiles[0].id : ''
+      }
+      setStatus(`Detected ${state.profiles.length} profile${state.profiles.length === 1 ? '' : 's'}`)
+      render()
+    }
+
+    async function refreshLastRun() {
+      if (!state.workspacePath) return null
+      const run = await window.contex.ext.invoke('getLastRun', state.workspacePath)
+      if (run) {
+        state.lastRun = run
+        await publishRunContext(run)
+        render()
+      }
+      return run
+    }
+
+    function startPolling() {
+      clearInterval(state.pollTimer)
+      state.pollTimer = setInterval(async () => {
+        const run = await refreshLastRun().catch(() => null)
+        if (run && !isRunning(run)) {
+          clearInterval(state.pollTimer)
+          state.pollTimer = null
+          setStatus(`Run ${run.status}`)
+        }
+      }, 900)
+    }
+
+    async function runSelected() {
+      if (!state.selectedProfileId) return
+      const run = await window.contex.ext.invoke('startRun', state.workspacePath, state.selectedProfileId, { timeoutMs: 120000 })
+      state.lastRun = run
+      await publishRunContext(run)
+      setStatus(`Started ${run.id}`)
+      render()
+      startPolling()
+    }
+
+    async function cancelRun() {
+      if (!state.lastRun) return
+      const result = await window.contex.ext.invoke('cancelRun', { runId: state.lastRun.id, workspacePath: state.workspacePath })
+      if (result && result.run) state.lastRun = result.run
+      setStatus(result && result.ok ? 'Cancel requested' : (result && result.error) || 'Cancel failed')
+      render()
+      startPolling()
+    }
+
+    async function copySummary() {
+      if (!state.lastRun || !navigator.clipboard) return
+      await navigator.clipboard.writeText(state.lastRun.summary || state.lastRun.output || '')
+      setStatus('Copied run summary')
+    }
+
+    async function init() {
+      try {
+        state.workspacePath = await window.contex.workspace.getPath()
+        $('refreshBtn').onclick = refreshProfiles
+        $('runBtn').onclick = runSelected
+        $('rerunBtn').onclick = runSelected
+        $('cancelBtn').onclick = cancelRun
+        $('copyBtn').onclick = copySummary
+        await refreshProfiles()
+        await refreshLastRun()
+        render()
+      } catch (err) {
+        setStatus(err && err.message ? err.message : String(err))
+        render()
+      }
+    }
+
+    init()
+  </script>
+</body>
+</html>
