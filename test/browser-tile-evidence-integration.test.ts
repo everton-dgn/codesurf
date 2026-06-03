@@ -31,6 +31,10 @@ describe('BrowserTile browser evidence integration', () => {
     expect(BROWSER_TILE_SOURCE).toContain('Copy report')
     expect(BROWSER_TILE_SOURCE).toContain('Capture snapshot')
     expect(BROWSER_TILE_SOURCE).toContain('Clear evidence')
+    expect(BROWSER_TILE_SOURCE).toContain('Open QA Workbench')
+    expect(BROWSER_TILE_SOURCE).toContain('Attach QA report to chat')
+    expect(BROWSER_TILE_SOURCE).toContain('dispatchCreateTile')
+    expect(BROWSER_TILE_SOURCE).toContain('dispatchOpenChatSurface')
   })
 
   test('answers read-only browser evidence requests over the existing tile bus', () => {

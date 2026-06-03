@@ -221,6 +221,7 @@
         <button id="refreshBtn" type="button">Refresh</button>
         <button id="captureBtn" type="button" class="primary">Capture all</button>
         <button id="copyBtn" type="button">Copy report</button>
+        <button id="chatBtn" type="button">Send to chat</button>
         <button id="publishBtn" type="button">Publish context</button>
       </div>
     </section>
@@ -345,6 +346,16 @@
     $('statusLine').textContent = 'Published ctx:qa-workbench:report'
   }
 
+  async function sendToChat() {
+    if (!window.contex || !window.contex.chat || !window.contex.chat.openSurface) {
+      $('statusLine').textContent = 'Chat surface launcher unavailable'
+      return
+    }
+    await captureAll().catch(() => {})
+    await window.contex.chat.openSurface({ extId: 'qa-workbench', surfaceId: 'qa-report' })
+    $('statusLine').textContent = 'Opening QA Report in chat'
+  }
+
   function renderBrowser(browser) {
     const page = browser.page || {}
     const summary = browser.summary || {}
@@ -412,6 +423,7 @@
     $('refreshBtn').onclick = refreshState
     $('captureBtn').onclick = captureAll
     $('copyBtn').onclick = copyReport
+    $('chatBtn').onclick = sendToChat
     $('publishBtn').onclick = publishContext
 
     if (window.contex.bus) {

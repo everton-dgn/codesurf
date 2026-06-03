@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '../ThemeContext'
 import { useFontTokens, useAppFonts } from '../FontContext'
+import { CODESURF_OPEN_CHAT_SURFACE_EVENT } from '../utils/appLaunchRequests'
 
 const el = (window as any).electron
 
@@ -318,6 +319,23 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
         if (!cardId) throw new Error('Missing chat cardId')
         extensionChatCardsRef.current.delete(cardId)
         return el.chat?.stop?.(cardId)
+      }
+
+      case 'chat.openSurface': {
+        const request = params?.request ?? params ?? {}
+        const requestedExtId = String(request?.extId ?? extId ?? '').trim()
+        const surfaceId = String(request?.surfaceId ?? request?.id ?? '').trim()
+        const preferredTileId = String(request?.preferredTileId ?? '').trim()
+        if (!requestedExtId || !surfaceId) throw new Error('Missing chat surface target')
+        window.dispatchEvent(new CustomEvent(CODESURF_OPEN_CHAT_SURFACE_EVENT, {
+          detail: {
+            extId: requestedExtId,
+            surfaceId,
+            sourceTileId: tileId,
+            ...(preferredTileId ? { preferredTileId } : {}),
+          },
+        }))
+        return true
       }
 
       case 'chat.clearSession': {

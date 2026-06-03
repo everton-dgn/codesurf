@@ -17,6 +17,13 @@ import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
 import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf, replaceTabInLeaf } from './components/panelLayoutTree'
 import { basename, getDroppedPaths, toFileUrl, isMediaFile } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
+import {
+  CODESURF_CREATE_TILE_EVENT,
+  CODESURF_OPEN_CHAT_SURFACE_EVENT,
+  normalizeCreateTileDetail,
+  normalizeOpenChatSurfaceDetail,
+  resolveChatSurfaceTargetTile,
+} from './utils/appLaunchRequests'
 import { disposeChatTileRuntimeState, getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
 import { disposeMediaTile } from './components/mediaTileRegistry'
 import { MainStatusBar } from './components/MainStatusBar'
@@ -2431,6 +2438,62 @@ function App(): JSX.Element {
     setNextZIndex(n => n + 1)
     setSelectedTileId(id)
   }, [nextZIndex])
+
+  useEffect(() => {
+    const handleCreateTileRequest = (event: Event) => {
+      const detail = normalizeCreateTileDetail((event as CustomEvent).detail)
+      if (!detail) return
+      const x = typeof detail.x === 'number' ? detail.x : undefined
+      const y = typeof detail.y === 'number' ? detail.y : undefined
+      const tileId = addTile(
+        detail.type,
+        detail.filePath,
+        x !== undefined && y !== undefined ? { x, y } : undefined,
+      )
+      if (detail.focus !== false) bringToFront(tileId)
+    }
+
+    window.addEventListener(CODESURF_CREATE_TILE_EVENT, handleCreateTileRequest as EventListener)
+    return () => window.removeEventListener(CODESURF_CREATE_TILE_EVENT, handleCreateTileRequest as EventListener)
+  }, [addTile, bringToFront])
+
+  useEffect(() => {
+    const dispatchTargetedSurfaceOpen = (targetTileId: string, request: { extId: string; surfaceId: string; sourceTileId?: string }) => {
+      const fire = () => {
+        window.dispatchEvent(new CustomEvent(CODESURF_OPEN_CHAT_SURFACE_EVENT, {
+          detail: { ...request, targetTileId },
+        }))
+      }
+      requestAnimationFrame(() => requestAnimationFrame(fire))
+    }
+
+    const handleOpenChatSurfaceRequest = (event: Event) => {
+      const detail = normalizeOpenChatSurfaceDetail((event as CustomEvent).detail)
+      if (!detail || detail.targetTileId) return
+
+      const target = resolveChatSurfaceTargetTile({
+        tiles,
+        targetTileId: detail.preferredTileId,
+        activeChatTileId,
+      })
+      const targetTileId = target.shouldCreate || !target.tileId
+        ? addTile('chat')
+        : target.tileId
+
+      bringToFront(targetTileId)
+      if (expandedTileIdRef.current && target.reason === 'create') {
+        setExpandedTileId(targetTileId)
+      }
+      dispatchTargetedSurfaceOpen(targetTileId, {
+        extId: detail.extId,
+        surfaceId: detail.surfaceId,
+        ...(detail.sourceTileId ? { sourceTileId: detail.sourceTileId } : {}),
+      })
+    }
+
+    window.addEventListener(CODESURF_OPEN_CHAT_SURFACE_EVENT, handleOpenChatSurfaceRequest as EventListener)
+    return () => window.removeEventListener(CODESURF_OPEN_CHAT_SURFACE_EVENT, handleOpenChatSurfaceRequest as EventListener)
+  }, [activeChatTileId, addTile, bringToFront, tiles])
 
   // ─── Canvas mouse handlers ────────────────────────────────────────────────
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {

@@ -58,6 +58,15 @@ test('qa-workbench is bundled as a host-backed browser QA tile and chat surface'
   assert.deepEqual(actionNames, ['captureAll', 'generateReport'])
 })
 
+test('qa-workbench tile can open the QA Report chat surface', async () => {
+  const tileHtml = await readFile(join(EXT_DIR, 'tile', 'index.html'), 'utf8')
+  assert.match(tileHtml, /id="chatBtn"/)
+  assert.match(tileHtml, /Send to chat/)
+  assert.match(tileHtml, /window\.contex\.chat\.openSurface/)
+  assert.match(tileHtml, /extId: 'qa-workbench'/)
+  assert.match(tileHtml, /surfaceId: 'qa-report'/)
+})
+
 test('qa-workbench shared helpers reduce browser evidence events into reports and chat payloads', async () => {
   const shared = await import(pathToFileURL(join(EXT_DIR, 'shared.js')).href)
   const state = shared.createWorkbenchState({ maxEvents: 3 })

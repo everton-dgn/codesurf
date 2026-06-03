@@ -1,5 +1,5 @@
 import React from 'react'
-import { Bot, Folder, GitBranch, Globe, History, Layers3, MessageSquare, Package, Pencil, Puzzle, Settings, Sparkles, TerminalSquare, Wrench } from 'lucide-react'
+import { Bot, Bug, ClipboardCheck, Folder, GitBranch, Globe, History, Layers3, MessageSquare, Package, Pencil, Puzzle, Settings, Sparkles, TerminalSquare, Wrench } from 'lucide-react'
 
 export function renderExtensionIcon(icon?: string | null, size = 12): React.ReactNode {
   const raw = String(icon ?? '').trim()
@@ -21,6 +21,8 @@ export function renderExtensionIcon(icon?: string | null, size = 12): React.Reac
     terminal: TerminalSquare,
     history: History,
     'layers-3': Layers3,
+    bug: Bug,
+    'clipboard-check': ClipboardCheck,
   }
   const Icon = namedIcons[normalized]
   if (Icon) return <Icon size={size} />

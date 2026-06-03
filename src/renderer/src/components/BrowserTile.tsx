@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Activity, ArrowLeft, ArrowRight, ClipboardList, Crosshair, Globe, Home, Monitor, RotateCcw, RotateCw, Smartphone, Trash2 } from 'lucide-react'
+import { Activity, ArrowLeft, ArrowRight, Bug, ClipboardCheck, ClipboardList, Crosshair, Globe, Home, Monitor, RotateCcw, RotateCw, Smartphone, Trash2 } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
 import { useAppFonts } from '../FontContext'
 import { dispatchOpenLink } from '../utils/links'
+import { dispatchCreateTile, dispatchOpenChatSurface } from '../utils/appLaunchRequests'
 import {
   appendBrowserEvidence,
   createBrowserEvidenceEvent,
@@ -1544,6 +1545,18 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       .catch(() => setCopyStatus('Copy failed'))
   }, [publishEvidenceSnapshot])
 
+  const openQaWorkbench = useCallback(() => {
+    publishEvidenceSnapshot('open-qa-workbench')
+    dispatchCreateTile({ type: 'ext:qa-workbench', focus: true, sourceTileId: tileId })
+    setCopyStatus('Opening QA Workbench')
+  }, [publishEvidenceSnapshot, tileId])
+
+  const attachQaReportToChat = useCallback(() => {
+    publishEvidenceSnapshot('attach-qa-report')
+    dispatchOpenChatSurface({ extId: 'qa-workbench', surfaceId: 'qa-report', sourceTileId: tileId })
+    setCopyStatus('Opening QA Report in chat')
+  }, [publishEvidenceSnapshot, tileId])
+
   // ---- MCP/peer command bridge -----------------------------------------
   useEffect(() => {
     if (!window.electron?.bus) return
@@ -1891,7 +1904,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
             ))}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button
               type="button"
               title="Capture snapshot"
@@ -1928,6 +1941,48 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
               }}
             >
               Copy report
+            </button>
+            <button
+              type="button"
+              title="Open QA Workbench"
+              onClick={openQaWorkbench}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 5,
+                border: `1px solid ${theme.border.default}`,
+                borderRadius: 8,
+                background: theme.surface.input,
+                color: theme.text.secondary,
+                cursor: 'pointer',
+                padding: '6px 7px',
+                fontSize: fonts.secondarySize - 1,
+              }}
+            >
+              <Bug size={12} />
+              Workbench
+            </button>
+            <button
+              type="button"
+              title="Attach QA report to chat"
+              onClick={attachQaReportToChat}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 5,
+                border: `1px solid ${theme.border.default}`,
+                borderRadius: 8,
+                background: theme.surface.input,
+                color: theme.text.secondary,
+                cursor: 'pointer',
+                padding: '6px 7px',
+                fontSize: fonts.secondarySize - 1,
+              }}
+            >
+              <ClipboardCheck size={12} />
+              Attach to chat
             </button>
             <button
               type="button"

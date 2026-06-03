@@ -159,6 +159,12 @@ export function getBridgeScript(tileId: string, extId: string): string {
       send: (request) => _rpc('chat.send', { request }),
       stop: (cardId) => _rpc('chat.stop', { cardId }),
       clearSession: (cardId) => _rpc('chat.clearSession', { cardId }),
+      openSurface: (extIdOrRequest, maybeSurfaceId) => {
+        var request = (extIdOrRequest && typeof extIdOrRequest === 'object')
+          ? extIdOrRequest
+          : { extId: extIdOrRequest, surfaceId: maybeSurfaceId };
+        return _rpc('chat.openSurface', { request });
+      },
       onStream: (cb) => _on('chat.stream', cb),
     },
 

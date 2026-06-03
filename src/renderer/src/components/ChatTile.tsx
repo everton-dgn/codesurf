@@ -8,10 +8,11 @@ import type {
 } from '../../../shared/types'
 import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
 import { dispatchOpenLink, findAnchorFromEventTarget } from '../utils/links'
+import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
 import {
   ShieldCheck, ChevronDown, AlertTriangle,
   Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
-  Brain, ChevronRight, Cog, Copy, CornerDownRight, DollarSign,
+  Brain, Bug, ChevronRight, ClipboardCheck, Cog, Copy, CornerDownRight, DollarSign,
   FileText, GripVertical, Maximize2, Mic, Pencil, Plus, Sparkles, Trash2, Wrench
 } from 'lucide-react'
 import { useChatGitState } from '../hooks/useChatGitState'
@@ -451,7 +452,22 @@ function renderChatSurfaceIcon(icon: string | undefined, size = 14): JSX.Element
   if (name === 'sparkles' || name === 'builder') return <Sparkles size={size} />
   if (name === 'pencil' || name === 'sketch') return <Pencil size={size} />
   if (name === 'settings' || name === 'cog') return <Cog size={size} />
+  if (name === 'clipboard-check' || name === 'qa-report') return <ClipboardCheck size={size} />
+  if (name === 'bug' || name === 'qa-workbench') return <Bug size={size} />
   return <Wrench size={size} />
+}
+
+function normalizeChatSurfaceMenuEntry(entry: any): ChatSurfaceMenuEntry {
+  return {
+    extId: String(entry.extId),
+    surfaceId: String(entry.id ?? entry.surfaceId),
+    label: String(entry.label ?? entry.id ?? entry.surfaceId),
+    description: entry.description ? String(entry.description) : undefined,
+    icon: entry.icon ? String(entry.icon) : undefined,
+    emits: entry.emits === 'text' ? 'text' : 'image',
+    defaultHeight: Number.isFinite(entry.defaultHeight) ? Number(entry.defaultHeight) : 260,
+    minHeight: Number.isFinite(entry.minHeight) ? Number(entry.minHeight) : 160,
+  }
 }
 
 function encodeUtf8Base64(text: string): string {
@@ -4085,16 +4101,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       }
       extensionsApi.listChatSurfaces().then((entries: any[]) => {
         if (cancelled) return
-        setChatSurfaceMenu((entries ?? []).map(e => ({
-          extId: String(e.extId),
-          surfaceId: String(e.id),
-          label: String(e.label ?? e.id),
-          description: e.description ? String(e.description) : undefined,
-          icon: e.icon ? String(e.icon) : undefined,
-          emits: e.emits === 'text' ? 'text' : 'image',
-          defaultHeight: Number.isFinite(e.defaultHeight) ? Number(e.defaultHeight) : 260,
-          minHeight: Number.isFinite(e.minHeight) ? Number(e.minHeight) : 160,
-        })))
+        setChatSurfaceMenu((entries ?? []).map(normalizeChatSurfaceMenuEntry))
       }).catch(() => { if (!cancelled) setChatSurfaceMenu([]) })
     }
     fetchMenu()
@@ -4144,6 +4151,26 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     if (!builderEntry) return
     await openChatSurface(builderEntry)
   }, [chatSurfaceMenu, openChatSurface])
+
+  useEffect(() => {
+    const handleOpenChatSurfaceRequest = async (event: Event) => {
+      const detail = normalizeOpenChatSurfaceDetail((event as CustomEvent).detail)
+      if (!detail || detail.targetTileId !== tileId) return
+
+      let entry = chatSurfaceMenu.find(candidate => candidate.extId === detail.extId && candidate.surfaceId === detail.surfaceId)
+      if (!entry) {
+        const rawEntries = await window.electron?.extensions?.listChatSurfaces?.().catch(() => [])
+        entry = (rawEntries ?? [])
+          .map(normalizeChatSurfaceMenuEntry)
+          .find(candidate => candidate.extId === detail.extId && candidate.surfaceId === detail.surfaceId)
+      }
+      if (!entry) return
+      await openChatSurface(entry)
+    }
+
+    window.addEventListener(CODESURF_OPEN_CHAT_SURFACE_EVENT, handleOpenChatSurfaceRequest as EventListener)
+    return () => window.removeEventListener(CODESURF_OPEN_CHAT_SURFACE_EVENT, handleOpenChatSurfaceRequest as EventListener)
+  }, [chatSurfaceMenu, openChatSurface, tileId])
 
   const closeChatSurface = useCallback((instanceId?: string) => {
     const targetId = instanceId ?? activeChatSurfaceRef.current?.instanceId
