@@ -2458,7 +2458,7 @@ function App(): JSX.Element {
   }, [addTile, bringToFront])
 
   useEffect(() => {
-    const dispatchTargetedSurfaceOpen = (targetTileId: string, request: { extId: string; surfaceId: string; sourceTileId?: string }) => {
+    const dispatchTargetedSurfaceOpen = (targetTileId: string, request: { extId: string; surfaceId: string; sourceTileId?: string; initialContext?: Record<string, unknown> }) => {
       const fire = () => {
         window.dispatchEvent(new CustomEvent(CODESURF_OPEN_CHAT_SURFACE_EVENT, {
           detail: { ...request, targetTileId },
@@ -2488,6 +2488,7 @@ function App(): JSX.Element {
         extId: detail.extId,
         surfaceId: detail.surfaceId,
         ...(detail.sourceTileId ? { sourceTileId: detail.sourceTileId } : {}),
+        ...(detail.initialContext ? { initialContext: detail.initialContext } : {}),
       })
     }
 

@@ -41,5 +41,8 @@ describe('BrowserTile browser evidence integration', () => {
     expect(BROWSER_TILE_SOURCE).toContain("browser_get_evidence")
     expect(BROWSER_TILE_SOURCE).toContain('browser.evidence.snapshot')
     expect(BROWSER_TILE_SOURCE).toContain('browser.page_health')
+    expect(BROWSER_TILE_SOURCE).toContain('ctx:browser:viewport')
+    expect(BROWSER_TILE_SOURCE).toContain('ctx:browser:evidence_snapshot')
+    expect(BROWSER_TILE_SOURCE).toContain('BrowserEvidenceViewport')
   })
 })

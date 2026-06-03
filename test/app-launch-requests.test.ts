@@ -31,10 +31,11 @@ describe('app launch requests', () => {
 
   test('normalizes chat-surface launch requests and rejects incomplete targets', () => {
     expect(CODESURF_OPEN_CHAT_SURFACE_EVENT).toBe('codesurf:open-chat-surface')
-    expect(normalizeOpenChatSurfaceDetail({ extId: 'qa-workbench', surfaceId: 'qa-report', sourceTileId: 'browser-1' })).toEqual({
+    expect(normalizeOpenChatSurfaceDetail({ extId: 'qa-workbench', surfaceId: 'qa-report', sourceTileId: 'browser-1', initialContext: { 'ctx:qa-workbench:report': 'r' } })).toEqual({
       extId: 'qa-workbench',
       surfaceId: 'qa-report',
       sourceTileId: 'browser-1',
+      initialContext: { 'ctx:qa-workbench:report': 'r' },
     })
     expect(normalizeOpenChatSurfaceDetail({ extId: 'qa-workbench', id: 'qa-report', targetTileId: 'chat-1' })).toEqual({
       extId: 'qa-workbench',

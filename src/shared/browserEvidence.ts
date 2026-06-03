@@ -52,6 +52,12 @@ export type BrowserEvidencePageState = {
   mode?: string
 }
 
+export type BrowserEvidenceViewport = {
+  width: number
+  height: number
+  deviceScaleFactor?: number
+}
+
 export type BrowserPageHealthStatus = 'healthy' | 'loading' | 'warning' | 'error'
 
 export type BrowserPageHealth = {
@@ -71,6 +77,7 @@ export type BrowserEvidenceSnapshotInput = {
   isLoading?: boolean
   mode?: string
   capturedAt?: number
+  viewport?: BrowserEvidenceViewport
   events: readonly BrowserEvidenceEvent[]
 }
 
@@ -78,6 +85,7 @@ export type BrowserEvidenceSnapshot = {
   tileId: string
   capturedAt: number
   page: BrowserEvidencePageState
+  viewport?: BrowserEvidenceViewport
   events: BrowserEvidenceEvent[]
   summary: BrowserEvidenceSummary
   health: BrowserPageHealth
@@ -246,10 +254,24 @@ export function createBrowserPageHealth(summary: BrowserEvidenceSummary, isLoadi
   }
 }
 
+function normalizeViewport(input: BrowserEvidenceSnapshotInput['viewport']): BrowserEvidenceViewport | undefined {
+  if (!input) return undefined
+  const width = Math.round(Number(input.width))
+  const height = Math.round(Number(input.height))
+  const deviceScaleFactor = Number(input.deviceScaleFactor)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined
+  return {
+    width,
+    height,
+    ...(Number.isFinite(deviceScaleFactor) && deviceScaleFactor > 0 ? { deviceScaleFactor } : {}),
+  }
+}
+
 export function createBrowserEvidenceSnapshot(input: BrowserEvidenceSnapshotInput): BrowserEvidenceSnapshot {
   const events = [...input.events]
   const summary = summarizeBrowserEvidence(events)
   const capturedAt = Number.isFinite(input.capturedAt) ? Number(input.capturedAt) : Date.now()
+  const viewport = normalizeViewport(input.viewport)
 
   return {
     tileId: input.tileId,
@@ -261,6 +283,7 @@ export function createBrowserEvidenceSnapshot(input: BrowserEvidenceSnapshotInpu
       isLoading: Boolean(input.isLoading),
       ...(input.mode ? { mode: input.mode } : {}),
     },
+    ...(viewport ? { viewport } : {}),
     events,
     summary,
     health: createBrowserPageHealth(summary, Boolean(input.isLoading)),
@@ -285,6 +308,7 @@ export function formatBrowserEvidenceReport(snapshot: BrowserEvidenceSnapshot, m
     `Tile: ${snapshot.tileId}`,
     `URL: ${snapshot.page.url || 'unknown'}`,
     ...(snapshot.page.title ? [`Title: ${snapshot.page.title}`] : []),
+    ...(snapshot.viewport ? [`Viewport: ${snapshot.viewport.width}×${snapshot.viewport.height}${snapshot.viewport.deviceScaleFactor ? ` @${snapshot.viewport.deviceScaleFactor}x` : ''}`] : []),
     `Status: ${snapshot.health.status} (${snapshot.health.label})`,
     `Events: ${snapshot.summary.total}; errors: ${snapshot.summary.errorCount}; warnings: ${snapshot.summary.warningCount}`,
     `Captured: ${new Date(snapshot.capturedAt).toISOString()}`,

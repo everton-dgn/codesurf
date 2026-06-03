@@ -56,8 +56,11 @@
         "ctx:sketch",
         "ctx:sketch:image",
         "ctx:qa-workbench:report",
+        "ctx:qa-workbench:visual_fix_handoff",
         "ctx:browser:evidence_summary",
-        "ctx:browser:page_health"
+        "ctx:browser:evidence_snapshot",
+        "ctx:browser:page_health",
+        "ctx:browser:viewport"
       ]
     },
     "actions": [

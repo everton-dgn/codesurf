@@ -3,6 +3,7 @@ const {
   applyBrowserBusEvent,
   buildQaWorkbenchReport,
   buildChatSurfacePayload,
+  buildVisualFixHandoff,
   serializeWorkbenchState,
 } = require('./shared.js')
 
@@ -69,6 +70,20 @@ module.exports = {
       })
     })
 
+    ctx.ipc.handle('getVisualFixHandoff', (options = {}) => {
+      const handoff = buildVisualFixHandoff(state, {
+        now: Date.now(),
+        includeBrowserReports: options && options.includeBrowserReports !== false,
+      })
+      state.report = handoff.report
+      ctx.bus.publish('workspace:qa-workbench', 'data', {
+        kind: 'qa-workbench.visual_fix_handoff',
+        handoff,
+        summary: handoff.summary,
+      })
+      return handoff
+    })
+
     ctx.ipc.handle('captureAll', (browserIds = []) => {
       const ids = normalizeBrowserIds(browserIds, state)
       for (const tileId of ids) {
@@ -107,6 +122,21 @@ module.exports = {
         now: Date.now(),
         includeBrowserReports: args.includeBrowserReports !== false,
       }),
+    })
+
+    ctx.mcp.registerTool({
+      name: 'visual_fix_handoff',
+      description: 'Return a Builder-ready QA/browser evidence handoff for visual frontend fixes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          includeBrowserReports: { type: 'boolean' },
+        },
+      },
+      handler: async (args = {}) => JSON.stringify(buildVisualFixHandoff(state, {
+        now: Date.now(),
+        includeBrowserReports: args.includeBrowserReports !== false,
+      })),
     })
 
     ctx.mcp.registerTool({

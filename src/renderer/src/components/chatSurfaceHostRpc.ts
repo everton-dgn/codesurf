@@ -23,6 +23,7 @@ export type ChatSurfaceOpenRequest = {
   surfaceId: string
   preferredTileId?: string
   sourceTileId?: string
+  initialContext?: Record<string, unknown>
 }
 
 export type BasicChatSurfaceRpcArgs = {
@@ -144,6 +145,9 @@ export async function handleBasicChatSurfaceRpc(args: BasicChatSurfaceRpcArgs): 
     const surfaceId = typeof (request.surfaceId ?? request.id) === 'string' ? String(request.surfaceId ?? request.id).trim() : ''
     const preferredTileId = typeof request.preferredTileId === 'string' ? request.preferredTileId.trim() : ''
     const sourceTileId = typeof request.sourceTileId === 'string' ? request.sourceTileId.trim() : surface.instanceId
+    const initialContext = request.initialContext && typeof request.initialContext === 'object' && !Array.isArray(request.initialContext)
+      ? request.initialContext as Record<string, unknown>
+      : undefined
     if (!extId || !surfaceId) {
       throw new Error('Missing chat surface target')
     }
@@ -155,6 +159,7 @@ export async function handleBasicChatSurfaceRpc(args: BasicChatSurfaceRpcArgs): 
       surfaceId,
       ...(preferredTileId ? { preferredTileId } : {}),
       ...(sourceTileId ? { sourceTileId } : {}),
+      ...(initialContext ? { initialContext } : {}),
     })
     return { handled: true, result: true }
   }

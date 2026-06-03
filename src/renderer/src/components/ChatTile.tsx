@@ -4113,10 +4113,25 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     }
   }, [])
 
-  const openChatSurface = useCallback(async (entry: ChatSurfaceMenuEntry) => {
+  const openChatSurface = useCallback(async (entry: ChatSurfaceMenuEntry, options: { initialContext?: Record<string, unknown> } = {}) => {
     setShowInsertMenu(false)
+    const initialContext = options.initialContext && typeof options.initialContext === 'object' && !Array.isArray(options.initialContext)
+      ? options.initialContext
+      : undefined
     const existing = openChatSurfacesRef.current.find(surface => surface.extId === entry.extId && surface.surfaceId === entry.surfaceId)
     if (existing) {
+      if (initialContext && Object.keys(initialContext).length > 0) {
+        setOpenChatSurfaces(prev => prev.map(surface => surface.instanceId === existing.instanceId
+          ? { ...surface, context: { ...surface.context, ...initialContext } }
+          : surface))
+        for (const [key, value] of Object.entries(initialContext)) {
+          postToChatSurface(existing.instanceId, {
+            type: 'contex-event',
+            event: 'context.changed',
+            data: { key, value },
+          })
+        }
+      }
       setActiveChatSurfaceId(existing.instanceId)
       return
     }
@@ -4141,11 +4156,11 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       minHeight: entry.minHeight,
       payload: null,
       tileState: {},
-      context: {},
+      context: initialContext ?? {},
       registeredActions: [],
     }])
     setActiveChatSurfaceId(instanceId)
-  }, [])
+  }, [postToChatSurface])
   const openBuilderFromSketch = useCallback(async () => {
     const builderEntry = chatSurfaceMenu.find(entry => entry.extId === 'builder' || entry.surfaceId === 'builder')
     if (!builderEntry) return
@@ -4165,7 +4180,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           .find(candidate => candidate.extId === detail.extId && candidate.surfaceId === detail.surfaceId)
       }
       if (!entry) return
-      await openChatSurface(entry)
+      await openChatSurface(entry, { initialContext: detail.initialContext })
     }
 
     window.addEventListener(CODESURF_OPEN_CHAT_SURFACE_EVENT, handleOpenChatSurfaceRequest as EventListener)
@@ -4203,6 +4218,13 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         if (!surface) return
         if (getChatSurfaceIframe(surface.instanceId)?.contentWindow !== sourceWin) return
         sourceWin?.postMessage({ type: 'contex-theme-vars', vars: chatSurfaceThemeVars }, '*')
+        for (const [key, value] of Object.entries(surface.context || {})) {
+          sourceWin?.postMessage({
+            type: 'contex-event',
+            event: 'context.changed',
+            data: { key, value },
+          }, '*')
+        }
         for (const peer of getChatSurfacePeerEntries(surface.instanceId)) {
           for (const entry of peer.contextEntries) {
             sourceWin?.postMessage({
@@ -4253,7 +4275,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                 .find(candidate => candidate.extId === request.extId && candidate.surfaceId === request.surfaceId)
             }
             if (!entry) throw new Error(`Chat surface ${request.extId}:${request.surfaceId} not found`)
-            await openChatSurface(entry)
+            await openChatSurface(entry, { initialContext: request.initialContext })
             return true
           },
         })

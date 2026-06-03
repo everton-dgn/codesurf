@@ -18,6 +18,7 @@ export interface CodeSurfOpenChatSurfaceDetail {
   targetTileId?: string
   preferredTileId?: string
   sourceTileId?: string
+  initialContext?: Record<string, unknown>
 }
 
 export interface LaunchableTileRef {
@@ -70,6 +71,9 @@ export function normalizeOpenChatSurfaceDetail(value: unknown): CodeSurfOpenChat
   const targetTileId = stringValue(record.targetTileId)
   const preferredTileId = stringValue(record.preferredTileId)
   const sourceTileId = stringValue(record.sourceTileId)
+  const initialContext = record.initialContext && typeof record.initialContext === 'object' && !Array.isArray(record.initialContext)
+    ? record.initialContext as Record<string, unknown>
+    : undefined
 
   return {
     extId,
@@ -77,6 +81,7 @@ export function normalizeOpenChatSurfaceDetail(value: unknown): CodeSurfOpenChat
     ...(targetTileId ? { targetTileId } : {}),
     ...(preferredTileId ? { preferredTileId } : {}),
     ...(sourceTileId ? { sourceTileId } : {}),
+    ...(initialContext ? { initialContext } : {}),
   }
 }
 

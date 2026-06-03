@@ -222,6 +222,7 @@
         <button id="captureBtn" type="button" class="primary">Capture all</button>
         <button id="copyBtn" type="button">Copy report</button>
         <button id="chatBtn" type="button">Send to chat</button>
+        <button id="builderBtn" type="button" class="primary">Fix in Builder</button>
         <button id="publishBtn" type="button">Publish context</button>
       </div>
     </section>
@@ -289,6 +290,10 @@
     state.refreshTimer = setTimeout(refreshState, 80)
   }
 
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
   async function loadCanvasBrowsers() {
     if (!window.contex || !window.contex.canvas) return []
     const tiles = await window.contex.canvas.listTiles().catch(() => [])
@@ -331,8 +336,17 @@
     }
   }
 
+  async function getVisualFixHandoff() {
+    if (!window.contex || !window.contex.ext) return null
+    const handoff = await window.contex.ext.invoke('getVisualFixHandoff')
+    const report = handoff && handoff.report ? String(handoff.report) : ''
+    if (report) state.hostState = { ...(state.hostState || {}), report, summary: handoff.summary || (state.hostState && state.hostState.summary) || {} }
+    return handoff
+  }
+
   async function publishContext() {
     const report = await window.contex.ext.invoke('getReport')
+    const handoff = await getVisualFixHandoff().catch(() => null)
     const summary = state.hostState && state.hostState.summary ? state.hostState.summary : {}
     if (window.contex.context) {
       await window.contex.context.set('ctx:qa-workbench:report', {
@@ -340,10 +354,13 @@
         summary,
         generatedAt: Date.now(),
       })
+      if (handoff) {
+        await window.contex.context.set('ctx:qa-workbench:visual_fix_handoff', handoff)
+      }
     }
-    state.hostState = { ...(state.hostState || {}), report }
+    state.hostState = { ...(state.hostState || {}), report, ...(handoff && handoff.summary ? { summary: handoff.summary } : {}) }
     render()
-    $('statusLine').textContent = 'Published ctx:qa-workbench:report'
+    $('statusLine').textContent = 'Published QA report + visual fix context'
   }
 
   async function sendToChat() {
@@ -354,6 +371,47 @@
     await captureAll().catch(() => {})
     await window.contex.chat.openSurface({ extId: 'qa-workbench', surfaceId: 'qa-report' })
     $('statusLine').textContent = 'Opening QA Report in chat'
+  }
+
+  async function openBuilderFix() {
+    if (!window.contex || !window.contex.chat || !window.contex.chat.openSurface) {
+      $('statusLine').textContent = 'Builder chat surface launcher unavailable'
+      return
+    }
+    $('statusLine').textContent = 'Packaging QA handoff for Builder…'
+    await captureAll().catch(() => {})
+    await delay(300)
+    await refreshState().catch(() => {})
+    const handoff = await getVisualFixHandoff()
+    if (!handoff) {
+      $('statusLine').textContent = 'No QA handoff available'
+      return
+    }
+    const report = handoff && handoff.report ? String(handoff.report) : ''
+    if (window.contex.context) {
+      if (report) {
+        await window.contex.context.set('ctx:qa-workbench:report', {
+          report,
+          summary: handoff.summary || {},
+          generatedAt: handoff.generatedAt || Date.now(),
+        }).catch(() => {})
+      }
+      await window.contex.context.set('ctx:qa-workbench:visual_fix_handoff', handoff).catch(() => {})
+    }
+    await window.contex.chat.openSurface({
+      extId: 'builder',
+      surfaceId: 'builder',
+      initialContext: {
+        'ctx:qa-workbench:report': {
+          report,
+          summary: handoff.summary || {},
+          generatedAt: handoff.generatedAt || Date.now(),
+        },
+        'ctx:qa-workbench:visual_fix_handoff': handoff,
+      },
+    })
+    render()
+    $('statusLine').textContent = 'Opened Builder with QA visual-fix context'
   }
 
   function renderBrowser(browser) {
@@ -424,6 +482,7 @@
     $('captureBtn').onclick = captureAll
     $('copyBtn').onclick = copyReport
     $('chatBtn').onclick = sendToChat
+    $('builderBtn').onclick = openBuilderFix
     $('publishBtn').onclick = publishContext
 
     if (window.contex.bus) {

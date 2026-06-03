@@ -13,6 +13,7 @@ import {
   summarizeBrowserEvidence,
   type BrowserEvidenceEvent,
   type BrowserEvidenceInput,
+  type BrowserEvidenceViewport,
 } from '../../../shared/browserEvidence'
 import clusoEmbedJs from '../assets/cluso/cluso-embed.js?raw'
 import clusoEmbedCss from '../assets/cluso/cluso-embed.css?raw'
@@ -890,6 +891,19 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
   const browserPageStateRef = useRef({ url: startUrl, title: '', isLoading: false, mode: 'desktop' as BrowserMode })
   browserPageStateRef.current = { url: currentUrl, title: pageTitle, isLoading, mode }
 
+  const getCurrentViewport = useCallback((): BrowserEvidenceViewport | undefined => {
+    const rect = wvContainerRef.current?.getBoundingClientRect()
+    const viewportWidth = rect && rect.width > 0 ? rect.width : width
+    const viewportHeight = rect && rect.height > 0 ? rect.height : height
+    const roundedWidth = Math.max(1, Math.round(viewportWidth))
+    const roundedHeight = Math.max(1, Math.round(viewportHeight))
+    return {
+      width: roundedWidth,
+      height: roundedHeight,
+      deviceScaleFactor: window.devicePixelRatio || 1,
+    }
+  }, [height, width])
+
   const createCurrentEvidenceSnapshot = useCallback((events = browserEvidenceRef.current) => {
     const page = browserPageStateRef.current
     return createBrowserEvidenceSnapshot({
@@ -898,9 +912,10 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       title: page.title,
       isLoading: page.isLoading,
       mode: page.mode,
+      viewport: getCurrentViewport(),
       events,
     })
-  }, [tileId])
+  }, [getCurrentViewport, tileId])
 
   const publishEvidenceSnapshot = useCallback((reason: string, events = browserEvidenceRef.current) => {
     const snapshot = createCurrentEvidenceSnapshot(events)
@@ -921,6 +936,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
         health: snapshot.health,
         page: snapshot.page,
         summary: snapshot.summary,
+        ...(snapshot.viewport ? { viewport: snapshot.viewport } : {}),
       },
     )
     return snapshot
@@ -936,13 +952,25 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       `tile:${tileId}`,
       'browser.evidence',
       `browser:${tileId}`,
-      { event, summary: snapshot.summary, health: snapshot.health, page: snapshot.page },
+      {
+        event,
+        summary: snapshot.summary,
+        health: snapshot.health,
+        page: snapshot.page,
+        ...(snapshot.viewport ? { viewport: snapshot.viewport } : {}),
+      },
     )
     window.electron?.bus?.publish(
       `tile:${tileId}`,
       'browser.page_health',
       `browser:${tileId}`,
-      { reason: 'evidence-recorded', health: snapshot.health, page: snapshot.page, summary: snapshot.summary },
+      {
+        reason: 'evidence-recorded',
+        health: snapshot.health,
+        page: snapshot.page,
+        summary: snapshot.summary,
+        ...(snapshot.viewport ? { viewport: snapshot.viewport } : {}),
+      },
     )
   }, [createCurrentEvidenceSnapshot, tileId])
 
@@ -999,6 +1027,13 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
 
   useEffect(() => {
     if (!workspaceId || !window.electron?.tileContext) return
+    const latestSnapshot = createCurrentEvidenceSnapshot(browserEvidence)
+    const contextSnapshot = latestSnapshot.events.length > 20
+      ? {
+        ...latestSnapshot,
+        events: browserEvidence.slice(-20),
+      }
+      : latestSnapshot
     void Promise.allSettled([
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:url', currentUrl),
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:title', pageTitle),
@@ -1006,6 +1041,8 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:loading', isLoading),
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:evidence_summary', browserEvidenceSummary),
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:page_health', browserPageHealth),
+      window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:viewport', contextSnapshot.viewport ?? null),
+      window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:evidence_snapshot', contextSnapshot),
       window.electron.tileContext.set(workspaceId, tileId, 'ctx:browser:navigation', {
         currentUrl,
         title: pageTitle,
@@ -1015,7 +1052,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
         mode,
       }),
     ])
-  }, [workspaceId, tileId, currentUrl, pageTitle, mode, isLoading, canGoBack, canGoForward, browserEvidenceSummary.total, browserEvidenceSummary.errorCount, browserEvidenceSummary.warningCount, browserPageHealth.status])
+  }, [workspaceId, tileId, currentUrl, pageTitle, mode, isLoading, canGoBack, canGoForward, browserEvidence, browserEvidenceSummary.total, browserEvidenceSummary.errorCount, browserEvidenceSummary.warningCount, browserPageHealth.status, createCurrentEvidenceSnapshot])
 
   // Fan-out bus traffic from this browser tile to canvas peers (unrelated to ContexRelay mailbox).
   useEffect(() => {

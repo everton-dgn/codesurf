@@ -83,6 +83,7 @@ describe('browser evidence helpers', () => {
       url: 'https://example.test/app',
       title: 'Example App',
       mode: 'desktop',
+      viewport: { width: 1280, height: 720, deviceScaleFactor: 2 },
       isLoading: false,
       capturedAt: 99,
       events,
@@ -92,6 +93,7 @@ describe('browser evidence helpers', () => {
     expect(snapshot.health.status).toBe('warning')
     expect(snapshot.health.label).toBe('1 warning')
     expect(snapshot.page.title).toBe('Example App')
+    expect(snapshot.viewport).toEqual({ width: 1280, height: 720, deviceScaleFactor: 2 })
     expect(snapshot.capturedAt).toBe(99)
   })
 

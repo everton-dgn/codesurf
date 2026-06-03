@@ -97,6 +97,19 @@ function normalizePage(value) {
   }
 }
 
+function normalizeViewport(value) {
+  const source = isObject(value) ? value : {}
+  const width = Number(source.width)
+  const height = Number(source.height)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  const deviceScaleFactor = Number(source.deviceScaleFactor)
+  return {
+    width: Math.round(width),
+    height: Math.round(height),
+    ...(Number.isFinite(deviceScaleFactor) && deviceScaleFactor > 0 ? { deviceScaleFactor } : {}),
+  }
+}
+
 function normalizeEvidenceEvent(value, fallbackTileId) {
   if (!isObject(value)) return null
   const severity = ['error', 'warning', 'info'].includes(value.severity) ? value.severity : 'info'
@@ -121,6 +134,7 @@ function normalizeSnapshot(value, fallbackTileId) {
     page: normalizePage(value.page),
     summary,
     health: normalizeHealth(value.health, summary),
+    viewport: normalizeViewport(value.viewport),
     events: Array.isArray(value.events)
       ? value.events.map(event => normalizeEvidenceEvent(event, fallbackTileId)).filter(Boolean)
       : [],
@@ -238,12 +252,16 @@ function buildQaWorkbenchReport(state, options = {}) {
     const summary = normalizeSummary(browser.summary)
     const health = normalizeHealth(browser.health, summary)
     const events = Array.isArray(browser.events) ? browser.events.slice(-10).reverse() : []
+    const viewport = browser.latestSnapshot && browser.latestSnapshot.snapshot
+      ? normalizeViewport(browser.latestSnapshot.snapshot.viewport)
+      : null
 
     lines.push(`## Browser: ${tileId}`)
     lines.push(`Health: ${health.status}${health.label ? ` (${health.label})` : ''}`)
     lines.push(`URL: ${page.url || '—'}`)
     if (page.title) lines.push(`Title: ${page.title}`)
     lines.push(`Mode: ${page.mode}${page.isLoading ? ' / loading' : ''}`)
+    if (viewport) lines.push(`Viewport: ${viewport.width}×${viewport.height}${viewport.deviceScaleFactor ? ` @${viewport.deviceScaleFactor}x` : ''}`)
     lines.push(`Summary: ${summary.errorCount} errors, ${summary.warningCount} warnings, ${summary.total} events`)
     lines.push('')
 
@@ -275,6 +293,47 @@ function buildChatSurfacePayload(state, options = {}) {
     data: buildQaWorkbenchReport(state, options),
     mime: 'text/markdown',
     ext: 'md',
+  }
+}
+
+function buildVisualFixHandoff(state, options = {}) {
+  const generatedAt = nowMs(options)
+  const report = buildQaWorkbenchReport(state, options)
+  const summary = getWorkbenchSummary(state)
+  const browsers = (state && Array.isArray(state.browserOrder) ? state.browserOrder : [])
+    .map(tileId => state.browsers[tileId])
+    .filter(Boolean)
+    .map(browser => {
+      const snapshot = browser.latestSnapshot && browser.latestSnapshot.snapshot ? browser.latestSnapshot.snapshot : null
+      const page = normalizePage(snapshot ? snapshot.page : browser.page)
+      const browserSummary = normalizeSummary(snapshot ? snapshot.summary : browser.summary)
+      const health = normalizeHealth(snapshot ? snapshot.health : browser.health, browserSummary)
+      const events = Array.isArray(snapshot ? snapshot.events : browser.events) ? (snapshot ? snapshot.events : browser.events).slice(-12) : []
+      return {
+        tileId: browser.tileId,
+        page,
+        health,
+        summary: browserSummary,
+        viewport: snapshot ? normalizeViewport(snapshot.viewport) : null,
+        latestSnapshotAt: snapshot ? snapshot.capturedAt : null,
+        recentEvents: events.map(event => normalizeEvidenceEvent(event, browser.tileId)).filter(Boolean),
+      }
+    })
+
+  const prompt = [
+    'Fix this frontend using the QA Workbench browser evidence below.',
+    'Treat console errors, failed loads, broken navigation, responsive overflow, and warning evidence as acceptance criteria.',
+    'If screenshots or Sketch visual refs are attached in Builder, match their visible hierarchy, spacing, typography, and state while resolving this QA evidence.',
+    'Return a polished corrected implementation or Builder HTML variant only; do not hand-wave around runtime evidence.',
+  ].join(' ')
+
+  return {
+    kind: 'qa-workbench.visual_fix_handoff',
+    prompt,
+    report,
+    summary,
+    browsers,
+    generatedAt,
   }
 }
 
@@ -322,6 +381,7 @@ exports.createWorkbenchState = createWorkbenchState
 exports.applyBrowserBusEvent = applyBrowserBusEvent
 exports.buildQaWorkbenchReport = buildQaWorkbenchReport
 exports.buildChatSurfacePayload = buildChatSurfacePayload
+exports.buildVisualFixHandoff = buildVisualFixHandoff
 exports.getWorkbenchSummary = getWorkbenchSummary
 exports.serializeWorkbenchState = serializeWorkbenchState
 exports.normalizeEvidenceEvent = normalizeEvidenceEvent

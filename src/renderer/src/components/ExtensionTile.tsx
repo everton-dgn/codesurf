@@ -326,6 +326,9 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
         const requestedExtId = String(request?.extId ?? extId ?? '').trim()
         const surfaceId = String(request?.surfaceId ?? request?.id ?? '').trim()
         const preferredTileId = String(request?.preferredTileId ?? '').trim()
+        const initialContext = request?.initialContext && typeof request.initialContext === 'object' && !Array.isArray(request.initialContext)
+          ? request.initialContext as Record<string, unknown>
+          : undefined
         if (!requestedExtId || !surfaceId) throw new Error('Missing chat surface target')
         window.dispatchEvent(new CustomEvent(CODESURF_OPEN_CHAT_SURFACE_EVENT, {
           detail: {
@@ -333,6 +336,7 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
             surfaceId,
             sourceTileId: tileId,
             ...(preferredTileId ? { preferredTileId } : {}),
+            ...(initialContext ? { initialContext } : {}),
           },
         }))
         return true

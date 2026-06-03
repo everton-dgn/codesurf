@@ -19,8 +19,11 @@ test('builder declares screenshot-driven design mode context and actions', async
 
   assert.ok(context.consumes.includes('ctx:sketch:image'))
   assert.ok(context.consumes.includes('ctx:qa-workbench:report'))
+  assert.ok(context.consumes.includes('ctx:qa-workbench:visual_fix_handoff'))
   assert.ok(context.consumes.includes('ctx:browser:evidence_summary'))
+  assert.ok(context.consumes.includes('ctx:browser:evidence_snapshot'))
   assert.ok(context.consumes.includes('ctx:browser:page_health'))
+  assert.ok(context.consumes.includes('ctx:browser:viewport'))
   assert.ok(context.produces.includes('ctx:builder:visual_refs'))
   assert.ok(context.produces.includes('ctx:builder:visual_verification_prompt'))
   assert.ok(context.produces.includes('ctx:builder:qa_handoff'))
@@ -48,6 +51,8 @@ test('builder surface imports screenshots and sends multimodal visual references
   assert.match(html, /ctx:builder:visual_verification_prompt/)
   assert.match(html, /ctx:builder:qa_handoff/)
   assert.match(html, /ctx:qa-workbench:report/)
+  assert.match(html, /ctx:qa-workbench:visual_fix_handoff/)
+  assert.match(html, /maybeApplyQaHandoffPrompt/)
   assert.match(html, /window\.contex\.chat\.openSurface\(\{ extId: 'qa-workbench', surfaceId: 'qa-report' \}\)/)
 })
 

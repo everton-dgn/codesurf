@@ -48,23 +48,35 @@ test('qa-workbench is bundled as a host-backed browser QA tile and chat surface'
   assert.equal(surface.emits, 'text')
 
   assert.deepEqual(manifest.contributes.context.consumes.sort(), [
+    'ctx:browser:evidence_snapshot',
     'ctx:browser:evidence_summary',
     'ctx:browser:page_health',
     'ctx:browser:title',
+    'ctx:browser:viewport',
   ].sort())
-  assert.deepEqual(manifest.contributes.context.produces, ['ctx:qa-workbench:report'])
+  assert.deepEqual(manifest.contributes.context.produces.sort(), [
+    'ctx:qa-workbench:report',
+    'ctx:qa-workbench:visual_fix_handoff',
+  ].sort())
 
   const actionNames = manifest.contributes.actions.map(action => action.name).sort()
-  assert.deepEqual(actionNames, ['captureAll', 'generateReport'])
+  assert.deepEqual(actionNames, ['captureAll', 'generateReport', 'getVisualFixHandoff'])
 })
 
-test('qa-workbench tile can open the QA Report chat surface', async () => {
+test('qa-workbench tile can open chat surfaces for QA report and Builder fixes', async () => {
   const tileHtml = await readFile(join(EXT_DIR, 'tile', 'index.html'), 'utf8')
   assert.match(tileHtml, /id="chatBtn"/)
   assert.match(tileHtml, /Send to chat/)
+  assert.match(tileHtml, /id="builderBtn"/)
+  assert.match(tileHtml, /Fix in Builder/)
+  assert.match(tileHtml, /getVisualFixHandoff/)
+  assert.match(tileHtml, /initialContext/)
+  assert.match(tileHtml, /ctx:qa-workbench:visual_fix_handoff/)
   assert.match(tileHtml, /window\.contex\.chat\.openSurface/)
   assert.match(tileHtml, /extId: 'qa-workbench'/)
   assert.match(tileHtml, /surfaceId: 'qa-report'/)
+  assert.match(tileHtml, /extId: 'builder'/)
+  assert.match(tileHtml, /surfaceId: 'builder'/)
 })
 
 test('qa-workbench shared helpers reduce browser evidence events into reports and chat payloads', async () => {
@@ -106,6 +118,7 @@ test('qa-workbench shared helpers reduce browser evidence events into reports an
         page: { url: 'https://example.test/app', title: 'Example App', isLoading: false, mode: 'desktop' },
         summary: { total: 1, errorCount: 1, warningCount: 0, infoCount: 0 },
         health: { status: 'error', label: 'Errors detected', issueCount: 1, loading: false },
+        viewport: { width: 1280, height: 720, deviceScaleFactor: 2 },
         events: [
           {
             id: 'evt-1',
@@ -134,6 +147,7 @@ test('qa-workbench shared helpers reduce browser evidence events into reports an
   assert.match(report, /^# QA Workbench/m)
   assert.match(report, /Browser: browser-1/)
   assert.match(report, /Health: error/)
+  assert.match(report, /Viewport: 1280×720 @2x/)
   assert.match(report, /Uncaught TypeError: boom/)
   assert.match(report, /Existing browser report text/)
 
@@ -142,6 +156,13 @@ test('qa-workbench shared helpers reduce browser evidence events into reports an
   assert.equal(payload.mime, 'text/markdown')
   assert.equal(payload.ext, 'md')
   assert.equal(payload.data, report)
+
+  const handoff = shared.buildVisualFixHandoff(state, { now: 1300 })
+  assert.equal(handoff.kind, 'qa-workbench.visual_fix_handoff')
+  assert.match(handoff.prompt, /Fix this frontend using the QA Workbench browser evidence/)
+  assert.equal(handoff.summary.issueCount, 1)
+  assert.equal(handoff.browsers[0].viewport.width, 1280)
+  assert.match(handoff.report, /Existing browser report text/)
 })
 
 test('validate-extension accepts bundled qa-workbench targets', async () => {

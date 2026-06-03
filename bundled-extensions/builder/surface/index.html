@@ -770,6 +770,7 @@
     generating: false,
     abortCtrl: null,
     peerContext: {},
+    localContext: {},
   };
 
   document.documentElement.setAttribute('data-render-mode', state.renderMode);
@@ -1242,24 +1243,34 @@
     window.contex.context.set('ctx:builder:visual_verification_prompt', buildVisualVerificationPrompt('visual-verify'));
     window.contex.context.set('ctx:builder:qa_handoff', {
       prompt: buildVisualVerificationPrompt('qa-fix'),
-      reportContextCount: findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:browser:evidence_summary', 'ctx:browser:page_health']).length,
+      reportContextCount: findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:qa-workbench:visual_fix_handoff', 'ctx:browser:evidence_summary', 'ctx:browser:evidence_snapshot', 'ctx:browser:page_health', 'ctx:browser:viewport']).length,
       updatedAt: Date.now()
     });
     if (errorMessage !== undefined) window.contex.context.set('ctx:artifact:error', errorMessage || null);
     publishChatSurfacePayload(selected ? selected.html : '');
   }
 
+  function allContextBuckets() {
+    var buckets = {};
+    if (state.localContext && Object.keys(state.localContext).length) buckets.self = state.localContext;
+    Object.keys(state.peerContext || {}).forEach(function(peerId) {
+      buckets[peerId] = state.peerContext[peerId] || {};
+    });
+    return buckets;
+  }
+
   function peerContextText() {
     var lines = [];
-    Object.keys(state.peerContext).forEach(function(peerId) {
-      var bucket = state.peerContext[peerId] || {};
+    var buckets = allContextBuckets();
+    Object.keys(buckets).forEach(function(peerId) {
+      var bucket = buckets[peerId] || {};
       Object.keys(bucket).forEach(function(key) {
         var value = bucket[key];
         var rendered = typeof value === 'string' ? value : JSON.stringify(value);
         lines.push('[' + peerId + '] ' + key + ': ' + truncate(rendered, 180));
       });
     });
-    return lines.length ? '\n\nPeer context:\n' + lines.join('\n') : '';
+    return lines.length ? '\n\nContext:\n' + lines.join('\n') : '';
   }
 
   function buildWantedContextText() {
@@ -1272,8 +1283,9 @@
   function findPeerContextEntries(keys) {
     var wanted = Array.isArray(keys) ? keys : [keys];
     var entries = [];
-    Object.keys(state.peerContext || {}).forEach(function(peerId) {
-      var bucket = state.peerContext[peerId] || {};
+    var buckets = allContextBuckets();
+    Object.keys(buckets).forEach(function(peerId) {
+      var bucket = buckets[peerId] || {};
       Object.keys(bucket).forEach(function(key) {
         if (wanted.indexOf(key) < 0) return;
         entries.push({ peerId: peerId, key: key, value: bucket[key] });
@@ -1335,7 +1347,7 @@
   }
 
   function buildQaEvidenceContextText() {
-    var entries = findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:browser:evidence_summary', 'ctx:browser:page_health']);
+    var entries = findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:qa-workbench:visual_fix_handoff', 'ctx:browser:evidence_summary', 'ctx:browser:evidence_snapshot', 'ctx:browser:page_health', 'ctx:browser:viewport']);
     if (!entries.length) return '';
     return '\n\nQA/browser evidence context:\n' + entries.map(function(entry) {
       var rendered = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
@@ -1346,11 +1358,25 @@
   function buildVisualVerificationPrompt(mode) {
     var key = PROMPT_TEMPLATES[mode] ? mode : 'visual-verify';
     var refs = allVisualRefs();
-    var qaEntries = findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:browser:evidence_summary', 'ctx:browser:page_health']);
+    var qaEntries = findPeerContextEntries(['ctx:qa-workbench:report', 'ctx:qa-workbench:visual_fix_handoff', 'ctx:browser:evidence_summary', 'ctx:browser:evidence_snapshot', 'ctx:browser:page_health', 'ctx:browser:viewport']);
     var lines = [PROMPT_TEMPLATES[key]];
     if (refs.length) lines.push('Use ' + refs.length + ' attached screenshot/sketch image reference' + (refs.length === 1 ? '' : 's') + ' as visual evidence.');
     if (qaEntries.length) lines.push('Also include the available QA/browser evidence context in the fix.');
     return lines.join(' ');
+  }
+
+  function maybeApplyQaHandoffPrompt() {
+    var promptInput = $('prompt');
+    if (!promptInput || promptInput.value.trim()) return;
+    var entries = findPeerContextEntries('ctx:qa-workbench:visual_fix_handoff');
+    if (!entries.length) return;
+    var value = entries[entries.length - 1].value;
+    var prompt = value && typeof value === 'object' && typeof value.prompt === 'string'
+      ? value.prompt
+      : buildVisualVerificationPrompt('qa-fix');
+    promptInput.value = prompt;
+    state.lastVisualPrompt = prompt;
+    syncPromptHeight();
   }
 
   function buildUserPrompt(basePrompt, index, total) {
@@ -1776,10 +1802,29 @@
     hydratePersistedState();
 
     if (window.contex.context) {
+      if (typeof window.contex.context.getAll === 'function') {
+        window.contex.context.getAll('ctx:').then(function(entries) {
+          state.localContext = {};
+          (Array.isArray(entries) ? entries : []).forEach(function(entry) {
+            if (entry && typeof entry.key === 'string') state.localContext[entry.key] = entry.value;
+          });
+          maybeApplyQaHandoffPrompt();
+          render();
+        }).catch(function() {});
+      }
+      if (typeof window.contex.context.onChanged === 'function') {
+        window.contex.context.onChanged(function(data) {
+          if (!data || !data.key) return;
+          state.localContext[data.key] = data.value;
+          maybeApplyQaHandoffPrompt();
+          render();
+        });
+      }
       window.contex.context.onPeerContextChanged(function(data) {
         if (!data.peerId || !data.key) return;
         state.peerContext[data.peerId] = state.peerContext[data.peerId] || {};
         state.peerContext[data.peerId][data.key] = data.value;
+        maybeApplyQaHandoffPrompt();
         render();
       });
     }
@@ -1878,6 +1923,7 @@
         state.currentBuildId = null;
         state.generating = false;
         state.peerContext = {};
+        state.localContext = {};
         $('prompt').value = '';
         hideError();
         setGenerating(false);

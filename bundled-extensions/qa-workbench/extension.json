@@ -41,13 +41,19 @@
       "consumes": [
         "ctx:browser:title",
         "ctx:browser:evidence_summary",
-        "ctx:browser:page_health"
+        "ctx:browser:evidence_snapshot",
+        "ctx:browser:page_health",
+        "ctx:browser:viewport"
       ],
-      "produces": ["ctx:qa-workbench:report"]
+      "produces": [
+        "ctx:qa-workbench:report",
+        "ctx:qa-workbench:visual_fix_handoff"
+      ]
     },
     "actions": [
       { "name": "captureAll", "description": "Request evidence snapshots from all known browser tiles." },
-      { "name": "generateReport", "description": "Generate a markdown QA report from collected browser evidence." }
+      { "name": "generateReport", "description": "Generate a markdown QA report from collected browser evidence." },
+      { "name": "getVisualFixHandoff", "description": "Package QA/browser evidence into a Builder-ready visual fix handoff." }
     ]
   },
   "permissions": ["bus:read", "bus:write"]

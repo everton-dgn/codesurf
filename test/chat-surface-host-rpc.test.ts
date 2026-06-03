@@ -121,7 +121,7 @@ describe('chatSurfaceHostRpc', () => {
     const requests: unknown[] = []
     const result = await handleBasicChatSurfaceRpc({
       method: 'chat.openSurface',
-      params: { request: { extId: 'qa-workbench', surfaceId: 'qa-report', preferredTileId: 'chat-1' } },
+      params: { request: { extId: 'qa-workbench', surfaceId: 'qa-report', preferredTileId: 'chat-1', initialContext: { 'ctx:qa-workbench:report': 'r' } } },
       surface,
       connectedPeerIds: [],
       workspaceId: 'ws-1',
@@ -135,7 +135,7 @@ describe('chatSurfaceHostRpc', () => {
     })
 
     expect(result).toEqual({ handled: true, result: true })
-    expect(requests).toEqual([{ extId: 'qa-workbench', surfaceId: 'qa-report', preferredTileId: 'chat-1', sourceTileId: 'surf-123' }])
+    expect(requests).toEqual([{ extId: 'qa-workbench', surfaceId: 'qa-report', preferredTileId: 'chat-1', sourceTileId: 'surf-123', initialContext: { 'ctx:qa-workbench:report': 'r' } }])
   })
 
   test('handleBasicChatSurfaceRpc returns normalized payload and workspace path', async () => {
