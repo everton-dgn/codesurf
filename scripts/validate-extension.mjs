@@ -4,11 +4,19 @@ import { access, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { ROOT as EXTENSIONS_ROOT, startHarnessServer } from '../examples/extensions/_harness/server.mjs'
 
-const HELP = `Validate Contex example extensions.
+const EXAMPLES_ROOT = EXTENSIONS_ROOT
+const BUNDLED_ROOT = resolve(EXTENSIONS_ROOT, '..', '..', 'bundled-extensions')
+const VALIDATION_ROOTS = [
+  { root: EXAMPLES_ROOT, label: 'examples/extensions' },
+  { root: BUNDLED_ROOT, label: 'bundled-extensions' },
+]
+
+const HELP = `Validate Contex example or bundled extensions.
 
 Usage:
   node scripts/validate-extension.mjs --all
   node scripts/validate-extension.mjs examples/extensions/pomodoro
+  node scripts/validate-extension.mjs bundled-extensions/qa-workbench
   npm run validate-extension -- --all
 
 Options:
@@ -25,57 +33,59 @@ if (args.includes('--help') || args.includes('-h')) {
 
 const targetArgs = args.filter(arg => arg !== '--all')
 const validateAll = args.includes('--all') || targetArgs.length === 0
-const targetDirs = await resolveTargets(validateAll ? [] : targetArgs)
+const targets = await resolveTargets(validateAll ? [] : targetArgs)
 
-if (targetDirs.length === 0) {
+if (targets.length === 0) {
   console.error('No extensions matched the requested targets.')
   process.exit(1)
 }
 
-const { server, url } = await startHarnessServer(0, { quiet: true })
+console.log(`Validating ${targets.length} extension${targets.length === 1 ? '' : 's'} against manifest rules and the harness...`)
 
-try {
-  await assertHarnessReachable(url)
-  const discovered = await fetchJson(`${url}/api/extensions`)
-  const discoveredDirs = new Set(
-    Array.isArray(discovered)
-      ? discovered.map(entry => entry?.dir).filter(value => typeof value === 'string')
-      : [],
-  )
+let failures = 0
+let warningCount = 0
 
-  console.log(`Validating ${targetDirs.length} extension${targetDirs.length === 1 ? '' : 's'} against manifest rules and the harness...`)
+for (const group of groupTargetsByRoot(targets)) {
+  const { server, url } = await startHarnessServer(0, { quiet: true, root: group.root })
 
-  let failures = 0
-  let warningCount = 0
+  try {
+    await assertHarnessReachable(url)
+    const discovered = await fetchJson(`${url}/api/extensions`)
+    const discoveredDirs = new Set(
+      Array.isArray(discovered)
+        ? discovered.map(entry => entry?.dir).filter(value => typeof value === 'string')
+        : [],
+    )
 
-  for (const extDir of targetDirs) {
-    const result = await validateExtension(extDir, url, discoveredDirs)
-    warningCount += result.warnings.length
-    if (result.errors.length > 0) failures += 1
+    for (const target of group.targets) {
+      const result = await validateExtension(target.extDir, group.root, group.label, url, discoveredDirs)
+      warningCount += result.warnings.length
+      if (result.errors.length > 0) failures += 1
 
-    const icon = result.errors.length === 0 ? 'OK' : 'FAIL'
-    console.log(`\n[${icon}] ${result.label}`)
+      const icon = result.errors.length === 0 ? 'OK' : 'FAIL'
+      console.log(`\n[${icon}] ${result.label}`)
 
-    for (const warning of result.warnings) {
-      console.log(`  warning: ${warning}`)
+      for (const warning of result.warnings) {
+        console.log(`  warning: ${warning}`)
+      }
+
+      for (const error of result.errors) {
+        console.log(`  error: ${error}`)
+      }
+
+      if (result.errors.length === 0 && result.warnings.length === 0) {
+        console.log('  manifest + harness checks passed')
+      }
     }
-
-    for (const error of result.errors) {
-      console.log(`  error: ${error}`)
-    }
-
-    if (result.errors.length === 0 && result.warnings.length === 0) {
-      console.log('  manifest + harness checks passed')
-    }
+  } finally {
+    await new Promise(resolvePromise => {
+      server.close(() => resolvePromise())
+    })
   }
-
-  console.log(`\nSummary: ${targetDirs.length - failures} passed, ${failures} failed, ${warningCount} warning${warningCount === 1 ? '' : 's'}`)
-  process.exitCode = failures === 0 ? 0 : 1
-} finally {
-  await new Promise(resolvePromise => {
-    server.close(() => resolvePromise())
-  })
 }
+
+console.log(`\nSummary: ${targets.length - failures} passed, ${failures} failed, ${warningCount} warning${warningCount === 1 ? '' : 's'}`)
+process.exitCode = failures === 0 ? 0 : 1
 
 async function resolveTargets(rawTargets) {
   if (validateAll) {
@@ -85,20 +95,32 @@ async function resolveTargets(rawTargets) {
   const seen = new Set()
   const resolved = []
   for (const target of rawTargets) {
-    const extDir = await resolveExtensionDir(target)
-    if (seen.has(extDir)) continue
-    seen.add(extDir)
-    resolved.push(extDir)
+    const record = await resolveExtensionDir(target)
+    if (seen.has(record.extDir)) continue
+    seen.add(record.extDir)
+    resolved.push(record)
   }
-  return resolved.sort()
+  return resolved.sort((a, b) => `${a.label}/${a.extDir}`.localeCompare(`${b.label}/${b.extDir}`))
 }
 
 async function listAllExtensions() {
-  const entries = await readdir(EXTENSIONS_ROOT, { withFileTypes: true })
+  const entries = await readdir(EXAMPLES_ROOT, { withFileTypes: true })
   return entries
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'))
-    .map(entry => join(EXTENSIONS_ROOT, entry.name))
-    .sort()
+    .map(entry => ({ extDir: join(EXAMPLES_ROOT, entry.name), root: EXAMPLES_ROOT, label: 'examples/extensions' }))
+    .sort((a, b) => a.extDir.localeCompare(b.extDir))
+}
+
+function groupTargetsByRoot(records) {
+  const groups = new Map()
+  for (const record of records) {
+    const key = record.root
+    if (!groups.has(key)) {
+      groups.set(key, { root: record.root, label: record.label, targets: [] })
+    }
+    groups.get(key).targets.push(record)
+  }
+  return Array.from(groups.values())
 }
 
 async function resolveExtensionDir(target) {
@@ -120,22 +142,24 @@ async function resolveExtensionDir(target) {
     throw new Error(`Missing extension.json in ${target}`)
   })
 
-  if (!isWithin(EXTENSIONS_ROOT, extDir)) {
-    throw new Error(`Target must live under ${relative(process.cwd(), EXTENSIONS_ROOT) || 'examples/extensions'}: ${target}`)
+  const rootInfo = VALIDATION_ROOTS.find(info => isWithin(info.root, extDir))
+  if (!rootInfo) {
+    throw new Error(`Target must live under examples/extensions or bundled-extensions: ${target}`)
   }
 
-  return extDir
+  return { extDir, root: rootInfo.root, label: rootInfo.label }
 }
 
 async function assertHarnessReachable(baseUrl) {
-  const response = await fetch(`${baseUrl}/`, { signal: AbortSignal.timeout(5_000) })
+  const response = await fetch(`${baseUrl}/api/extensions`, { signal: AbortSignal.timeout(5_000) })
   if (!response.ok) {
-    throw new Error(`Harness root returned ${response.status}`)
+    throw new Error(`Harness discovery returned ${response.status}`)
   }
 }
 
-async function validateExtension(extDir, baseUrl, discoveredDirs) {
-  const label = relative(EXTENSIONS_ROOT, extDir).split(sep).join('/')
+async function validateExtension(extDir, root, rootLabel, baseUrl, discoveredDirs) {
+  const discoveryLabel = relative(root, extDir).split(sep).join('/')
+  const label = `${rootLabel}/${discoveryLabel}`
   const manifestPath = join(extDir, 'extension.json')
   const warnings = []
   const errors = []
@@ -154,7 +178,9 @@ async function validateExtension(extDir, baseUrl, discoveredDirs) {
   }
 
   const tileRecords = []
+  const chatSurfaceRecords = []
   const tileTypes = new Set()
+  const chatSurfaceIds = new Set()
   const settingKeys = new Set()
   const actionNames = new Set()
   const toolNames = new Set()
@@ -234,6 +260,42 @@ async function validateExtension(extDir, baseUrl, discoveredDirs) {
 
   if (tileRecords.length === 0) {
     warnings.push('no tile entries declared; harness load checks skipped')
+  }
+
+  if (Array.isArray(contributes?.chatSurfaces)) {
+    for (const [index, surface] of contributes.chatSurfaces.entries()) {
+      const base = `contributes.chatSurfaces[${index}]`
+      if (!isObject(surface)) {
+        errors.push(`${base} must be an object`)
+        continue
+      }
+
+      const id = requireString(surface, 'id', errors, base)
+      const entry = requireString(surface, 'entry', errors, base)
+      requireString(surface, 'label', errors, base)
+      optionalString(surface, 'description', errors, base)
+      optionalString(surface, 'icon', errors, base)
+
+      if (surface.emits !== undefined && surface.emits !== 'image' && surface.emits !== 'text') {
+        errors.push(`${base}.emits must be "image" or "text" when provided`)
+      }
+      if (surface.defaultHeight !== undefined && !isPositiveNumber(surface.defaultHeight)) {
+        errors.push(`${base}.defaultHeight must be a positive number when provided`)
+      }
+      if (surface.minHeight !== undefined && !isPositiveNumber(surface.minHeight)) {
+        errors.push(`${base}.minHeight must be a positive number when provided`)
+      }
+      if (typeof id === 'string') {
+        if (chatSurfaceIds.has(id)) errors.push(`${base}.id duplicates ${id}`)
+        chatSurfaceIds.add(id)
+      }
+      if (typeof entry === 'string' && entry.trim() !== '') {
+        await validateFilePath(extDir, entry, `${base}.entry`, errors)
+        chatSurfaceRecords.push({ id, entry })
+      }
+    }
+  } else if (contributes?.chatSurfaces !== undefined) {
+    errors.push('contributes.chatSurfaces must be an array when provided')
   }
 
   if (Array.isArray(contributes?.contextMenu)) {
@@ -340,13 +402,13 @@ async function validateExtension(extDir, baseUrl, discoveredDirs) {
     }
   }
 
-  if (!discoveredDirs.has(label)) {
+  if (!discoveredDirs.has(discoveryLabel)) {
     errors.push('harness discovery did not include this extension')
   }
 
   if (errors.length === 0) {
     for (const tile of tileRecords) {
-      const tileUrl = buildTileUrl(baseUrl, label, tile.entry)
+      const tileUrl = buildTileUrl(baseUrl, discoveryLabel, tile.entry)
       const response = await fetch(tileUrl, { signal: AbortSignal.timeout(5_000) })
       if (!response.ok) {
         errors.push(`harness returned ${response.status} for ${tile.entry}`)
@@ -362,6 +424,26 @@ async function validateExtension(extDir, baseUrl, discoveredDirs) {
       const html = await response.text()
       if (!/<(html|body|script|div)\b/i.test(html)) {
         errors.push(`harness served ${tile.entry}, but it does not look like HTML`)
+      }
+    }
+
+    for (const surface of chatSurfaceRecords) {
+      const surfaceUrl = buildTileUrl(baseUrl, discoveryLabel, surface.entry)
+      const response = await fetch(surfaceUrl, { signal: AbortSignal.timeout(5_000) })
+      if (!response.ok) {
+        errors.push(`harness returned ${response.status} for ${surface.entry}`)
+        continue
+      }
+
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!contentType.includes('text/html')) {
+        errors.push(`harness served ${surface.entry} as ${contentType || 'unknown content-type'}`)
+        continue
+      }
+
+      const html = await response.text()
+      if (!/<(html|body|script|div)\b/i.test(html)) {
+        errors.push(`harness served ${surface.entry}, but it does not look like HTML`)
       }
     }
   }

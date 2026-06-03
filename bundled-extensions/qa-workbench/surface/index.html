@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+  }
+  body {
+    color: var(--ct-text, #f4f4f5);
+    font-family: var(--ct-font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    overflow: hidden;
+  }
+  .app {
+    display: grid;
+    grid-template-columns: minmax(210px, .72fr) minmax(260px, 1.28fr);
+    gap: 10px;
+    height: 100%;
+    padding: 10px;
+  }
+  .panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 9px;
+    padding: 10px;
+    border-radius: 12px;
+    border: 1px solid var(--ct-border, rgba(255,255,255,.1));
+    background: color-mix(in srgb, var(--ct-panel, rgba(255,255,255,.06)) 86%, transparent);
+  }
+  .title {
+    font-weight: 740;
+    font-size: 13px;
+  }
+  .muted {
+    color: var(--ct-muted, #a1a1aa);
+    font-size: 12px;
+    line-height: 1.35;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+  .stat {
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid var(--ct-border, rgba(255,255,255,.1));
+    background: color-mix(in srgb, var(--ct-panel-2, rgba(255,255,255,.07)) 84%, transparent);
+  }
+  .stat-label {
+    color: var(--ct-dim, #888);
+    font-size: 10px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .stat-value {
+    margin-top: 3px;
+    font-size: 17px;
+    font-weight: 760;
+    font-variant-numeric: tabular-nums;
+  }
+  .preview {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-family: var(--ct-font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    line-height: 1.48;
+    border-radius: 10px;
+    border: 1px solid var(--ct-border, rgba(255,255,255,.1));
+    background: rgba(0, 0, 0, .15);
+    padding: 10px;
+  }
+  .status {
+    min-height: 16px;
+    color: var(--ct-dim, #888);
+    font-size: 11px;
+  }
+  html[data-render-mode="chat"] .app {
+    grid-template-columns: 1fr;
+    padding: 6px;
+  }
+  html[data-render-mode="chat"] .panel {
+    padding: 8px;
+  }
+  html[data-render-mode="chat"] .supportive {
+    display: none;
+  }
+  html[data-render-mode="chat"] .preview {
+    max-height: 152px;
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <section class="panel">
+      <div>
+        <div class="title">QA Report</div>
+        <div class="muted supportive">Attach the latest BrowserTile evidence report to the next chat turn.</div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">Browsers</div><div class="stat-value" id="browserCount">0</div></div>
+        <div class="stat"><div class="stat-label">Issues</div><div class="stat-value" id="issueCount">0</div></div>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" type="button" class="primary">Refresh payload</button>
+        <button id="clearBtn" type="button">Clear</button>
+      </div>
+      <div class="status" id="statusText">Idle</div>
+    </section>
+
+    <section class="panel">
+      <div class="title supportive">Payload preview</div>
+      <div class="preview" id="previewBox">Refresh to attach browser QA evidence.</div>
+    </section>
+  </div>
+
+<script>
+  const params = new URLSearchParams(location.search)
+  const renderMode = params.get('renderMode') || (params.get('surfaceKind') === 'chat' ? 'chat' : 'canvas')
+  document.documentElement.setAttribute('data-render-mode', renderMode)
+
+  const state = {
+    ready: false,
+    payload: null,
+  }
+
+  function $(id) { return document.getElementById(id) }
+
+  function publishPayload() {
+    if (!window.contex || !window.contex.surface) return
+    if (!state.payload || !state.payload.data) {
+      window.contex.surface.clear()
+      return
+    }
+    window.contex.surface.setPayload(state.payload)
+  }
+
+  function render() {
+    const payload = state.payload
+    const data = payload && payload.data ? String(payload.data) : ''
+    const browserMatch = data.match(/^Browsers: (\d+)/m)
+    const issueMatch = data.match(/^Issues: (\d+)/m)
+    $('browserCount').textContent = browserMatch ? browserMatch[1] : '0'
+    $('issueCount').textContent = issueMatch ? issueMatch[1] : '0'
+    $('previewBox').textContent = data || 'Refresh to attach browser QA evidence.'
+    publishPayload()
+  }
+
+  async function refreshPayload() {
+    if (!window.contex || !window.contex.ext) return
+    $('statusText').textContent = 'Generating report…'
+    try {
+      state.payload = await window.contex.ext.invoke('getChatPayload')
+      $('statusText').textContent = state.payload && state.payload.data ? 'Ready to attach' : 'No evidence yet'
+      render()
+    } catch (error) {
+      state.payload = null
+      $('statusText').textContent = error && error.message ? error.message : String(error)
+      render()
+    }
+  }
+
+  function clearPayload() {
+    state.payload = null
+    if (window.contex && window.contex.surface) window.contex.surface.clear()
+    $('statusText').textContent = 'Cleared'
+    render()
+  }
+
+  async function init() {
+    if (!window.contex || state.ready) return
+    state.ready = true
+    $('refreshBtn').onclick = refreshPayload
+    $('clearBtn').onclick = clearPayload
+
+    if (window.contex.surface) {
+      window.contex.surface.onRequestFlush(refreshPayload)
+      window.contex.surface.onClear(clearPayload)
+    }
+
+    await refreshPayload()
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init)
+  } else {
+    init()
+  }
+</script>
+</body>
+</html>

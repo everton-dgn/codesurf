@@ -1,0 +1,54 @@
+{
+  "id": "qa-workbench",
+  "name": "QA Workbench",
+  "version": "1.0.0",
+  "description": "Browser QA workbench that listens to BrowserTile evidence, requests snapshots, and packages a markdown report for agents or chat turns.",
+  "author": "contex",
+  "tier": "power",
+  "ui": { "mode": "native" },
+  "main": "main.js",
+  "contributes": {
+    "tiles": [
+      {
+        "type": "qa-workbench",
+        "label": "QA Workbench",
+        "icon": "bug",
+        "entry": "tile/index.html",
+        "defaultSize": { "w": 720, "h": 560 },
+        "minSize": { "w": 440, "h": 360 }
+      }
+    ],
+    "chatSurfaces": [
+      {
+        "id": "qa-report",
+        "label": "QA Report",
+        "description": "Attach the latest browser QA evidence report to the next chat turn.",
+        "icon": "clipboard-check",
+        "entry": "surface/index.html",
+        "emits": "text",
+        "defaultHeight": 300,
+        "minHeight": 180
+      }
+    ],
+    "contextMenu": [
+      { "label": "New QA Workbench", "action": "createTile", "tileType": "ext:qa-workbench" }
+    ],
+    "settings": [
+      { "key": "maxEvents", "label": "Max evidence events per browser", "type": "number", "default": 120 },
+      { "key": "includeBrowserReports", "label": "Include BrowserTile reports", "type": "boolean", "default": true }
+    ],
+    "context": {
+      "consumes": [
+        "ctx:browser:title",
+        "ctx:browser:evidence_summary",
+        "ctx:browser:page_health"
+      ],
+      "produces": ["ctx:qa-workbench:report"]
+    },
+    "actions": [
+      { "name": "captureAll", "description": "Request evidence snapshots from all known browser tiles." },
+      { "name": "generateReport", "description": "Generate a markdown QA report from collected browser evidence." }
+    ]
+  },
+  "permissions": ["bus:read", "bus:write"]
+}

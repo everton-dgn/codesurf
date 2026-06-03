@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+  }
+  body {
+    color: var(--ct-text, #f4f4f5);
+    font-family: var(--ct-font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    overflow: hidden;
+  }
+  .app {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 10px;
+    height: 100%;
+    padding: 10px;
+    background:
+      radial-gradient(circle at top right, color-mix(in srgb, var(--ct-accent, #8b5cf6) 18%, transparent), transparent 34%),
+      transparent;
+  }
+  .hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .title-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .eyebrow {
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ct-dim, #8a8a8f);
+    font-weight: 700;
+  }
+  .title {
+    font-size: 18px;
+    line-height: 1.15;
+    font-weight: 760;
+  }
+  .subtitle {
+    color: var(--ct-muted, #a1a1aa);
+    font-size: 12px;
+    max-width: 56ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .stat {
+    padding: 10px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--ct-panel, rgba(255,255,255,.06)) 88%, transparent);
+    border: 1px solid var(--ct-border, rgba(255,255,255,.11));
+    min-width: 0;
+  }
+  .stat-label {
+    color: var(--ct-dim, #85858f);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-weight: 700;
+  }
+  .stat-value {
+    margin-top: 4px;
+    font-size: 20px;
+    line-height: 1;
+    font-weight: 780;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .body-grid {
+    display: grid;
+    grid-template-columns: minmax(250px, .92fr) minmax(280px, 1.08fr);
+    gap: 10px;
+    min-height: 0;
+  }
+  .panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 8px;
+    border-radius: 12px;
+    border: 1px solid var(--ct-border, rgba(255,255,255,.1));
+    background: color-mix(in srgb, var(--ct-panel, rgba(255,255,255,.06)) 82%, transparent);
+    padding: 10px;
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .panel-title {
+    font-weight: 720;
+    font-size: 13px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--ct-border, rgba(255,255,255,.12));
+    color: var(--ct-muted, #a1a1aa);
+    font-size: 11px;
+    background: color-mix(in srgb, var(--ct-panel-2, rgba(255,255,255,.08)) 86%, transparent);
+  }
+  .browser-list,
+  .report-box {
+    min-height: 0;
+    overflow: auto;
+  }
+  .browser-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .browser-card {
+    border: 1px solid var(--ct-border, rgba(255,255,255,.1));
+    border-radius: 10px;
+    padding: 9px;
+    background: color-mix(in srgb, var(--ct-panel-2, rgba(255,255,255,.07)) 88%, transparent);
+  }
+  .browser-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .browser-id {
+    font-family: var(--ct-font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--ct-text, #f4f4f5);
+  }
+  .browser-url {
+    margin-top: 5px;
+    color: var(--ct-muted, #a1a1aa);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .browser-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 7px;
+  }
+  .health-error { color: var(--ct-danger, #ef4444); }
+  .health-warning { color: var(--ct-warning, #f59e0b); }
+  .health-loading { color: var(--ct-accent, #8b5cf6); }
+  .health-healthy { color: var(--ct-success, #22c55e); }
+  .report-box {
+    flex: 1;
+    white-space: pre-wrap;
+    font-family: var(--ct-font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, .16);
+    border: 1px solid var(--ct-border, rgba(255,255,255,.1));
+  }
+  .empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+    text-align: center;
+    padding: 18px;
+    color: var(--ct-dim, #8a8a8f);
+    border-radius: 10px;
+    border: 1px dashed var(--ct-border, rgba(255,255,255,.12));
+  }
+  .status-line {
+    color: var(--ct-dim, #8a8a8f);
+    font-size: 11px;
+    min-height: 16px;
+  }
+  @media (max-width: 700px) {
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .body-grid { grid-template-columns: 1fr; }
+    .subtitle { white-space: normal; }
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <section class="hero ct-card">
+      <div class="title-stack">
+        <div class="eyebrow">Browser Evidence</div>
+        <div class="title">QA Workbench</div>
+        <div class="subtitle" id="workspaceText">Waiting for workspace…</div>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" type="button">Refresh</button>
+        <button id="captureBtn" type="button" class="primary">Capture all</button>
+        <button id="copyBtn" type="button">Copy report</button>
+        <button id="publishBtn" type="button">Publish context</button>
+      </div>
+    </section>
+
+    <section class="stats">
+      <div class="stat"><div class="stat-label">Browsers</div><div class="stat-value" id="browserCount">0</div></div>
+      <div class="stat"><div class="stat-label">Events</div><div class="stat-value" id="eventCount">0</div></div>
+      <div class="stat"><div class="stat-label">Issues</div><div class="stat-value" id="issueCount">0</div></div>
+      <div class="stat"><div class="stat-label">Health</div><div class="stat-value" id="healthStatus">healthy</div></div>
+    </section>
+
+    <section class="body-grid">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Active browser evidence</div>
+          <div class="pill" id="canvasBrowserPill">0 canvas browsers</div>
+        </div>
+        <div class="browser-list" id="browserList"></div>
+        <div class="status-line" id="statusLine">Idle</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Markdown QA report</div>
+          <div class="pill" id="updatedPill">Not generated</div>
+        </div>
+        <div class="report-box" id="reportBox">No report yet.</div>
+      </div>
+    </section>
+  </div>
+
+<script>
+  const state = {
+    ready: false,
+    meta: null,
+    workspacePath: '',
+    hostState: null,
+    canvasBrowserIds: [],
+    refreshTimer: null,
+  }
+
+  function $(id) { return document.getElementById(id) }
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+  }
+
+  function healthClass(status) {
+    if (status === 'error') return 'health-error'
+    if (status === 'warning') return 'health-warning'
+    if (status === 'loading') return 'health-loading'
+    return 'health-healthy'
+  }
+
+  function formatTime(value) {
+    if (!value) return 'Not generated'
+    return new Date(value).toLocaleTimeString()
+  }
+
+  function scheduleRefresh() {
+    clearTimeout(state.refreshTimer)
+    state.refreshTimer = setTimeout(refreshState, 80)
+  }
+
+  async function loadCanvasBrowsers() {
+    if (!window.contex || !window.contex.canvas) return []
+    const tiles = await window.contex.canvas.listTiles().catch(() => [])
+    state.canvasBrowserIds = (Array.isArray(tiles) ? tiles : [])
+      .filter(tile => tile && tile.type === 'browser' && tile.id)
+      .map(tile => String(tile.id))
+    return state.canvasBrowserIds
+  }
+
+  async function refreshState() {
+    if (!window.contex || !window.contex.ext) return
+    $('statusLine').textContent = 'Refreshing…'
+    await loadCanvasBrowsers()
+    try {
+      state.hostState = await window.contex.ext.invoke('getState')
+      $('statusLine').textContent = 'Ready'
+      render()
+    } catch (error) {
+      $('statusLine').textContent = error && error.message ? error.message : String(error)
+    }
+  }
+
+  async function captureAll() {
+    $('statusLine').textContent = 'Requesting browser snapshots…'
+    const ids = await loadCanvasBrowsers()
+    const result = await window.contex.ext.invoke('captureAll', ids)
+    $('statusLine').textContent = `Snapshot requested from ${result && result.requested ? result.requested : 0} browser(s)`
+    setTimeout(refreshState, 250)
+  }
+
+  async function copyReport() {
+    const report = await window.contex.ext.invoke('getReport')
+    state.hostState = { ...(state.hostState || {}), report }
+    render()
+    try {
+      await navigator.clipboard.writeText(report)
+      $('statusLine').textContent = 'Report copied'
+    } catch {
+      $('statusLine').textContent = 'Copy failed; report is visible in the preview'
+    }
+  }
+
+  async function publishContext() {
+    const report = await window.contex.ext.invoke('getReport')
+    const summary = state.hostState && state.hostState.summary ? state.hostState.summary : {}
+    if (window.contex.context) {
+      await window.contex.context.set('ctx:qa-workbench:report', {
+        report,
+        summary,
+        generatedAt: Date.now(),
+      })
+    }
+    state.hostState = { ...(state.hostState || {}), report }
+    render()
+    $('statusLine').textContent = 'Published ctx:qa-workbench:report'
+  }
+
+  function renderBrowser(browser) {
+    const page = browser.page || {}
+    const summary = browser.summary || {}
+    const health = browser.health || { status: 'healthy', label: 'Healthy' }
+    const card = document.createElement('div')
+    card.className = 'browser-card'
+    card.innerHTML = `
+      <div class="browser-top">
+        <div class="browser-id">${escapeHtml(browser.tileId)}</div>
+        <div class="pill ${healthClass(health.status)}">${escapeHtml(health.status || 'healthy')}</div>
+      </div>
+      <div class="browser-url" title="${escapeHtml(page.url || '')}">${escapeHtml(page.title || page.url || 'No page metadata yet')}</div>
+      <div class="browser-meta">
+        <span class="pill">${Number(summary.errorCount || 0)} errors</span>
+        <span class="pill">${Number(summary.warningCount || 0)} warnings</span>
+        <span class="pill">${Number(summary.total || 0)} events</span>
+        <button type="button" data-browser-id="${escapeHtml(browser.tileId)}">Capture</button>
+      </div>
+    `
+    const button = card.querySelector('button[data-browser-id]')
+    button.onclick = async () => {
+      $('statusLine').textContent = `Requesting snapshot from ${browser.tileId}…`
+      await window.contex.ext.invoke('captureAll', [browser.tileId])
+      setTimeout(refreshState, 250)
+    }
+    return card
+  }
+
+  function render() {
+    const hostState = state.hostState || { summary: {}, browsers: [], report: '' }
+    const summary = hostState.summary || {}
+    const browsers = Array.isArray(hostState.browsers) ? hostState.browsers : []
+
+    $('workspaceText').textContent = state.workspacePath || 'No workspace path available'
+    $('browserCount').textContent = String(summary.browserCount || 0)
+    $('eventCount').textContent = String(summary.totalEvents || 0)
+    $('issueCount').textContent = String(summary.issueCount || 0)
+    $('healthStatus').textContent = String(summary.healthStatus || 'healthy')
+    $('healthStatus').className = 'stat-value ' + healthClass(summary.healthStatus || 'healthy')
+    $('canvasBrowserPill').textContent = `${state.canvasBrowserIds.length} canvas browser${state.canvasBrowserIds.length === 1 ? '' : 's'}`
+    $('updatedPill').textContent = formatTime(summary.updatedAt || hostState.updatedAt)
+    $('reportBox').textContent = hostState.report || 'No report yet. Capture or refresh browser evidence.'
+
+    const list = $('browserList')
+    list.innerHTML = ''
+    if (browsers.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'empty'
+      empty.textContent = state.canvasBrowserIds.length > 0
+        ? 'Browser tiles found. Press Capture all to request evidence snapshots.'
+        : 'No browser evidence yet. Add/open a Browser tile, then capture evidence.'
+      list.appendChild(empty)
+      return
+    }
+
+    browsers.forEach(browser => list.appendChild(renderBrowser(browser)))
+  }
+
+  async function init() {
+    if (!window.contex || state.ready) return
+    state.ready = true
+    state.meta = await window.contex.tile.getMeta()
+    state.workspacePath = await window.contex.workspace.getPath()
+
+    $('refreshBtn').onclick = refreshState
+    $('captureBtn').onclick = captureAll
+    $('copyBtn').onclick = copyReport
+    $('publishBtn').onclick = publishContext
+
+    if (window.contex.bus) {
+      await window.contex.bus.subscribe('tile:*', event => {
+        if (event && typeof event.type === 'string' && event.type.startsWith('browser.')) scheduleRefresh()
+      }).catch(() => {})
+    }
+
+    await refreshState()
+    setInterval(refreshState, 4000)
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init)
+  } else {
+    init()
+  }
+</script>
+</body>
+</html>
