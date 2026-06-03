@@ -1,0 +1,100 @@
+{
+  "id": "code-index",
+  "name": "Context Map",
+  "version": "1.0.0",
+  "description": "Agent-readable repo map for CodeSurf. Scans the workspace, builds a lightweight dependency graph, manages context pins, and exposes MCP tools for repo navigation.",
+  "author": "contex",
+  "tier": "power",
+  "ui": { "mode": "native" },
+  "main": "main.js",
+  "contributes": {
+    "tiles": [
+      {
+        "type": "code-index-dashboard",
+        "label": "Context Map",
+        "icon": "layers-3",
+        "entry": "tile/index.html",
+        "defaultSize": { "w": 760, "h": 600 },
+        "minSize": { "w": 420, "h": 340 }
+      }
+    ],
+    "contextMenu": [
+      { "label": "New Context Map", "action": "createTile", "tileType": "ext:code-index-dashboard" }
+    ],
+    "context": {
+      "produces": ["ctx:code-index:repo_map", "ctx:code-index:pins", "ctx:code-index:open-file", "ctx:code-index:activity"],
+      "consumes": ["ctx:test-loop:last_run", "ctx:qa-workbench:report"]
+    },
+    "actions": [
+      { "name": "scanWorkspace", "description": "Scan a workspace and return a lightweight repo map. Params: { workspacePath: string, maxFiles?: number }" },
+      { "name": "getRepoMap", "description": "Return the cached repo map for a workspace, scanning if needed. Params: { workspacePath: string }" },
+      { "name": "searchFiles", "description": "Search files in the cached repo map. Params: { workspacePath: string, query: string, limit?: number }" },
+      { "name": "pinContext", "description": "Pin a file/path as durable workspace context. Params: { workspacePath: string, path: string, label?: string, note?: string }" },
+      { "name": "unpinContext", "description": "Remove a context pin. Params: { workspacePath: string, path: string }" },
+      { "name": "listPins", "description": "List context pins for a workspace. Params: { workspacePath: string }" }
+    ],
+    "mcpTools": [
+      {
+        "name": "repo_map",
+        "description": "Return a concise markdown repo map and dependency graph. Params: { workspacePath: string, maxFiles?: number }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "maxFiles": { "type": "number" }
+          },
+          "required": ["workspacePath"]
+        }
+      },
+      {
+        "name": "search_files",
+        "description": "Search workspace files from the Context Map cache. Params: { workspacePath: string, query: string, limit?: number }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "query": { "type": "string" },
+            "limit": { "type": "number" }
+          },
+          "required": ["workspacePath", "query"]
+        }
+      },
+      {
+        "name": "pins",
+        "description": "List context pins for a workspace. Params: { workspacePath: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "workspacePath": { "type": "string" } },
+          "required": ["workspacePath"]
+        }
+      },
+      {
+        "name": "pin",
+        "description": "Pin a path as context for future agents. Params: { workspacePath: string, path: string, label?: string, note?: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "path": { "type": "string" },
+            "label": { "type": "string" },
+            "note": { "type": "string" }
+          },
+          "required": ["workspacePath", "path"]
+        }
+      },
+      {
+        "name": "unpin",
+        "description": "Remove a context pin. Params: { workspacePath: string, path: string }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workspacePath": { "type": "string" },
+            "path": { "type": "string" }
+          },
+          "required": ["workspacePath", "path"]
+        }
+      }
+    ]
+  },
+  "permissions": ["filesystem:read", "process"]
+}

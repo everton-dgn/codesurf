@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Context Map</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101113;
+      --panel: #17191d;
+      --panel-2: #20232a;
+      --border: rgba(255,255,255,.10);
+      --muted: #8f98a7;
+      --text: #eef2f8;
+      --accent: #a78bfa;
+      --blue: #7dd3fc;
+      --good: #6ee7a8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      background: radial-gradient(circle at 10% 0%, rgba(167,139,250,.16), transparent 32%), var(--bg);
+      color: var(--text);
+      font: 12px/1.4 ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif;
+      overflow: hidden;
+    }
+    .shell { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+    header {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(16,17,19,.82);
+      backdrop-filter: blur(16px);
+    }
+    .title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+    .pill {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      padding: 4px 9px;
+      background: rgba(255,255,255,.04);
+      white-space: nowrap;
+    }
+    .sub { margin-top: 5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    main { min-height: 0; display: grid; grid-template-columns: minmax(240px, 290px) 1fr; }
+    aside { border-right: 1px solid var(--border); background: rgba(255,255,255,.025); min-height: 0; display: grid; grid-template-rows: auto auto 1fr; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); }
+    button, input {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      padding: 7px 10px;
+      font: inherit;
+    }
+    button { cursor: pointer; }
+    button:hover:not(:disabled) { border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.09); }
+    button.primary { border-color: rgba(167,139,250,.50); background: rgba(167,139,250,.17); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    input { width: 100%; outline: none; }
+    input:focus { border-color: rgba(125,211,252,.50); }
+    .search { padding: 12px; display: grid; gap: 8px; border-bottom: 1px solid var(--border); }
+    .section-title { padding: 12px 12px 7px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: 10px; }
+    .list { min-height: 0; overflow: auto; padding: 0 10px 12px; display: grid; align-content: start; gap: 7px; }
+    .file-row {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      text-align: left;
+      padding: 9px 10px;
+      cursor: pointer;
+    }
+    .file-row:hover, .file-row.active { border-color: rgba(167,139,250,.55); background: rgba(167,139,250,.10); }
+    .file-name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-meta { color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .content { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr; }
+    .summary-grid { padding: 12px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; border-bottom: 1px solid var(--border); }
+    .stat { border: 1px solid var(--border); border-radius: 14px; padding: 10px; background: rgba(255,255,255,.04); min-width: 0; }
+    .stat .value { font-size: 18px; font-weight: 750; letter-spacing: -.03em; }
+    .stat .label { color: var(--muted); margin-top: 2px; }
+    .details { min-height: 0; overflow: auto; padding: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; }
+    .card { border: 1px solid var(--border); border-radius: 16px; background: rgba(255,255,255,.04); overflow: hidden; min-width: 0; }
+    .card h2 { margin: 0; font-size: 12px; padding: 11px 12px; border-bottom: 1px solid var(--border); color: #dfe7f3; }
+    .card-body { padding: 10px 12px; display: grid; gap: 7px; }
+    .item { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; color: var(--muted); min-width: 0; }
+    .item strong { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .item span { white-space: nowrap; color: var(--muted); }
+    .pin { border-color: rgba(110,231,168,.25); background: rgba(110,231,168,.06); }
+    .full { grid-column: 1 / -1; }
+    pre {
+      margin: 0;
+      padding: 12px;
+      background: #0b0c0e;
+      color: #d8dee9;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 260px;
+      overflow: auto;
+      font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    footer { border-top: 1px solid var(--border); padding: 8px 12px; color: var(--muted); background: rgba(16,17,19,.84); }
+    .empty { color: var(--muted); padding: 18px; text-align: center; }
+    @media (max-width: 720px) {
+      main { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--border); max-height: 240px; }
+      .summary-grid, .details { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="title">
+        <h1>Context Map</h1>
+        <div id="scanBadge" class="pill">Idle</div>
+      </div>
+      <div id="workspaceLine" class="sub">Resolving workspace…</div>
+    </header>
+    <main>
+      <aside>
+        <div class="search">
+          <input id="query" type="search" placeholder="Search files, symbols, paths…" />
+          <div style="display:flex; gap:8px;">
+            <button id="searchBtn" type="button">Search</button>
+            <button id="pinBtn" type="button">Pin selected</button>
+          </div>
+        </div>
+        <div class="section-title">Files</div>
+        <div id="fileList" class="list"></div>
+      </aside>
+      <section class="content">
+        <div class="toolbar">
+          <button id="scanBtn" type="button" class="primary">Scan workspace</button>
+          <button id="refreshPinsBtn" type="button">Refresh pins</button>
+          <button id="publishBtn" type="button">Publish context</button>
+          <button id="copyBtn" type="button">Copy map</button>
+        </div>
+        <div class="summary-grid">
+          <div class="stat"><div id="fileCount" class="value">—</div><div class="label">files</div></div>
+          <div class="stat"><div id="edgeCount" class="value">—</div><div class="label">edges</div></div>
+          <div class="stat"><div id="pinCount" class="value">—</div><div class="label">pins</div></div>
+          <div class="stat"><div id="langCount" class="value">—</div><div class="label">languages</div></div>
+        </div>
+        <div class="details">
+          <section class="card"><h2>Top directories</h2><div id="dirs" class="card-body"></div></section>
+          <section class="card"><h2>Important files</h2><div id="important" class="card-body"></div></section>
+          <section class="card"><h2>Central files</h2><div id="central" class="card-body"></div></section>
+          <section class="card"><h2>Context pins</h2><div id="pins" class="card-body"></div></section>
+          <section class="card full"><h2>Markdown map</h2><pre id="markdown">No scan yet.</pre></section>
+        </div>
+      </section>
+    </main>
+    <footer id="statusLine">Ready.</footer>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id)
+    const state = {
+      workspacePath: '',
+      repoMap: null,
+      results: [],
+      pins: [],
+      selectedPath: '',
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+    }
+
+    function setStatus(message) { $('statusLine').textContent = message }
+    function shortPath(value) { return String(value || '').split('/').slice(-3).join('/') }
+
+    async function publishContext() {
+      if (!state.repoMap || !window.contex || !window.contex.context) return
+      await window.contex.context.set('ctx:code-index:repo_map', {
+        workspacePath: state.repoMap.workspacePath,
+        summary: state.repoMap.summary,
+        topDirectories: state.repoMap.topDirectories,
+        importantFiles: state.repoMap.importantFiles,
+        graph: state.repoMap.graph,
+        pins: state.repoMap.pins,
+        markdown: state.repoMap.markdown,
+        generatedAt: Date.now(),
+      })
+      await window.contex.context.set('ctx:code-index:pins', state.repoMap.pins || [])
+      setStatus('Published ctx:code-index:repo_map and ctx:code-index:pins')
+    }
+
+    function renderFileList() {
+      const host = $('fileList')
+      const files = state.results.length ? state.results : (state.repoMap ? state.repoMap.importantFiles || [] : [])
+      if (!files.length) {
+        host.innerHTML = '<div class="empty">Run a scan to populate the repo map.</div>'
+        return
+      }
+      host.innerHTML = files.slice(0, 80).map(file => `
+        <button type="button" class="file-row ${file.path === state.selectedPath ? 'active' : ''}" data-path="${escapeHtml(file.path)}">
+          <div class="file-name">${escapeHtml(shortPath(file.path))}</div>
+          <div class="file-meta">${escapeHtml(file.path)} · ${escapeHtml(file.language || '')}</div>
+        </button>
+      `).join('')
+      host.querySelectorAll('[data-path]').forEach(button => {
+        button.onclick = async () => {
+          state.selectedPath = button.getAttribute('data-path') || ''
+          if (window.contex && window.contex.context) {
+            await window.contex.context.set('ctx:code-index:open-file', { path: state.selectedPath })
+          }
+          render()
+        }
+      })
+    }
+
+    function renderList(id, items, renderItem) {
+      const host = $(id)
+      host.innerHTML = items && items.length ? items.map(renderItem).join('') : '<div class="empty">None yet.</div>'
+    }
+
+    function render() {
+      $('workspaceLine').textContent = state.workspacePath || 'No workspace path available'
+      const map = state.repoMap
+      $('scanBadge').textContent = map ? 'Mapped' : 'Idle'
+      $('fileCount').textContent = map ? String(map.summary.fileCount) : '—'
+      $('edgeCount').textContent = map ? String(map.summary.edgeCount) : '—'
+      $('pinCount').textContent = map ? String((map.pins || []).length) : String(state.pins.length || '—')
+      $('langCount').textContent = map ? String(Object.keys(map.summary.languages || {}).length) : '—'
+      $('pinBtn').disabled = !state.selectedPath
+      $('copyBtn').disabled = !map
+      $('publishBtn').disabled = !map
+      $('markdown').textContent = map ? map.markdown : 'No scan yet.'
+
+      renderFileList()
+      renderList('dirs', map ? map.topDirectories || [] : [], item => `<div class="item"><strong>${escapeHtml(item.path)}</strong><span>${escapeHtml(item.fileCount)} files</span></div>`)
+      renderList('important', map ? map.importantFiles || [] : [], item => `<div class="item"><strong>${escapeHtml(item.path)}</strong><span>${escapeHtml(item.language)}</span></div>`)
+      renderList('central', map ? map.graph.centralFiles || [] : [], item => `<div class="item"><strong>${escapeHtml(item.path)}</strong><span>${escapeHtml(item.edgeCount)} edges</span></div>`)
+      renderList('pins', (map && map.pins) || state.pins || [], pin => `
+        <div class="item pin"><strong>${escapeHtml(pin.path)}</strong><span>${escapeHtml(pin.note || pin.label || 'pinned')}</span></div>
+      `)
+    }
+
+    async function scanWorkspace() {
+      if (!state.workspacePath) return
+      $('scanBadge').textContent = 'Scanning…'
+      setStatus('Scanning workspace…')
+      const map = await window.contex.ext.invoke('scanWorkspace', state.workspacePath, { maxFiles: 1800 })
+      state.repoMap = map
+      state.results = map.importantFiles || []
+      state.pins = map.pins || []
+      await publishContext()
+      setStatus(`Mapped ${map.summary.fileCount} files and ${map.summary.edgeCount} dependency edges`)
+      render()
+    }
+
+    async function searchFiles() {
+      if (!state.workspacePath) return
+      const query = $('query').value.trim()
+      if (!query) {
+        state.results = state.repoMap ? state.repoMap.importantFiles || [] : []
+        render()
+        return
+      }
+      state.results = await window.contex.ext.invoke('searchFiles', state.workspacePath, query, 80)
+      setStatus(`Found ${state.results.length} result${state.results.length === 1 ? '' : 's'}`)
+      render()
+    }
+
+    async function pinSelected() {
+      if (!state.selectedPath) return
+      const note = $('query').value.trim()
+      const pin = await window.contex.ext.invoke('pinContext', state.workspacePath, {
+        path: state.selectedPath,
+        label: shortPath(state.selectedPath),
+        note,
+      })
+      state.pins = await window.contex.ext.invoke('listPins', state.workspacePath)
+      if (state.repoMap) state.repoMap.pins = state.pins
+      await publishContext()
+      setStatus(`Pinned ${pin.path}`)
+      render()
+    }
+
+    async function refreshPins() {
+      if (!state.workspacePath) return
+      state.pins = await window.contex.ext.invoke('listPins', state.workspacePath)
+      if (state.repoMap) state.repoMap.pins = state.pins
+      await publishContext()
+      setStatus(`Loaded ${state.pins.length} pin${state.pins.length === 1 ? '' : 's'}`)
+      render()
+    }
+
+    async function copyMap() {
+      if (!state.repoMap || !navigator.clipboard) return
+      await navigator.clipboard.writeText(state.repoMap.markdown)
+      setStatus('Copied markdown context map')
+    }
+
+    async function init() {
+      try {
+        state.workspacePath = await window.contex.workspace.getPath()
+        $('scanBtn').onclick = scanWorkspace
+        $('searchBtn').onclick = searchFiles
+        $('pinBtn').onclick = pinSelected
+        $('refreshPinsBtn').onclick = refreshPins
+        $('publishBtn').onclick = publishContext
+        $('copyBtn').onclick = copyMap
+        $('query').addEventListener('keydown', event => { if (event.key === 'Enter') searchFiles() })
+        await refreshPins().catch(() => {})
+        render()
+      } catch (err) {
+        setStatus(err && err.message ? err.message : String(err))
+        render()
+      }
+    }
+
+    init()
+  </script>
+</body>
+</html>
