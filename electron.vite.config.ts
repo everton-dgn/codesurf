@@ -23,7 +23,7 @@ export default defineConfig({
   ...(shouldBuildMain
     ? {
         main: {
-          plugins: [externalizeDepsPlugin()],
+          plugins: [externalizeDepsPlugin({ exclude: ['@codesurf/daemon'] })],
           build: {
             outDir: 'dist-electron/main',
             minify: false,
