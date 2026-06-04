@@ -135,7 +135,7 @@ contextBridge.exposeInMainWorld('electron', {
       },
     ) => ipcRenderer.invoke('canvas:getSessionState', workspaceId, sessionEntryId, options),
     deleteSession: (workspaceId: string, sessionEntryId: string) => ipcRenderer.invoke('canvas:deleteSession', workspaceId, sessionEntryId),
-    setSessionArchived: (workspaceId: string, sessionEntryId: string, archived: boolean) => ipcRenderer.invoke('canvas:setSessionArchived', workspaceId, sessionEntryId, archived),
+    setSessionArchived: (workspaceId: string, sessionEntryId: string, archived: boolean, identityKey?: string | null) => ipcRenderer.invoke('canvas:setSessionArchived', workspaceId, sessionEntryId, archived, identityKey),
     renameSession: (workspaceId: string, sessionEntryId: string, title: string) => ipcRenderer.invoke('canvas:renameSession', workspaceId, sessionEntryId, title),
     generateSessionTitle: (workspaceId: string, sessionEntryId: string, entryHint?: SessionEntryHint | null) => ipcRenderer.invoke('canvas:generateSessionTitle', workspaceId, sessionEntryId, entryHint),
     listCheckpoints: (workspaceId: string, sessionEntryId: string) => ipcRenderer.invoke('canvas:listCheckpoints', workspaceId, sessionEntryId),

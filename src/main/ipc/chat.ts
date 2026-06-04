@@ -405,7 +405,7 @@ async function createRuntimeCheckpoint(
 }
 
 type ToolCheckpointPermissionResult =
-  | { behavior: 'allow'; toolUseID?: string }
+  | { behavior: 'allow'; updatedInput: Record<string, unknown>; toolUseID?: string }
   | { behavior: 'deny'; message: string; toolUseID?: string }
 
 async function allowToolWithCheckpoint(
@@ -424,7 +424,11 @@ async function allowToolWithCheckpoint(
       toolUseID: toolOptions?.toolUseID,
     }
   }
-  return { behavior: 'allow', toolUseID: toolOptions?.toolUseID }
+  // The Claude Code control protocol requires an `allow` result to echo back
+  // `updatedInput` (the possibly-modified tool input). Omitting it makes the
+  // CLI's Zod validation reject the response — the tool then fails even though
+  // the user approved it. Echo the input unchanged.
+  return { behavior: 'allow', updatedInput: input, toolUseID: toolOptions?.toolUseID }
 }
 
 async function upsertRuntimeSessionState(req: ChatRequest, state: RuntimeChatSessionState): Promise<void> {
@@ -1770,7 +1774,7 @@ function chatClaude(req: ChatRequest): void {
           log('AskUserQuestion interception error:', (err as Error).message)
         }
         // No questions or error — just allow the tool through unchanged.
-        return { behavior: 'allow', toolUseID: toolOptions?.toolUseID }
+        return { behavior: 'allow', updatedInput: input, toolUseID: toolOptions?.toolUseID }
       }
 
       // Read the live mode so mid-thread switches take effect immediately.

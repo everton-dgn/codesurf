@@ -23,6 +23,7 @@ export interface ThinkingOption {
 
 export const DEFAULT_MODELS: Record<BuiltinProvider, ModelOption[]> = {
   claude: [
+    { id: 'claude-opus-4-8', label: 'Opus 4.8' },
     { id: 'claude-opus-4-7', label: 'Opus 4.7' },
     { id: 'claude-opus-4-6', label: 'Opus 4.6' },
     { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
@@ -55,6 +56,7 @@ export const DEFAULT_MODELS: Record<BuiltinProvider, ModelOption[]> = {
     { id: 'openai-codex/gpt-5.3-codex', label: 'Codex 5.3' },
     { id: 'openai-codex/gpt-5.1-codex-max', label: 'Codex Max' },
     { id: 'openai-codex/gpt-5.1-codex-mini', label: 'Codex Mini' },
+    { id: 'anthropic/claude-opus-4-8', label: 'Opus 4.8' },
     { id: 'anthropic/claude-opus-4-7', label: 'Opus 4.7' },
     { id: 'anthropic/claude-opus-4-6', label: 'Opus 4.6' },
     { id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet 4.6' },

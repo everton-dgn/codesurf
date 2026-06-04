@@ -110,7 +110,7 @@ async function runClaudeTurn(participantId: string, spawnRequest: RelaySpawnRequ
         // handlers in response to user actions (attaching / sketching),
         // so a Read against them is implicitly user-consented.
         if (toolName === 'Read' && typeof input?.file_path === 'string' && isDaemonAutoReadablePath(input.file_path)) {
-          return { behavior: 'allow', toolUseID: toolOptions?.toolUseID }
+          return { behavior: 'allow', updatedInput: input, toolUseID: toolOptions?.toolUseID }
         }
 
         const decision = resolveStoredPermission({
@@ -123,7 +123,7 @@ async function runClaudeTurn(participantId: string, spawnRequest: RelaySpawnRequ
         })
 
         if (decision === 'allow') {
-          return { behavior: 'allow', toolUseID: toolOptions?.toolUseID }
+          return { behavior: 'allow', updatedInput: input, toolUseID: toolOptions?.toolUseID }
         }
         if (decision === 'deny') {
           return {

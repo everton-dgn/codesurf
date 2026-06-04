@@ -822,6 +822,11 @@ export interface TileState {
   borderRadius?: number
   launchBin?: string
   launchArgs?: string[]
+  // Set/read at runtime by App.tsx's auto-agent discovery loop (it writes
+  // `autoAgentMode: true/false` onto tiles and reads `tile.autoAgentMode`), but
+  // was never declared here — so the reads at App.tsx:4093/5198 were typed as a
+  // non-existent property. Declared to match the established runtime behavior.
+  autoAgentMode?: boolean
 }
 
 const CURVIER_BLOCK_RADIUS_STEPS = [0, 3, 4, 6, 8, 12, 16, 24, 32, 40] as const

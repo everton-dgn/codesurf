@@ -549,22 +549,55 @@ async function readWorkspaceArchivedSessionIds(workspaceId: string): Promise<Set
   return await readArchivedSessionIds(paths)
 }
 
-async function setWorkspaceSessionArchived(workspaceId: string, sessionEntryId: string, archived: boolean): Promise<boolean> {
+/**
+ * Stable archive identity for a conversation. The aggregated entry `id` is NOT
+ * stable — `mergeSessionEntries` collapses entries that share a provider
+ * sessionId into one survivor whose `id` is chosen by priority/recency, so the
+ * same chat can surface under different ids across listings. Keying archive
+ * state on `agent:sessionId` (when a real sessionId exists) survives the merge;
+ * returns null when there's no sessionId so callers fall back to the raw id.
+ * Must mirror the renderer's key (`sid:${getSessionAgentKey}:${sessionId}`).
+ */
+function sessionArchiveIdentityKey(entry: AggregatedSessionEntry): string | null {
+  const sessionId = String(entry.sessionId ?? '').trim()
+  if (!sessionId) return null
+  return `sid:${sessionIdentityAgent(entry)}:${sessionId}`
+}
+
+async function setWorkspaceSessionArchived(
+  workspaceId: string,
+  sessionEntryId: string,
+  archived: boolean,
+  identityKey?: string | null,
+): Promise<boolean> {
   const storageIds = await ensureWorkspaceStorageMigrated(workspaceId)
   const primaryStorageId = storageIds[0] ?? workspaceId
   const archivePath = sessionArchiveStatePath(primaryStorageId)
   const archivedIds = await readArchivedSessionIds(storageIds.map(storageId => sessionArchiveStatePath(storageId)))
-  const hadEntry = archivedIds.has(sessionEntryId)
-  if (archived) archivedIds.add(sessionEntryId)
-  else archivedIds.delete(sessionEntryId)
-  if (hadEntry === archived) return false
+  // Prefer the stable identity key; fall back to the raw entry id when the
+  // session has no provider sessionId (key is null/empty).
+  const stableKey = String(identityKey ?? '').trim() || sessionEntryId
+  if (archived) {
+    if (archivedIds.has(stableKey)) return false
+    archivedIds.add(stableKey)
+  } else {
+    // Clear both the stable key and any legacy raw-id entry so unarchiving a
+    // session archived under the old id-based scheme also sticks.
+    const hadEntry = archivedIds.has(stableKey) || archivedIds.has(sessionEntryId)
+    if (!hadEntry) return false
+    archivedIds.delete(stableKey)
+    archivedIds.delete(sessionEntryId)
+  }
   await writeArchivedSessionIds(archivePath, Array.from(archivedIds))
   return true
 }
 
 function applyArchivedSessionState(sessions: AggregatedSessionEntry[], archivedIds: Set<string>): AggregatedSessionEntry[] {
   return sessions.map(session => {
-    const isArchived = archivedIds.has(session.id)
+    const identityKey = sessionArchiveIdentityKey(session)
+    // Match the stable identity key first; keep matching the raw id so archive
+    // files written under the old scheme still resolve.
+    const isArchived = (identityKey != null && archivedIds.has(identityKey)) || archivedIds.has(session.id)
     return session.isArchived === isArchived ? session : { ...session, isArchived }
   })
 }
@@ -969,9 +1002,9 @@ export function registerCanvasIPC(): void {
     })
   })
 
-  ipcMain.handle('canvas:setSessionArchived', async (_, workspaceId: string, sessionEntryId: string, archived: boolean) => {
+  ipcMain.handle('canvas:setSessionArchived', async (_, workspaceId: string, sessionEntryId: string, archived: boolean, identityKey?: string | null) => {
     assertSafeWorkspaceArtifactId(workspaceId)
-    const changed = await setWorkspaceSessionArchived(workspaceId, sessionEntryId, archived).catch(error => {
+    const changed = await setWorkspaceSessionArchived(workspaceId, sessionEntryId, archived, identityKey).catch(error => {
       throw new Error(error instanceof Error ? error.message : String(error))
     })
     if (changed) broadcastSessionsChangedNow(workspaceId, archived ? 'archiveSession' : 'unarchiveSession')

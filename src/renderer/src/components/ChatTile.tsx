@@ -70,9 +70,12 @@ import {
   StreamingLivenessIndicator,
   MixedToolGroup,
   CollapsedToolGroup,
+  ToolGroupChip,
+  ToolMegaChip,
   ToolBlockView,
   parsePlanToolTodos,
 } from './chat/ToolBlockView'
+import { collateClusterChips, type ClusterChip } from './chat/toolChipCollation'
 
 
 
@@ -387,7 +390,8 @@ const CHAT_MESSAGE_MAX_WIDTH = 'var(--cs-thread-content-max-width)'
 const CHAT_CHIP_ROW_STYLE: React.CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: 10,
+  columnGap: 6,
+  rowGap: 4,
   alignItems: 'flex-start',
   alignContent: 'flex-start',
   width: '100%',
@@ -1545,6 +1549,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // Sparse ticker used only when a just-finished tool crosses the collapse
   // grace window and the chip cluster needs to recompute once.
   const [toolCollapseTick, setToolCollapseTick] = useState(0)
+  // Name-based chip collation: which collation summary chips the user has
+  // exploded back to their parts. Keyed `${clusterId}::${collationId}` so the
+  // same tool-name group in different clusters toggles independently.
+  const [explodedChipGroups, setExplodedChipGroups] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleExplodedChipGroup = useCallback((clusterId: string, collationId: string) => {
+    const key = `${clusterId}::${collationId}`
+    setExplodedChipGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
   // Progressive tool-chip collapse: remember when each ToolBlock first
   // flipped to 'done' so we can fold chips into a group summary only after
   // a grace period (keeps just-finished chips readable for a few seconds
@@ -2652,10 +2669,9 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     return () => { clearTileTodos(tileId) }
   }, [tileId])
 
-  // Track the first moment each ToolBlock flipped to 'done' so the
-  // progressive-collapse logic (applyLiveCollapse below) can apply a grace
-  // period before folding a freshly-finished chip into the group summary.
-  // Also prune entries for tool ids that no longer exist in state.
+  // Track the first moment each ToolBlock flipped to 'done'. Retained as a
+  // recompute heartbeat (toolCollapseTick) for the chip transcript; also
+  // prunes entries for tool ids that no longer exist in state.
   const toolStampInitialRunRef = useRef(true)
   useEffect(() => {
     const seen = new Set<string>()
@@ -4874,32 +4890,21 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             // message per tool-round, so without this grouping each round
             // would render on its own line and waste horizontal space.
             //
-            // Additionally, once a cluster grows past a threshold, older
-            // completed tool chips progressively fold into a single "Called
-            // N tools" summary — see applyLiveCollapse below. A grace period
-            // keeps each freshly-finished chip readable for a few seconds
-            // before it tucks into the summary, so the user can click it
-            // while it's still fresh.
+            // Within a cluster, repeated tool calls are folded by name into
+            // `3×READ` / `N×TOOLS` summary chips via collateClusterChips —
+            // click a summary to explode it back to its parts inline.
             const nodes: JSX.Element[] = []
             // Read toolCollapseTick so the transcript only recomputes when a
             // just-finished tool actually crosses the collapse grace window.
             void toolCollapseTick
 
-            // Progressive-collapse tuning. Deliberately conservative so
-            // short focused turns don't collapse at all.
-            const COLLAPSE_MIN_ITEMS = 5   // cluster must have ≥ this to collapse
-            const COLLAPSE_TAIL_SIZE = 2   // always keep at least this many expanded
-
-            // Typed item used to represent one chip slot between extraction
-            // and final render. Carries enough data for both live-collapse
-            // decisions and the React render step.
-            type ChipItem =
-              | { kind: 'thinking'; key: string; block: ThinkingBlock }
-              | { kind: 'tool-single'; key: string; block: ToolBlock; isLive: boolean }
-              | { kind: 'tool-group-same'; key: string; blocks: ToolBlock[] }
-              | { kind: 'tool-group-mixed'; key: string; blocks: ToolBlock[] }
-
-            let clusterItems: ChipItem[] = []
+            // Source chip slots are extracted flat (thinking + individual
+            // tools, in chronological order) then run through name-based
+            // two-tier collation (collateClusterChips) at flush time — see
+            // toolChipCollation.ts. This collapses noisy alternating runs
+            // (Read/Thought/Read/Bash…) into `3×READ` / `N×TOOLS` summary
+            // chips, which the user can click to explode back inline.
+            let clusterItems: ClusterChip[] = []
             let clusterStartKey: string | null = null
             let clusterMsgIds: string[] = []
 
@@ -4908,28 +4913,22 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               toolById: new Map((msg.toolBlocks ?? []).map(block => [block.id, block])),
             })
 
-            // Extract chip items (thinking + tool groups) from a single
-            // message's contentBlocks. Text blocks are ignored — callers
-            // only invoke this on chip-only messages.
-            const extractChipsFromMessage = (msg: ChatMessage, isLiveMessage: boolean): ChipItem[] => {
-              const items: ChipItem[] = []
+            // Extract flat chip slots (thinking + individual tools) from a
+            // single message's contentBlocks. Text blocks are ignored —
+            // callers only invoke this on chip-only messages. No grouping
+            // happens here; collation runs cluster-wide at flush time.
+            const extractChipsFromMessage = (msg: ChatMessage, isLiveMessage: boolean): ClusterChip[] => {
+              const items: ClusterChip[] = []
               const blocks = msg.contentBlocks ?? []
               if (blocks.length === 0 && isExternalAgentToolOnlyText(msg.content ?? '')) {
                 for (const tb of getExternalAgentToolBlocks(msg.content ?? '')) {
                   if (!shouldRenderToolBlock(tb)) continue
-                  items.push({
-                    kind: 'tool-single',
-                    key: `${msg.id}-${tb.id}`,
-                    block: tb,
-                    isLive: isLiveMessage,
-                  })
+                  items.push({ kind: 'tool', key: `${msg.id}-${tb.id}`, block: tb, isLive: isLiveMessage })
                 }
                 return items
               }
               const { thinkingById, toolById } = buildMessageBlockLookup(msg)
-              let i = 0
-              while (i < blocks.length) {
-                const block = blocks[i]
+              for (const block of blocks) {
                 if (block.type === 'thinking') {
                   const tb = thinkingById.get(block.thinkingId)
                   // Active thinking for the live message renders above the input bar — skip here
@@ -4938,65 +4937,44 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                     key: `${msg.id}-think-${block.thinkingId}`,
                     block: !isLiveMessage && !tb.done ? { ...tb, done: true } : tb,
                   })
-                  i++; continue
-                }
-                if (block.type === 'tool') {
-                  const rawTools: ToolBlock[] = []
-                  while (i < blocks.length) {
-                    const cb = blocks[i]
-                    if (cb.type !== 'tool') break
-                    const tb = toolById.get(cb.toolId)
-                    if (tb && shouldRenderToolBlock(tb)) rawTools.push(tb)
-                    i++
-                  }
-                  const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length) && !isCheckpointToolBlock(tb) && !isDreamToolBlock(tb))
-                  const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
-                  const uniqueNames = new Set(collapsibleTools.map(t => t.name))
-                  const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
-                  const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
-                  let groupEmitted = false
-                  for (const tb of rawTools) {
-                    if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
-                      if (!groupEmitted) {
-                        groupEmitted = true
-                        if (useSameNameGroup) items.push({
-                          kind: 'tool-group-same',
-                          key: `${msg.id}-grp-${tb.id}`,
-                          blocks: collapsibleTools,
-                        })
-                        else items.push({
-                          kind: 'tool-group-mixed',
-                          key: `${msg.id}-mgrp-${tb.id}`,
-                          blocks: collapsibleTools,
-                        })
-                      }
-                      continue
-                    }
-                    items.push({
-                      kind: 'tool-single',
-                      key: `${msg.id}-${tb.id}`,
-                      block: tb,
-                      isLive: isLiveMessage,
-                    })
-                  }
                   continue
                 }
-                i++
+                if (block.type === 'tool') {
+                  const tb = toolById.get(block.toolId)
+                  if (tb && shouldRenderToolBlock(tb)) {
+                    items.push({ kind: 'tool', key: `${msg.id}-${tb.id}`, block: tb, isLive: isLiveMessage })
+                  }
+                }
               }
               return items
             }
 
-            const renderChipItem = (item: ChipItem): JSX.Element => {
+            const renderChipItem = (item: ReturnType<typeof collateClusterChips>[number], clusterId: string): JSX.Element => {
               if (item.kind === 'thinking') {
                 return <ThinkingBlockView key={item.key} thinking={item.block} />
               }
               if (item.kind === 'tool-single') {
                 return <ToolBlockView key={item.key} block={item.block} isLive={item.isLive} />
               }
-              if (item.kind === 'tool-group-same') {
-                return <CollapsedToolGroup key={item.key} name={item.blocks[0]?.name ?? ''} blocks={item.blocks} />
+              if (item.kind === 'tool-group') {
+                return (
+                  <ToolGroupChip
+                    key={item.key}
+                    toolName={item.toolName}
+                    count={item.blocks.length}
+                    expanded={item.expanded}
+                    onToggle={() => toggleExplodedChipGroup(clusterId, item.id)}
+                  />
+                )
               }
-              return <MixedToolGroup key={item.key} blocks={item.blocks} />
+              return (
+                <ToolMegaChip
+                  key={item.key}
+                  count={item.blocks.length}
+                  expanded={item.expanded}
+                  onToggle={() => toggleExplodedChipGroup(clusterId, item.id)}
+                />
+              )
             }
 
             const renderChipRow = (items: JSX.Element[], key: string): JSX.Element => {
@@ -5005,51 +4983,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                   {items}
                 </div>
               )
-            }
-
-            // Progressive collapse: walk the cluster's item list, figure out
-            // how much of the tail should stay expanded (all items that are
-            // running, or completed within the grace window, plus at least
-            // COLLAPSE_TAIL_SIZE items), and fold everything before that into
-            // a single synthetic "Called N tools" summary chip. Does nothing
-            // when the cluster is short, or when the foldable prefix has
-            // fewer than 2 items (a 1-item summary is pointless noise).
-            const applyLiveCollapse = (items: ChipItem[]): ChipItem[] => {
-              if (items.length < COLLAPSE_MIN_ITEMS) return items
-              const now = Date.now()
-              const isEligibleToFold = (item: ChipItem): boolean => {
-                if (item.kind === 'thinking') return item.block.done
-                if (item.kind === 'tool-single') {
-                  if (item.block.status !== 'done') return false
-                  const at = toolCompletedAtRef.current.get(item.block.id) ?? now
-                  return now - at >= LIVE_TOOL_COLLAPSE_GRACE_MS
-                }
-                return true // already-grouped chips are always foldable
-              }
-              // Start by keeping the last COLLAPSE_TAIL_SIZE items, then
-              // extend the tail backward across any non-eligible items.
-              let cut = Math.max(items.length - COLLAPSE_TAIL_SIZE, 0)
-              while (cut > 0 && !isEligibleToFold(items[cut - 1])) cut -= 1
-              const head = items.slice(0, cut)
-              const tail = items.slice(cut)
-              if (head.length < 2) return items
-              // Flatten head items into a ToolBlock[] for the summary.
-              // Thinking chips don't contribute to the tool count but we
-              // still fold them away (their timing is already summarized).
-              const folded: ToolBlock[] = []
-              for (const item of head) {
-                if (item.kind === 'tool-single') folded.push(item.block)
-                else if (item.kind === 'tool-group-same' || item.kind === 'tool-group-mixed') {
-                  folded.push(...item.blocks)
-                }
-              }
-              if (folded.length === 0) return items
-              const summary: ChipItem = {
-                kind: 'tool-group-mixed',
-                key: `live-collapse-${head[0].key}`,
-                blocks: folded,
-              }
-              return [summary, ...tail]
             }
 
             // A message qualifies for clustering only when it is an assistant
@@ -5070,7 +5003,14 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
               const lastId = clusterMsgIds[clusterMsgIds.length - 1]
               const lastMsg = renderedMessages.find(m => m.id === lastId)
               const clusterId = clusterStartKey ?? 'cluster'
-              const finalItems = applyLiveCollapse(clusterItems)
+              // Derive this cluster's exploded-collation ids from the global
+              // set (entries are namespaced `${clusterId}::${collationId}`).
+              const prefix = `${clusterId}::`
+              const clusterExploded = new Set<string>()
+              for (const k of explodedChipGroups) {
+                if (k.startsWith(prefix)) clusterExploded.add(k.slice(prefix.length))
+              }
+              const finalItems = collateClusterChips(clusterItems, clusterExploded)
               nodes.push(
                 <BlockNoteAffordance
                   key={`cluster-${clusterId}`}
@@ -5079,7 +5019,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                   onComposerActiveChange={setAnnotationComposerActive}
                   onUpdateNote={(text) => updateBlockNote({ kind: 'message', messageId: lastId }, text)}
                 >
-                  {renderChipRow(finalItems.map(renderChipItem), `cluster-row-${clusterId}`)}
+                  {renderChipRow(finalItems.map(item => renderChipItem(item, clusterId)), `cluster-row-${clusterId}`)}
                 </BlockNoteAffordance>
               )
               clusterItems = []
