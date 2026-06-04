@@ -627,70 +627,6 @@ function getCapabilityMatches(source: TileCapabilitySet, target: TileCapabilityS
   ])
 }
 
-function findDiscoveryConnections(
-  tileList: TileState[],
-  hiddenTileIds: Set<string>,
-  gridStep: number,
-  maxDistance: number
-): DiscoveryState {
-  const connectedTileIds = new Set<string>()
-  const byTile = new Map<string, DiscoveryCapabilityLink[]>()
-  const refs = tileList
-    .filter(tile => !hiddenTileIds.has(tile.id))
-    .map(tile => ({ tile, ref: getTileSpatialReference(tile, gridStep) }))
-
-  for (let i = 0; i < refs.length; i += 1) {
-    const source = refs[i]
-    for (let j = i + 1; j < refs.length; j += 1) {
-      const target = refs[j]
-
-      if (source.tile.id === target.tile.id) continue
-
-      const sourceRect = { x: source.tile.x, y: source.tile.y, w: source.tile.width, h: source.tile.height }
-      const targetRect = { x: target.tile.x, y: target.tile.y, w: target.tile.width, h: target.tile.height }
-      if (rectsOverlap(sourceRect, targetRect)) continue
-
-      const anchorPair = findBestAnchorPair(source.ref.anchors, target.ref.anchors)
-      if (!anchorPair || anchorPair.distance > maxDistance) continue
-
-      const sharedCaps = getCapabilityMatches(source.ref.capabilities, target.ref.capabilities)
-      const route = getOrthogonalRoute(anchorPair.source, anchorPair.target, gridStep)
-      const sourceTools = source.ref.capabilities.tools ?? []
-      const targetTools = target.ref.capabilities.tools ?? []
-
-      if (sharedCaps.length > 0) {
-        const sourceLink: DiscoveryCapabilityLink = {
-          peerId: target.tile.id,
-          peerType: target.tile.type,
-          distance: anchorPair.distance,
-          route,
-          capabilities: uniq([...targetTools, ...sharedCaps]),
-          lastSeen: Date.now(),
-        }
-        const targetLink: DiscoveryCapabilityLink = {
-          peerId: source.tile.id,
-          peerType: source.tile.type,
-          distance: anchorPair.distance,
-          route: route.slice().reverse(),
-          capabilities: uniq([...sourceTools, ...sharedCaps]),
-          lastSeen: Date.now(),
-        }
-
-        const nextSource = byTile.get(source.tile.id) ?? []
-        const nextTarget = byTile.get(target.tile.id) ?? []
-        nextSource.push(sourceLink)
-        nextTarget.push(targetLink)
-        byTile.set(source.tile.id, nextSource)
-        byTile.set(target.tile.id, nextTarget)
-        connectedTileIds.add(source.tile.id)
-        connectedTileIds.add(target.tile.id)
-      }
-    }
-  }
-
-  return { connectedTileIds, byTile }
-}
-
 function cascadeDiscoveryConnections(
   graph: DiscoveryState,
   tileList: TileState[],
@@ -2245,6 +2181,9 @@ function App(): JSX.Element {
     }
     if (tile?.type === 'chat') {
       disposeChatTileRuntimeState(tileId)
+      // Evict the main-process session/permission maps and prune the persisted
+      // session-ids.json so they do not grow unbounded per deleted chat tile.
+      void window.electron.chat?.disposeCard?.(tileId)
     }
     if (tile?.type === 'media') {
       disposeMediaTile(tileId)

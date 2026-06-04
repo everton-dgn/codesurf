@@ -12,7 +12,6 @@
     "bin/",
     "dist-electron/",
     "packages/contex-relay/dist/",
-    "packages/codesurf-dreaming/",
     "packages/codesurf-daemon/",
     "resources/",
     "package.json",
@@ -21,6 +20,8 @@
   "scripts": {
     "test": "node --test test/*.test.ts test/*.test.mjs test/main/*.test.mjs test/sidebar/*.test.mjs test/daemon/*.test.mjs",
     "test:daemon": "node --test test/daemon/*.test.mjs",
+    "test:relay": "npm --prefix packages/contex-relay test",
+    "test:all": "npm test && npm run test:relay",
     "typecheck": "npm run typecheck:go",
     "typecheck:tsc": "tsc -p tsconfig.json --noEmit",
     "typecheck:go": "tsgo -p tsconfig.tsgo.json --noEmit",
@@ -118,7 +119,6 @@
     "onnxruntime-web": "^1.24.3",
     "radix-ui": "^1.4.3",
     "react-file-icon": "^1.5.0",
-    "react-jsx-parser": "^2.4.1",
     "sharp": "^0.34.5",
     "shiki": "^4.0.2",
     "streamdown": "^2.5.0",
@@ -137,7 +137,6 @@
     "files": [
       "dist-electron/**/*",
       "bin/**/*",
-      "packages/codesurf-dreaming/**/*",
       "packages/codesurf-daemon/**/*",
       "package.json",
       "resources/**/*"

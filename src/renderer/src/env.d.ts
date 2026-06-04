@@ -80,6 +80,7 @@ interface ElectronAPI {
     steer?(payload: { cardId: string; message: string }): Promise<{ ok: boolean; error?: string }>
     stop(cardId: string): Promise<void>
     clearSession(cardId: string): Promise<{ ok: boolean }>
+    disposeCard(cardId: string): Promise<{ ok: boolean }>
     opencodeModels(): Promise<{ models: Array<{ id: string; label: string; description?: string }>; source?: string; loading?: boolean }>
     onOpencodeModelsUpdated(cb: (payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }) => void): () => void
     openclawAgents(): Promise<{ agents: Array<{ id: string; label: string; description?: string }> }>
@@ -595,9 +596,26 @@ declare global {
     electron: ElectronAPI
   }
 
-  // Allow <webview> tag in JSX (Electron webview)
+  // Global `JSX` namespace shim → React.JSX.
+  //
+  // @types/react@19 dropped the global `JSX` namespace (it now lives under
+  // `React.JSX`, and JSX *syntax* resolves via `react/jsx-runtime`). But this
+  // codebase has ~58 files with bare `JSX.Element` / `JSX.IntrinsicElements`
+  // type annotations that reference the GLOBAL `JSX` namespace. Previously that
+  // global was supplied only transitively by `react-jsx-parser`'s nested
+  // `@types/react@18`; removing that dependency (dup-04) deletes the global,
+  // so we re-provide it here, mirroring `react/jsx-runtime`'s mapping exactly.
+  // The Electron <webview> augmentation is folded into IntrinsicElements below.
   namespace JSX {
-    interface IntrinsicElements {
+    type ElementType = React.JSX.ElementType
+    interface Element extends React.JSX.Element {}
+    interface ElementClass extends React.JSX.ElementClass {}
+    interface ElementAttributesProperty extends React.JSX.ElementAttributesProperty {}
+    interface ElementChildrenAttribute extends React.JSX.ElementChildrenAttribute {}
+    type LibraryManagedAttributes<C, P> = React.JSX.LibraryManagedAttributes<C, P>
+    interface IntrinsicAttributes extends React.JSX.IntrinsicAttributes {}
+    interface IntrinsicClassAttributes<T> extends React.JSX.IntrinsicClassAttributes<T> {}
+    interface IntrinsicElements extends React.JSX.IntrinsicElements {
       webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
         src?: string
         useragent?: string

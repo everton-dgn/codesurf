@@ -103,7 +103,10 @@ export class ExtensionRegistry {
 
   async scanWorkspace(workspacePath: string): Promise<void> {
     const wsDir = join(workspacePath, '.contex', EXTENSIONS_DIRNAME)
-    await this.scanDir(wsDir)
+    // A workspace's .contex/extensions dir is attacker-controllable (it ships
+    // with any cloned repo). Mark the scan untrusted so power-tier extensions
+    // there require explicit user enablement instead of auto-activating.
+    await this.scanDir(wsDir, { untrustedScope: true })
   }
 
   async rescan(workspacePath?: string | null): Promise<void> {
@@ -127,7 +130,7 @@ export class ExtensionRegistry {
     }
     await this.scanDirLight(join(CONTEX_HOME, EXTENSIONS_DIRNAME), manifests, disabledIds)
     if (targetWorkspacePath) {
-      await this.scanDirLight(join(targetWorkspacePath, '.contex', EXTENSIONS_DIRNAME), manifests, disabledIds)
+      await this.scanDirLight(join(targetWorkspacePath, '.contex', EXTENSIONS_DIRNAME), manifests, disabledIds, { untrustedScope: true })
     }
     // Catalog dirs — scanned last, default-disabled unless the user has
     // explicitly enabled the id (reflected in disabledIds set membership).
@@ -142,7 +145,7 @@ export class ExtensionRegistry {
     return this.activeWorkspacePath
   }
 
-  private async scanDir(dir: string, opts?: { defaultEnabled?: boolean }): Promise<void> {
+  private async scanDir(dir: string, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<void> {
     let entries: string[]
     try {
       entries = await fs.readdir(dir)
@@ -176,7 +179,7 @@ export class ExtensionRegistry {
     dir: string,
     manifests: Map<string, ExtensionManifest>,
     disabledIds: Set<string>,
-    opts?: { defaultEnabled?: boolean },
+    opts?: { defaultEnabled?: boolean; untrustedScope?: boolean },
   ): Promise<void> {
     let entries: string[]
     try {
@@ -200,7 +203,7 @@ export class ExtensionRegistry {
     }
   }
 
-  private async readManifestLight(extDir: string, disabledIds: Set<string>, opts?: { defaultEnabled?: boolean }): Promise<ExtensionManifest | null> {
+  private async readManifestLight(extDir: string, disabledIds: Set<string>, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<ExtensionManifest | null> {
     try {
       const raw = await fs.readFile(join(extDir, 'extension.json'), 'utf8')
       const manifest: ExtensionManifest = JSON.parse(raw)
@@ -213,10 +216,13 @@ export class ExtensionRegistry {
       // Catalog entries default to disabled unless the user has explicitly
       // flipped them (persisted disabledIds treats presence==disabled; absence
       // normally means enabled — for catalog we invert that default).
-      const defaultEnabled = opts?.defaultEnabled !== false
+      const untrustedPower = opts?.untrustedScope === true && manifest.tier === 'power'
+      const defaultEnabled = opts?.defaultEnabled !== false && !untrustedPower
       manifest._enabled = disabledIds.has(manifest.id)
         ? false
-        : (defaultEnabled ? (manifest._enabled !== false) : false)
+        : (defaultEnabled
+            ? (manifest._enabled !== false)
+            : (untrustedPower ? this.enabledCatalogIds.has(manifest.id) : false))
       if (manifest.contributes?.tiles) {
         for (const tile of manifest.contributes.tiles) {
           if (!tile.type.startsWith('ext:')) {
@@ -255,7 +261,7 @@ export class ExtensionRegistry {
     }
   }
 
-  private async loadExtension(extDir: string, opts?: { defaultEnabled?: boolean }): Promise<void> {
+  private async loadExtension(extDir: string, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<void> {
     const manifestPath = join(extDir, 'extension.json')
     const raw = await fs.readFile(manifestPath, 'utf8')
     const manifest: ExtensionManifest = JSON.parse(raw)
@@ -271,13 +277,19 @@ export class ExtensionRegistry {
     // user has explicitly enabled them via the gallery (tracked in the
     // enabledCatalogIds set, which is persisted).
     manifest._path = resolve(extDir)
-    const defaultEnabled = opts?.defaultEnabled !== false
-    const catalogUserEnabled = !defaultEnabled && this.enabledCatalogIds.has(manifest.id)
+    // Power-tier extensions found in an untrusted scope (a workspace's
+    // .contex/extensions dir) run Node in the main process, so they must be
+    // explicitly enabled by the user before activation — never auto-run on
+    // workspace open. They reuse the same persisted enabled set as catalog
+    // entries.
+    const untrustedPower = opts?.untrustedScope === true && manifest.tier === 'power'
+    const defaultEnabled = opts?.defaultEnabled !== false && !untrustedPower
+    const userEnabled = !defaultEnabled && this.enabledCatalogIds.has(manifest.id)
     manifest._enabled = this.disabledIds.has(manifest.id)
       ? false
       : (defaultEnabled
           ? (manifest._enabled !== false)
-          : catalogUserEnabled)
+          : userEnabled)
 
     // Namespace tile types with ext: prefix
     if (manifest.contributes?.tiles) {
@@ -320,15 +332,16 @@ export class ExtensionRegistry {
   }
 
   /** Load an already-parsed manifest (used by adapters) */
-  async loadFromManifest(manifest: ExtensionManifest, opts?: { defaultEnabled?: boolean }): Promise<void> {
+  async loadFromManifest(manifest: ExtensionManifest, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<void> {
     if (this.extensions.has(manifest.id)) return
 
     normalizeManifestUi(manifest)
 
-    // Apply persisted disabled state (+ catalog default-off)
-    const defaultEnabled = opts?.defaultEnabled !== false
+    // Apply persisted disabled state (+ catalog / untrusted-power default-off)
+    const untrustedPower = opts?.untrustedScope === true && manifest.tier === 'power'
+    const defaultEnabled = opts?.defaultEnabled !== false && !untrustedPower
     if (this.disabledIds.has(manifest.id)) manifest._enabled = false
-    else if (!defaultEnabled) manifest._enabled = false
+    else if (!defaultEnabled) manifest._enabled = untrustedPower ? this.enabledCatalogIds.has(manifest.id) : false
 
     // Namespace tiles
     if (manifest.contributes?.tiles) {
@@ -486,14 +499,18 @@ export class ExtensionRegistry {
     // If this was installed from a catalog dir, persist that the user has
     // explicitly enabled it so future rescans do not revert the default-off.
     const isCatalog = this.isCatalogExtension(ext.manifest)
-    if (isCatalog) {
+    // Persist explicit enablement for catalog entries AND any power-tier
+    // extension. Workspace power extensions default to off (untrusted scope);
+    // recording the opt-in here keeps them enabled across rescans.
+    const persistEnabled = isCatalog || ext.manifest.tier === 'power'
+    if (persistEnabled) {
       this.enabledCatalogIds.add(id)
     }
     // Await disk writes so a subsequent ext:refresh rescan reads the latest
     // sets from disk (scan() reloads both sets from files).
     await Promise.allSettled([
       saveDisabledSet(this.disabledIds),
-      isCatalog ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
+      persistEnabled ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
     ])
     // Power-tier extensions may not have been activated on first scan (catalog
     // default-off). Load the main script now that it's enabled.
@@ -519,12 +536,13 @@ export class ExtensionRegistry {
     ext.manifest._enabled = false
     this.disabledIds.add(id)
     const isCatalog = this.isCatalogExtension(ext.manifest)
-    if (isCatalog) {
+    const persistEnabled = isCatalog || ext.manifest.tier === 'power'
+    if (persistEnabled) {
       this.enabledCatalogIds.delete(id)
     }
     await Promise.allSettled([
       saveDisabledSet(this.disabledIds),
-      isCatalog ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
+      persistEnabled ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
     ])
     if (ext.deactivate) {
       ext.deactivate()

@@ -1,5 +1,6 @@
 import React from 'react'
 import { CornerDownLeft } from 'lucide-react'
+import { useTheme } from '../ThemeContext'
 
 interface Props {
   tileId: string
@@ -86,6 +87,11 @@ function extractPalette(img: HTMLImageElement): string[] {
 }
 
 export function ImageTile({ tileId, workspaceId, filePath, onReplaceFilePath, isSelected = false, borderRadius = 16, zoom = 1 }: Props): JSX.Element {
+  // Pre-existing committed bug (commit 7955578 "Use theme tokens for UI colors
+  // and shadows" added 12+ `theme.*` token references but no `useTheme()` call,
+  // leaving `theme` undefined → ReferenceError on every render of this core
+  // tile). Resolve it via the same context hook every sibling tile uses.
+  const theme = useTheme()
   const imageRef = React.useRef<HTMLImageElement | null>(null)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const variantsRef = React.useRef<ImageVariant[]>([])

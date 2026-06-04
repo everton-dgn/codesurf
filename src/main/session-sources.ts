@@ -6,6 +6,7 @@ import Database from 'better-sqlite3'
 import type { AggregatedSessionEntry, SessionEntryHint, SessionScope } from '../shared/session-types'
 import { buildChatMessageHistoryFingerprint } from '../shared/chat-history.ts'
 import { CONTEX_HOME } from './paths.ts'
+import { sanitizeToolOutputText } from './chat/output-sanitizers.ts'
 
 export type ChatRole = 'user' | 'assistant' | 'system'
 
@@ -706,29 +707,6 @@ function parseClaudeMessagesFromLines(lines: string[], offset = 0): ImportedChat
 function truncateToolPreview(text: string | null | undefined, length = 800): string {
   if (!text) return ''
   return text.length > length ? `${text.slice(0, length)}\n…` : text
-}
-
-function sanitizeToolOutputText(text: string | null | undefined): string {
-  if (!text) return ''
-
-  return text
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .filter(line => {
-      const trimmed = line.trim()
-      return !(
-        /^Chunk ID:/i.test(trimmed)
-        || /^Wall time:/i.test(trimmed)
-        || /^Process exited with code /i.test(trimmed)
-        || /^Process running with session ID /i.test(trimmed)
-        || /^Original token count:/i.test(trimmed)
-        || /^Output:$/i.test(trimmed)
-        || /^\[CodeSurf memory guard\] Older tool (output|summary) /i.test(trimmed)
-      )
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
 }
 
 function extractReasoningSummary(payload: any): string {

@@ -1,11 +1,19 @@
-import { app, ipcMain, shell, BrowserWindow, type WebContents } from 'electron'
+import { app, ipcMain, shell, type WebContents } from 'electron'
 import { promises as fs, watch as fsWatch, FSWatcher } from 'fs'
 import path from 'node:path'
 import { basename, extname, join, parse } from 'path'
 import { homedir } from 'os'
 import { CONTEX_HOME, CONTEX_HOME_DIRNAME } from '../paths'
 
-const watchers = new Map<string, FSWatcher>()
+interface WatchEntry {
+  watcher: FSWatcher
+  // Each subscribing renderer plus the raw dirPath it passed. The renderer keys
+  // its listener on `fs:watch:${dirPath}`, so we must echo that exact string —
+  // and we must broadcast to ALL subscribers, not just the first one.
+  subscribers: Map<WebContents, string>
+  debounce: ReturnType<typeof setTimeout> | null
+}
+const watchers = new Map<string, WatchEntry>()
 const senderWatchPaths = new WeakMap<WebContents, Set<string>>()
 const senderWatchCleanupAttached = new WeakSet<WebContents>()
 
@@ -20,10 +28,15 @@ function trackWatchSender(sender: WebContents, resolvedPath: string): void {
     const watchedPaths = senderWatchPaths.get(sender)
     if (watchedPaths) {
       for (const watchedPath of watchedPaths) {
-        const watcher = watchers.get(watchedPath)
-        if (watcher) {
-          watcher.close()
-          watchers.delete(watchedPath)
+        const entry = watchers.get(watchedPath)
+        if (entry) {
+          entry.subscribers.delete(sender)
+          // Only tear down the shared watcher once the last window drops it.
+          if (entry.subscribers.size === 0) {
+            entry.watcher.close()
+            if (entry.debounce) clearTimeout(entry.debounce)
+            watchers.delete(watchedPath)
+          }
         }
       }
     }
@@ -255,25 +268,48 @@ export function registerFsIPC(): void {
 
   ipcMain.handle('fs:watchStart', async (event, dirPath: string) => {
     const resolved = validateFsPath(dirPath)
-    if (watchers.has(resolved)) return
-    let debounce: ReturnType<typeof setTimeout> | null = null
+    // Reuse an existing watcher for this path and just add this window as a
+    // subscriber. Previously a second window watching the same dir was dropped
+    // (its events never fired) and the first window's close tore the shared
+    // watcher down out from under everyone else.
+    const existing = watchers.get(resolved)
+    if (existing) {
+      existing.subscribers.set(event.sender, dirPath)
+      trackWatchSender(event.sender, resolved)
+      return
+    }
     try {
-      const watcher = fsWatch(resolved, { recursive: true }, () => {
-        if (debounce) clearTimeout(debounce)
-        debounce = setTimeout(() => {
-          if (event.sender.isDestroyed()) return
-          const win = BrowserWindow.fromWebContents(event.sender)
-          win?.webContents.send(`fs:watch:${dirPath}`)
+      const entry: WatchEntry = {
+        watcher: undefined as unknown as FSWatcher,
+        subscribers: new Map([[event.sender, dirPath]]),
+        debounce: null,
+      }
+      entry.watcher = fsWatch(resolved, { recursive: true }, () => {
+        if (entry.debounce) clearTimeout(entry.debounce)
+        entry.debounce = setTimeout(() => {
+          for (const [sender, rawPath] of entry.subscribers) {
+            if (sender.isDestroyed()) {
+              entry.subscribers.delete(sender)
+              continue
+            }
+            sender.send(`fs:watch:${rawPath}`)
+          }
         }, 200)
       })
-      watchers.set(resolved, watcher)
+      watchers.set(resolved, entry)
       trackWatchSender(event.sender, resolved)
     } catch { /* ignore */ }
   })
 
-  ipcMain.handle('fs:watchStop', async (_, dirPath: string) => {
+  ipcMain.handle('fs:watchStop', async (event, dirPath: string) => {
     const resolved = validateFsPath(dirPath)
-    const watcher = watchers.get(resolved)
-    if (watcher) { watcher.close(); watchers.delete(resolved) }
+    const entry = watchers.get(resolved)
+    if (!entry) return
+    entry.subscribers.delete(event.sender)
+    if (entry.subscribers.size === 0) {
+      entry.watcher.close()
+      if (entry.debounce) clearTimeout(entry.debounce)
+      watchers.delete(resolved)
+    }
   })
 }

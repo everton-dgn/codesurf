@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+
+// Files larger than this are not snapshotted into checkpoint JSON (base64
+// inflation + synchronous writes would bloat storage). They get an oversize
+// marker instead; restore leaves the current file untouched.
+const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024 // 5 MB
 
 function ensureDir(dirPath) {
   mkdirSync(dirPath, { recursive: true })
@@ -8,7 +13,7 @@ function ensureDir(dirPath) {
 
 function atomicWriteBuffer(filePath, buffer) {
   ensureDir(dirname(filePath))
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   writeFileSync(tempPath, buffer)
   renameSync(tempPath, filePath)
 }
@@ -254,6 +259,23 @@ export function createCheckpointStore({
     }
 
     try {
+      // Cap snapshot size: base64-in-JSON inflates content ~33% and a
+      // checkpoint is written before every edit, so a large generated/lockfile
+      // would bloat storage and stall the synchronous write. Store an oversize
+      // marker instead; restore skips it (and warns) rather than corrupting.
+      const stat = statSync(targetPath)
+      if (stat.size > MAX_SNAPSHOT_BYTES) {
+        return {
+          path: logicalPath,
+          fsPath: targetPath,
+          displayPath,
+          existed: true,
+          size: stat.size,
+          encoding: null,
+          content: null,
+          oversize: true,
+        }
+      }
       const buffer = readFileSync(targetPath)
       return {
         path: logicalPath,
@@ -278,6 +300,12 @@ export function createCheckpointStore({
   function applyStoredFileSnapshot(file) {
     const targetPath = String(file?.fsPath ?? file?.path ?? '')
     if (!targetPath) throw new Error('Checkpoint file path is missing')
+    if (file?.oversize) {
+      // File was too large to snapshot — we have no prior contents to restore.
+      // Leave the current file as-is rather than deleting it (content is null
+      // here, which would otherwise hit the delete branch below).
+      return { skipped: true, reason: 'oversize' }
+    }
     if (file?.existed === false || file?.content == null) {
       if (existsSync(targetPath)) {
         rmSync(targetPath, { force: true })

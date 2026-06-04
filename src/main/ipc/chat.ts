@@ -16,6 +16,9 @@ import { tmpdir } from 'os'
 import { basename, dirname, join, relative, resolve, sep } from 'path'
 import { promisify } from 'util'
 import { getMCPPort, getMCPToken, getContexMcpToolNames, writeMCPConfigToWorkspace } from '../mcp-server'
+import { buildCodeSurfOutputConvention, joinPromptSections } from '../chat/prompt-conventions'
+import { sanitizeToolOutputText, formatClaudeSdkError } from '../chat/output-sanitizers'
+import { buildAsyncExecutionPrompt, buildPeerSystemPrompt } from '../chat/prompt-builders'
 import { getAgentPath, getShellEnvPath } from '../agent-paths'
 import { updateLinks } from '../peer-state'
 import { CONTEX_HOME } from '../paths'
@@ -441,6 +444,32 @@ const intentionallyClosedQueries = new WeakSet<Query>()
 const cardPermissionModes = new Map<string, string>()
 // Active CLI subprocesses (codex)
 const activeProcesses = new Map<string, ChildProcess>()
+
+/**
+ * Kill every live chat subprocess (Codex/OpenClaw/Hermes/OpenCode CLI children)
+ * and stop the OpenCode server. Called from app `before-quit` so a hard quit
+ * does not leave orphaned agent processes running and billing. Terminals are
+ * intentionally left alone — tmux-backed sessions are designed to survive
+ * restarts (see terminal.ts), and the direct-PTY fallback receives SIGHUP when
+ * the PTY master closes on parent death.
+ */
+export function killAllChatProcesses(): void {
+  for (const [cardId, proc] of activeProcesses) {
+    try {
+      proc.kill('SIGTERM')
+      // Best-effort escalation if the child ignores SIGTERM; unref'd so it
+      // never keeps the quitting process alive.
+      const t = setTimeout(() => {
+        try { if (!proc.killed) proc.kill('SIGKILL') } catch { /* already gone */ }
+      }, 2000)
+      t.unref?.()
+    } catch { /* already exited */ }
+    activeProcesses.delete(cardId)
+  }
+  try {
+    void OpenCodeServerManager.getInstance().shutdown()
+  } catch { /* not running */ }
+}
 // Active HTTP requests (proxy-backed providers)
 const activeHttpRequests = new Map<string, http.ClientRequest>()
 const activeDaemonStreams = new Map<string, {
@@ -662,50 +691,6 @@ interface CodexFileSnapshot {
   content: string | null
 }
 
-function sanitizeToolOutputText(text: string | null | undefined): string {
-  if (!text) return ''
-
-  return text
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .filter(line => {
-      const trimmed = line.trim()
-      return !(
-        /^Chunk ID:/i.test(trimmed)
-        || /^Wall time:/i.test(trimmed)
-        || /^Process exited with code /i.test(trimmed)
-        || /^Process running with session ID /i.test(trimmed)
-        || /^Original token count:/i.test(trimmed)
-        || /^Output:$/i.test(trimmed)
-        || /^\[CodeSurf memory guard\] Older tool (output|summary) /i.test(trimmed)
-      )
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function sanitizeClaudeStderrText(text: string | null | undefined): string {
-  if (!text) return ''
-
-  return text
-    .replace(/\r\n/g, '\n')
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
-    .split('\n')
-    .map(line => line.trimEnd())
-    .filter(line => line.trim().length > 0)
-    .join('\n')
-    .trim()
-}
-
-function formatClaudeSdkError(error: unknown, stderrText: string): string {
-  const message = error instanceof Error ? error.message : String(error)
-  const stderr = sanitizeClaudeStderrText(stderrText)
-  if (!stderr) return message
-  if (message && stderr.includes(message)) return stderr.slice(-6000)
-  return `${message}\n\nClaude Code stderr:\n${stderr}`.slice(-6000)
-}
-
 function bufferHttpResponse(res: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -816,74 +801,8 @@ function buildAsyncExecutionContext(params: {
   }
 }
 
-function joinPromptSections(...sections: Array<string | undefined | null>): string | undefined {
-  const normalized = sections
-    .map(section => String(section ?? '').trim())
-    .filter(Boolean)
-  return normalized.length > 0 ? normalized.join('\n\n') : undefined
-}
-
-// CodeSurf-wide completion-reporting convention. Injected into EVERY provider
-// (Claude, Codex, OpenCode, OpenClaw, Hermes) so substantial agent runs produce
-// a consistent handoff without turning tiny edits into noisy reports.
-//
-// Keep this short. It costs tokens on every turn (Claude/Codex) and on every
-// first user message (OpenCode/OpenClaw/Hermes). If you want to tune the tone
-// or required sections, edit the string below — the plumbing stays the same.
-export const CODESURF_OUTPUT_CONVENTION = [
-  '## CodeSurf Task-Completion Convention',
-  '',
-  'Default to a short natural-language completion. For simple edits, one sentence plus any verification result is enough.',
-  '',
-  'Only use the structured completion card for substantial work: multi-file changes, long-running tasks, risky edits, migrations, debugging sessions, or work where the user needs a durable handoff. When you do use it, use this exact format (literal uppercase section headers inside a fenced code block):',
-  '',
-  '```',
-  'CHANGES MADE:',
-  '  <path>: <one-line what + why>',
-  '  <path>: <one-line what + why>',
-  '',
-  'DIDN\'T TOUCH:',
-  '  <path or area>: <one-line why you left it alone>',
-  '',
-  'CONCERNS:',
-  '  - <risk, assumption, or follow-up the user should verify>',
-  '```',
-  '',
-  'Rules:',
-  '- Do NOT use the structured card for trivial changes such as copy tweaks, captions, one-line edits, formatting, or small visual adjustments.',
-  '- For simple tasks, say what changed and whether verification passed, then stop.',
-  '- Include CHANGES MADE only when the structured card is warranted. Skip the block entirely for pure Q&A turns.',
-  '- DIDN\'T TOUCH is only useful when there were adjacent risky areas you deliberately left alone.',
-  '- CONCERNS is never empty if you had to make a judgment call, guess a value, or skip verification. If there are truly no concerns, write "CONCERNS: none".',
-  '- One line per entry. No prose paragraphs inside the block.',
-  '- Put the block inside a single fenced code block so the host UI can render it as a structured card.',
-].join('\n')
-
-function buildCodeSurfOutputConvention(): string {
-  return CODESURF_OUTPUT_CONVENTION
-}
-
-// CodeSurf-wide "Insight" convention. This is intentionally NOT injected into
-// normal provider prompts; examples of the star-framed format strongly prime
-// models to emit it on every small task. Only add this block when the user
-// explicitly asks for insights.
-export const CODESURF_INSIGHT_CONVENTION = [
-  '## CodeSurf Insight Convention',
-  '',
-  'Do not emit an Insight block unless the user explicitly asks for an insight.',
-  '',
-  'When explicitly requested, use this exact wrapper:',
-  '`★ Insight ─────────────────────────────────────`',
-  '- [point 1]',
-  '- [point 2]',
-  '`─────────────────────────────────────────────────`',
-  '',
-  'Keep it to 1–2 bullets. It must explain non-obvious reasoning, not summarize the work.',
-].join('\n')
-
-function buildCodeSurfInsightConvention(): string {
-  return CODESURF_INSIGHT_CONVENTION
-}
+// Prompt conventions live in ./prompt-conventions (pure, unit-testable). They
+// are imported at the top of this file.
 
 // Anthropic limits: ~5 MB per image; keep a conservative per-request total so
 // we don't blow past context-window or HTTP payload limits on big screenshots.
@@ -966,31 +885,6 @@ function buildClaudeTextInput(text: string, priority: SDKUserMessage['priority']
   return generator()
 }
 
-function buildAsyncExecutionPrompt(asyncExecution: ChatRequest['asyncExecution']): string | undefined {
-  if (!asyncExecution) return undefined
-
-  const lines = [
-    '## Async Execution',
-    `- Active execution backend: ${asyncExecution.backend} (${asyncExecution.hostLabel}).`,
-  ]
-
-  if (asyncExecution.providerNativeBackground) {
-    lines.push('- Provider-native background agents may be available. Prefer that path for subagents or long-running delegated work when it keeps the main chat responsive.')
-  }
-
-  if (asyncExecution.detachedDaemonAvailable) {
-    lines.push('- CodeSurf also supports daemon-backed detached jobs that can continue outside the foreground chat.')
-  }
-
-  if (asyncExecution.requestedRunMode === 'background') {
-    lines.push('- This turn is running as a detached background orchestration job. Continue autonomously and do not expect interactive clarification from the foreground chat unless the task is blocked.')
-  } else if (asyncExecution.detachedDaemonAvailable) {
-    lines.push('- If the user wants the main conversation to stay free while work continues, prefer detached daemon orchestration for the main task thread.')
-  }
-
-  return lines.join('\n')
-}
-
 function buildClaudeAgentPrompt(
   basePrompt: string | undefined,
   memoryPrompt: string | undefined,
@@ -1013,75 +907,6 @@ function buildCodexPrompt(
   const outputConvention = buildCodeSurfOutputConvention()
   const preamble = joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
-}
-
-function buildPeerSystemPrompt(peers?: PeerContext[]): string | undefined {
-  if (!peers || peers.length === 0) return undefined
-
-  const hasExtensionActions = peers.some(peer => peer.actions && peer.actions.length > 0)
-  const browserPeers = peers.filter(peer => peer.tools.some(tool => tool.startsWith('browser_')))
-  const peerLines = peers.map(peer => {
-    const lines: string[] = []
-    if (peer.tools.length > 0) {
-      lines.push('  Tools: ' + peer.tools.join(', '))
-    }
-    if (peer.actions && peer.actions.length > 0) {
-      lines.push('  Actions (call via ext_invoke_action):')
-      for (const action of peer.actions) {
-        lines.push(`    - ${action.name}: ${action.description}`)
-      }
-    }
-    if (peer.context && Object.keys(peer.context).length > 0) {
-      lines.push('  Current context:')
-      for (const [key, value] of Object.entries(peer.context)) {
-        const display = value === null ? 'null' : typeof value === 'object' ? JSON.stringify(value) : String(value)
-        lines.push(`    ${key}: ${display}`)
-      }
-    }
-    if (lines.length === 0) lines.push('  (no specific tools)')
-    return `- Block "${peer.peerId}" (${peer.peerType}):\n${lines.join('\n')}`
-  }).join('\n')
-
-  const browserGuide = browserPeers.length > 0 ? [
-    '',
-    '## Browser Control',
-    'If a connected browser block is relevant, use its browser_* tools with that block\'s tile_id instead of asking the user to navigate manually.',
-    'Use the browser context values (for example ctx:browser:url and ctx:browser:navigation) to understand where the browser currently is before deciding the next action.',
-  ] : []
-  const extActionGuide = hasExtensionActions ? [
-    '',
-    '## Extension Actions',
-    'To control extension blocks, use ext_invoke_action(tile_id, action, params).',
-    'To read extension state afterwards, use tile_context_get(tile_id, tag).',
-    'IMPORTANT: For artifact/content generation, ALWAYS prefer the "generate" action over "setHtml".',
-    'Do NOT generate HTML yourself — let the extension handle it. Just describe what you want in the prompt.',
-  ] : []
-
-  return [
-    'You are an AI agent running inside CodeSurf, an infinite canvas workspace.',
-    '',
-    'The following peer blocks are directly connected to you on the canvas:',
-    peerLines,
-    '',
-    'Treat the connected peer list above as authoritative for this turn.',
-    'Do not waste time rediscovering tools or the canvas when a connected peer already exposes the needed tool.',
-    '',
-    '## Peer Collaboration',
-    'Use these MCP tools to coordinate with linked peers:',
-    '- peer_set_state: Declare your status, task, and files (do this when starting work)',
-    '- peer_get_state: See what peers are working on, their todos, and files',
-    '- peer_send_message: Send a direct message to a peer',
-    '- peer_read_messages: Read incoming messages from peers',
-    '- peer_add_todo: Add a shared todo (peers are notified)',
-    '- peer_complete_todo: Mark a todo done',
-    '',
-    'Peer bridge tools for connected blocks require the block ID from the list above as tile_id.',
-    'When a connected block already exposes a direct tool for the job, use it immediately instead of stalling or asking the user to perform the action manually.',
-    'Do not call canvas_list_tiles or list_extensions first unless the connected peers above do not cover the request.',
-    'All tools are prefixed mcp__contex__ (for example mcp__contex__peer_get_state).',
-    ...browserGuide,
-    ...extActionGuide,
-  ].join('\n')
 }
 
 function syncPeerLinks(req: ChatRequest): void {
@@ -3881,6 +3706,22 @@ export function registerChatIPC(): void {
     sendStream(cardId, { type: 'done' })
   })
 
+  // Permanently dispose a card's chat state when its tile is deleted. Unlike
+  // clearSession (same tile, fresh conversation) this also prunes the persisted
+  // session-ids.json so neither the in-memory maps nor the on-disk file grow
+  // unbounded across the install lifetime.
+  ipcMain.handle('chat:disposeCard', async (_, cardId: string) => {
+    if (!cardId || typeof cardId !== 'string') return { ok: false }
+    sessionIds.delete(cardId)
+    opencodeSessionIds.delete(cardId)
+    openclawSessionIds.delete(cardId)
+    hermesSessionIds.delete(cardId)
+    cardPermissionModes.delete(cardId)
+    // Schedule a rewrite of session-ids.json from the (now-pruned) map.
+    persistSessionIds()
+    return { ok: true }
+  })
+
   // Clear session for a card (start fresh conversation)
   ipcMain.handle('chat:clearSession', async (_, cardId: string) => {
     sessionIds.delete(cardId)
@@ -3890,6 +3731,8 @@ export function registerChatIPC(): void {
     cancelPendingAskUserQuestionsForCard(cardId, 'Session cleared')
     cancelPendingToolPermissionsForCard(cardId, 'Session cleared')
     cardPermissionModes.delete(cardId)
+    // Persist the eviction so the cleared session does not reappear on restart.
+    persistSessionIds()
     log('session cleared for card', cardId)
     return { ok: true }
   })

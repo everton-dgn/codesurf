@@ -520,7 +520,9 @@ export function createDreamingManager(options) {
   async function latestRun(workspaceId) {
     const active = activeRuns.get(workspaceId)
     if (active) return makeRunRecord(active.metadata)
-    await reconcileOrphanRuns(workspaceId).catch(() => {})
+    await reconcileOrphanRuns(workspaceId).catch((err) => {
+      console.error(`[dreaming] reconcileOrphanRuns failed for ${workspaceId}:`, err)
+    })
     const runs = await listDreamRunsFromDisk(homeDir, workspaceId, 1)
     return runs[0] ?? null
   }
@@ -716,7 +718,9 @@ export function createDreamingManager(options) {
     if (existing) clearTimeout(existing)
     const timer = setTimeout(() => {
       autoTimers.delete(workspaceId)
-      void evaluateAutoDream(args).catch(() => {})
+      void evaluateAutoDream(args).catch((err) => {
+        console.error('[dreaming] auto-dream evaluation failed:', err)
+      })
     }, autoConfig.debounceMs)
     if (typeof timer.unref === 'function') timer.unref()
     autoTimers.set(workspaceId, timer)
@@ -772,7 +776,9 @@ export function createDreamingManager(options) {
         workspaceName: String(workspace?.workspaceName ?? workspace?.name ?? '').trim() || null,
         workspaceDir,
         projectPaths: Array.isArray(workspace?.projectPaths) ? workspace.projectPaths : [workspaceDir],
-      }).catch(() => {})
+      }).catch((err) => {
+        console.error(`[dreaming] auto-dream scheduling failed for ${workspaceId}:`, err)
+      })
     }
   }
 
@@ -790,7 +796,9 @@ export function createDreamingManager(options) {
     if (sweepTimer) clearInterval(sweepTimer)
     sweepIntervalMs = autoConfig.sweepMs
     sweepTimer = setInterval(() => {
-      void runAutoSweepOnce().catch(() => {})
+      void runAutoSweepOnce().catch((err) => {
+        console.error('[dreaming] auto-sweep failed:', err)
+      })
     }, autoConfig.sweepMs)
     if (typeof sweepTimer.unref === 'function') sweepTimer.unref()
     return { enabled: true, sweepMs: autoConfig.sweepMs, running: true }

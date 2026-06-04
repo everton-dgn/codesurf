@@ -19,6 +19,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { randomUUID } from 'node:crypto'
 import { CONTEX_HOME } from '../paths'
 import { getDb, getDeviceId } from '../db'
 import type { UsageIndexRow, UsageProviderId, UsageSnapshot } from './types'
@@ -35,7 +36,7 @@ export function getSnapshotFilePath(provider: UsageProviderId): string {
 
 function atomicWriteJson(filePath: string, value: unknown): { mtimeMs: number; sizeBytes: number } {
   mkdirSync(dirname(filePath), { recursive: true })
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   const payload = `${JSON.stringify(value, null, 2)}\n`
   writeFileSync(tempPath, payload, 'utf8')
   renameSync(tempPath, filePath)

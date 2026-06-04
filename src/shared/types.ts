@@ -443,6 +443,10 @@ export interface AppSettings {
   // Chrome sync
   chromeSyncEnabled: boolean
   chromeSyncProfileDir: string | null
+  // risk-06: when non-empty, cookie injection into browser-tile partitions is
+  // scoped to these domains (and their subdomains). Empty = inject all (the
+  // pre-scoping behavior) with a warning until the approval UI populates it.
+  chromeSyncApprovedDomains: string[]
   // Where rendered links should open by default.
   linkOpenMode: 'browser-block' | 'external-browser'
   // Host-selection policy for chat and background execution.
@@ -566,6 +570,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   chromeSyncEnabled: false,
   chromeSyncProfileDir: null,
+  chromeSyncApprovedDomains: [],
   linkOpenMode: 'browser-block',
   execution: {
     mode: 'auto',

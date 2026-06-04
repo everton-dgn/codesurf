@@ -10,9 +10,16 @@ import { applyWindowAppearance } from '../windowAppearance'
 import { CONTEX_HOME } from '../paths'
 import { ensureCodeSurfStructure } from '../session-sources'
 import { validateGenerationProvider } from '../generation-provider-validation'
+import { persistGenerationKeys, resolveGenerationKeys, setGenerationSecretStore } from '../generation-secrets'
+import { getSecret, setSecret } from '../secrets'
 
 const SETTINGS_PATH = join(CONTEX_HOME, 'settings.json')
 const LEGACY_CONFIG_PATH = join(CONTEX_HOME, 'config.json')
+
+// gap-03: inject the real keychain-backed store into the (electron-free,
+// testable) generation-secrets module. Only stores function refs here;
+// safeStorage is not touched until a settings handler actually runs.
+setGenerationSecretStore({ getSecret, setSecret })
 
 type PersistedSettingsDocument = {
   version?: number
@@ -87,6 +94,26 @@ export function readSettingsSync(): AppSettings {
     } catch {
       return { ...DEFAULT_SETTINGS }
     }
+  }
+}
+
+// gap-03: one-time startup migration. Existing installs may have plaintext
+// generation keys in settings.json from before keychain storage; move them into
+// the keychain so users who never reopen Settings are migrated too. Idempotent —
+// a no-op once every key is already blanked/keychain-backed.
+export async function migrateGenerationKeysToKeychain(): Promise<void> {
+  try {
+    await ensureDaemonRunning()
+    const current = withDefaultSettings(await daemonClient.getSettings())
+    const { settings: sanitized, migrated } = persistGenerationKeys(current)
+    if (migrated > 0) {
+      await daemonClient.setSettings(sanitized)
+      // eslint-disable-next-line no-console
+      console.log(`[gap-03] migrated ${migrated} generation key(s) from settings.json into the keychain`)
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[gap-03] generation key migration failed:', err)
   }
 }
 
@@ -174,14 +201,20 @@ export function registerWorkspaceIPC(): void {
 
   ipcMain.handle('settings:get', async () => {
     await ensureDaemonRunning()
-    return withDefaultSettings(await daemonClient.getSettings())
+    // gap-03: settings.json stores generation keys as keychain-backed blanks;
+    // re-fill them from the keychain for the renderer/consumers.
+    return resolveGenerationKeys(withDefaultSettings(await daemonClient.getSettings()))
   })
 
   ipcMain.handle('settings:set', async (_, settings: AppSettings) => {
     await ensureDaemonRunning()
-    const next = withDefaultSettings(await daemonClient.setSettings(withDefaultSettings(settings)))
+    // gap-03: move any plaintext generation key into the keychain and blank the
+    // field before it is persisted; return resolved settings so the renderer's
+    // settings view still shows the key.
+    const { settings: sanitized } = persistGenerationKeys(withDefaultSettings(settings))
+    const saved = withDefaultSettings(await daemonClient.setSettings(sanitized))
     await applySettingsSideEffects()
-    return next
+    return resolveGenerationKeys(saved)
   })
 
   ipcMain.handle('settings:getRawJson', async () => {
@@ -192,17 +225,26 @@ export function registerWorkspaceIPC(): void {
   ipcMain.handle('settings:setRawJson', async (_, json: string) => {
     await ensureDaemonRunning()
     const result = await daemonClient.setRawSettingsJson(json)
+    if (result.ok && result.settings) {
+      // gap-03: a raw edit can reintroduce a plaintext generation key — migrate
+      // it to the keychain and re-persist the blanked settings before returning.
+      const { settings: sanitized, migrated } = persistGenerationKeys(withDefaultSettings(result.settings))
+      if (migrated > 0) {
+        await daemonClient.setSettings(sanitized)
+      }
+      await applySettingsSideEffects()
+      return { ...result, settings: resolveGenerationKeys(sanitized) }
+    }
     if (result.ok) {
       await applySettingsSideEffects()
-    }
-    if (result.ok && result.settings) {
-      return { ...result, settings: withDefaultSettings(result.settings) }
     }
     return result
   })
 
   ipcMain.handle('settings:validateGenerationProvider', async (_, providerId: string, providerPatch?: Partial<AppSettings['generationProviders'][string]>) => {
-    const settings = readSettingsSync()
+    // gap-03: resolve keychain-backed keys so a saved (blanked) key still
+    // validates when the renderer doesn't re-send it in the patch.
+    const settings = resolveGenerationKeys(readSettingsSync())
     const provider = settings.generationProviders?.[providerId]
     if (!provider) {
       return {

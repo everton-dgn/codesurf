@@ -20,6 +20,7 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { randomUUID } from 'node:crypto'
 import { CONTEX_HOME } from './paths'
 
 const SECRETS_PATH = join(CONTEX_HOME, 'secrets.json')
@@ -54,7 +55,7 @@ function readFile(): SecretsFile {
 
 function writeFileAtomic(file: SecretsFile): void {
   ensureDir(dirname(SECRETS_PATH))
-  const tempPath = `${SECRETS_PATH}.${process.pid}.${Date.now()}.tmp`
+  const tempPath = `${SECRETS_PATH}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   writeFileSync(tempPath, `${JSON.stringify(file, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   renameSync(tempPath, SECRETS_PATH)
 }
@@ -67,6 +68,13 @@ function isSafeStorageReady(): boolean {
   }
 }
 
+/** Whether secrets are being stored encrypted (vs. the plaintext fallback). */
+export function isSecretsEncryptionAvailable(): boolean {
+  return isSafeStorageReady()
+}
+
+let warnedPlaintextFallback = false
+
 export function setSecret(name: string, value: string): void {
   const file = readFile()
   if (value === '') {
@@ -77,6 +85,14 @@ export function setSecret(name: string, value: string): void {
     file.keys[name] = ciphertext
     if (file.plainKeys) delete file.plainKeys[name]
   } else {
+    if (!warnedPlaintextFallback) {
+      warnedPlaintextFallback = true
+      console.warn(
+        '[secrets] OS keychain (safeStorage) unavailable — API keys are being stored ' +
+          'UNENCRYPTED (base64) in secrets.json. They are protected only by 0o600 file ' +
+          'permissions. Resolve the keychain/keyring to restore encryption.',
+      )
+    }
     if (!file.plainKeys) file.plainKeys = {}
     file.plainKeys[name] = Buffer.from(value, 'utf8').toString('base64')
     delete file.keys[name]
@@ -90,7 +106,10 @@ export function getSecret(name: string): string | null {
     try {
       const buf = Buffer.from(file.keys[name], 'base64')
       return safeStorage.decryptString(buf)
-    } catch {
+    } catch (err) {
+      // Decryption failed on a key we DO have — this is key loss, not absence
+      // (e.g. keychain changed). Surface it instead of masking as "no key".
+      console.error(`[secrets] failed to decrypt stored key "${name}":`, err)
       return null
     }
   }

@@ -87,7 +87,9 @@ function thinkingForClaude(thinking?: string): { type: string; budget_tokens?: n
 async function runClaudeTurn(participantId: string, spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {
   const claudePermissionMode = modeForClaude(spawnRequest.mode)
   const workspaceDir = workspaceDirFromSpawnRequest(spawnRequest)
+  const abortController = new AbortController()
   const options: Options = {
+    abortController,
     model: spawnRequest.model ?? 'claude-sonnet-4-6',
     permissionMode: claudePermissionMode as any,
     thinking: thinkingForClaude(spawnRequest.thinking) as any,
@@ -153,8 +155,14 @@ async function runClaudeTurn(participantId: string, spawnRequest: RelaySpawnRequ
   const q = query({ prompt: input.prompt, options })
   let text = ''
 
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`Claude turn timed out after ${timeoutMs}ms`)), timeoutMs)
+    timeoutHandle = setTimeout(() => {
+      // Cancel the SDK subprocess so it stops running (and billing) instead of
+      // finishing the turn in the background with its result silently discarded.
+      abortController.abort()
+      reject(new Error(`Claude turn timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
   })
 
   const queryPromise = (async () => {
@@ -179,7 +187,11 @@ async function runClaudeTurn(participantId: string, spawnRequest: RelaySpawnRequ
     return text
   })()
 
-  return Promise.race([queryPromise, timeoutPromise])
+  try {
+    return await Promise.race([queryPromise, timeoutPromise])
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+  }
 }
 
 async function runCodexTurn(spawnRequest: RelaySpawnRequest, input: RelayTurnInput, timeoutMs = 300_000): Promise<string> {

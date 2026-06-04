@@ -12,3 +12,6 @@ opensrc/morph-labs--morph-typescript-sdk/
 /build-electrobun/dev-macos-arm64
 /.tmp
 /apps/chat-app/dist
+# Stale committed esbuild bundle — not the runtime entrypoint (package.json main
+# points at dist-electron/main/index.js). Keep build artifacts out of VCS.
+/index.js

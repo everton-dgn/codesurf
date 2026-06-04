@@ -110,10 +110,13 @@ function rowToEntry(row: Record<string, unknown>): AggregatedSessionEntry {
 export function listThreadsFromDb(workspacePath: string | null): AggregatedSessionEntry[] {
   const db = getDb()
   if (!workspacePath) {
+    // Cap the global (all-workspaces) read so the IPC payload can't grow
+    // unbounded with session history. idx_ti_updated already orders this.
     const rows = db.prepare(`
       SELECT * FROM thread_index
        WHERE deleted_at IS NULL
        ORDER BY source_updated_ms DESC
+       LIMIT 500
     `).all() as Record<string, unknown>[]
     return rows.map(rowToEntry)
   }

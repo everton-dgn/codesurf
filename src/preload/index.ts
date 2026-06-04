@@ -229,6 +229,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('chat:steer', payload) as Promise<{ ok: boolean; error?: string }>,
     stop: (cardId: string) => ipcRenderer.invoke('chat:stop', cardId),
     clearSession: (cardId: string) => ipcRenderer.invoke('chat:clearSession', cardId),
+    disposeCard: (cardId: string) => ipcRenderer.invoke('chat:disposeCard', cardId),
     opencodeModels: () => ipcRenderer.invoke('chat:opencodeModels'),
     onOpencodeModelsUpdated: (cb: (payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }) => void) => {
       const handler = (_: unknown, payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }) => cb(payload)

@@ -4,6 +4,7 @@ import { pbkdf2Sync, createDecipheriv } from 'crypto'
 import { session } from 'electron'
 import { getChromeKeychainPassword } from './keychain'
 import { profilePath } from './profiles'
+import { isCookieDomainApproved } from './domain-allowlist'
 import { CONTEX_HOME } from '../paths'
 
 const TEMP_DIR = join(CONTEX_HOME, 'chrome-sync-temp')
@@ -69,8 +70,19 @@ function chromeTimeToUnix(chromeTime: number): number {
 export async function syncCookiesToPartition(
   profileDir: string,
   partition: string,
+  options: { approvedDomains?: string[] } = {},
 ): Promise<{ count: number; errors: string[] }> {
   const errors: string[] = []
+
+  // risk-06: when an approved-domains allowlist is configured, inject only
+  // cookies for those domains. An empty/unset list means "not yet scoped" —
+  // preserve the existing inject-all behavior but warn, so sync is never
+  // silently killed before the approval UI lands.
+  const approvedDomains = (options.approvedDomains ?? []).filter(d => typeof d === 'string' && d.trim())
+  const filtering = approvedDomains.length > 0
+  if (!filtering) {
+    console.warn('[chrome-sync] cookie injection is UNSCOPED — every site cookie is being copied into the browser-tile partition. Configure approved domains to limit exposure.')
+  }
 
   // Ensure temp dir exists
   if (!existsSync(TEMP_DIR)) mkdirSync(TEMP_DIR, { recursive: true })
@@ -109,6 +121,9 @@ export async function syncCookiesToPartition(
     for (let i = 0; i < rows.length; i += BATCH) {
       const batch = rows.slice(i, i + BATCH)
       const promises = batch.map(async (row) => {
+        // risk-06: drop cookies outside the approved-domains allowlist.
+        if (filtering && !isCookieDomainApproved(row.host_key, approvedDomains)) return
+
         const value = decryptValue(row.encrypted_value, key)
         if (!value) return
 

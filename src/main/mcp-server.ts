@@ -28,6 +28,7 @@ import {
   mimeTypeForImagePath,
   selectImageProvider,
 } from './image-generation'
+import { resolveGenerationKeys } from './generation-secrets'
 
 const MCP_TOKEN = randomUUID()
 const MAX_BODY = 1024 * 1024 // 1MB
@@ -72,7 +73,9 @@ async function readAppSettingsForMcp(): Promise<ReturnType<typeof withDefaultSet
       const settings = parsed && typeof parsed === 'object' && 'settings' in parsed
         ? parsed.settings
         : parsed
-      return withDefaultSettings(settings)
+      // gap-03: generation keys are persisted as keychain-backed blanks; resolve
+      // them so image/video generation tools get the real key.
+      return resolveGenerationKeys(withDefaultSettings(settings))
     } catch {
       // try next source
     }
@@ -1836,10 +1839,31 @@ async function handleMCP(req: MCPRequest): Promise<unknown> {
 
 let serverPort: number | null = null
 
-function setCorsHeaders(res: ServerResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*')
+function setCorsHeaders(res: ServerResponse, req?: IncomingMessage): void {
+  // The real DNS-rebinding defense is isLoopbackHost() below — every request
+  // that reaches a handler has a loopback Host. CORS is NOT the boundary for
+  // the side-effecting endpoints (/push, /inject): those are reachable by
+  // "simple" cross-origin POSTs regardless of ACAO, so they rely on the random
+  // port, 0o600 config, and Host validation instead. Reflect the caller's
+  // Origin (so the in-app renderer works whatever its scheme — file:// sends
+  // Origin "null", dev uses http://localhost, prod a custom scheme) and fall
+  // back to '*' for non-browser clients (agents/MCP transport) that send none.
+  const origin = req?.headers.origin
+  res.setHeader('Access-Control-Allow-Origin', origin || '*')
+  if (origin) res.setHeader('Vary', 'Origin')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Cache-Control, Authorization')
+}
+
+// Reject requests whose Host header is not loopback. This defeats DNS-rebinding:
+// a malicious site that resolves its hostname to 127.0.0.1 still sends its own
+// hostname in the Host header, which we refuse. Legitimate local clients always
+// address 127.0.0.1/localhost, so they are unaffected.
+function isLoopbackHost(req: IncomingMessage): boolean {
+  const host = (req.headers.host ?? '').toLowerCase().trim()
+  if (!host) return false
+  const name = host.replace(/:\d+$/, '')
+  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]' || name === '::1'
 }
 
 export async function startMCPServer(): Promise<number> {
@@ -1850,9 +1874,18 @@ export async function startMCPServer(): Promise<number> {
       const normalizedEventsPath = pathname.endsWith('/events') ? '/events' : pathname
       const isEvents = req.method === 'GET' && normalizedEventsPath === '/events'
 
+      // Reject non-loopback Host headers (DNS-rebinding defense) before doing
+      // any work. Applies to every method including OPTIONS preflight.
+      if (!isLoopbackHost(req)) {
+        setCorsHeaders(res, req)
+        res.writeHead(403, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Forbidden: non-loopback Host header' }))
+        return
+      }
+
       // CORS preflight
       if (req.method === 'OPTIONS') {
-        setCorsHeaders(res)
+        setCorsHeaders(res, req)
         res.writeHead(200)
         res.end()
         return
@@ -1861,7 +1894,7 @@ export async function startMCPServer(): Promise<number> {
       // SSE: GET /events?card_id=xxx  — agent streams status to canvas
       if (isEvents) {
         const cardId = url.searchParams.get('card_id') ?? 'global'
-        setCorsHeaders(res)
+        setCorsHeaders(res, req)
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -1894,7 +1927,7 @@ export async function startMCPServer(): Promise<number> {
         req.on('data', (chunk: Buffer | string) => {
           bodySize += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length
           if (bodySize > MAX_BODY) {
-            setCorsHeaders(res)
+            setCorsHeaders(res, req)
             res.writeHead(413, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ error: 'Request body too large' }))
             req.destroy()
@@ -1907,11 +1940,11 @@ export async function startMCPServer(): Promise<number> {
             const { card_id, event, data } = JSON.parse(body)
             pushSSE(card_id, event, data)
             sendToRenderer(event, { cardId: card_id, ...data })
-            setCorsHeaders(res)
+            setCorsHeaders(res, req)
             res.writeHead(200, { 'Content-Type': 'application/json' })
             res.end('{"ok":true}')
           } catch {
-            setCorsHeaders(res)
+            setCorsHeaders(res, req)
             res.writeHead(400); res.end()
           }
         })
@@ -1925,7 +1958,7 @@ export async function startMCPServer(): Promise<number> {
         req.on('data', (chunk: Buffer | string) => {
           bodySize += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length
           if (bodySize > MAX_BODY) {
-            setCorsHeaders(res)
+            setCorsHeaders(res, req)
             res.writeHead(413, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ error: 'Request body too large' }))
             req.destroy()
@@ -1942,11 +1975,11 @@ export async function startMCPServer(): Promise<number> {
             })
             // Also push SSE so other agents/subscribers know
             pushSSE(card_id, 'canvas_message', { message })
-            setCorsHeaders(res)
+            setCorsHeaders(res, req)
             res.writeHead(200, { 'Content-Type': 'application/json' })
             res.end('{"ok":true}')
           } catch {
-            setCorsHeaders(res)
+            setCorsHeaders(res, req)
             res.writeHead(400); res.end()
           }
         })
@@ -1955,7 +1988,7 @@ export async function startMCPServer(): Promise<number> {
 
       // MCP: POST /  or POST /mcp
       if (req.method !== 'POST') {
-        setCorsHeaders(res)
+        setCorsHeaders(res, req)
         res.writeHead(405); res.end(); return
       }
 
@@ -1964,7 +1997,7 @@ export async function startMCPServer(): Promise<number> {
       req.on('data', (chunk: Buffer | string) => {
         bodySize += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length
         if (bodySize > MAX_BODY) {
-          setCorsHeaders(res)
+          setCorsHeaders(res, req)
           res.writeHead(413, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({ error: 'Request body too large' }))
           req.destroy()
@@ -1976,13 +2009,13 @@ export async function startMCPServer(): Promise<number> {
         try {
           const mcpReq: MCPRequest = JSON.parse(body)
           const response = await handleMCP(mcpReq)
-          setCorsHeaders(res)
+          setCorsHeaders(res, req)
           res.writeHead(200, {
             'Content-Type': 'application/json'
           })
           res.end(JSON.stringify(response))
         } catch (e) {
-          setCorsHeaders(res)
+          setCorsHeaders(res, req)
           res.writeHead(400); res.end()
         }
       })
@@ -2031,7 +2064,11 @@ export async function startMCPServer(): Promise<number> {
           inject: `${baseUrl}/inject`
         }
       }
-      await fs.writeFile(configPath, JSON.stringify(mcpConfig, null, 2))
+      // 0o600: this file holds the server port and bearer token; keep it
+      // readable only by the owning user (matches secrets.json). chmod covers
+      // files that already existed at the default 0o644.
+      await fs.writeFile(configPath, JSON.stringify(mcpConfig, null, 2), { mode: 0o600 })
+      await fs.chmod(configPath, 0o600).catch(() => {})
 
       // Write .mcp.json to all known workspace directories so Claude Code
       // sessions in terminal tiles auto-discover the contex MCP server

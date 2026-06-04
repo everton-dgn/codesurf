@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog, type MessageBoxOptions } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
+import { randomUUID } from 'node:crypto'
 import type { ToolPermissionDecisionScope, ToolPermissionGrant, ToolPermissionStore } from '../shared/types'
 import { CONTEX_HOME } from './paths'
 
@@ -24,8 +25,9 @@ function ensureDir(dirPath: string): void {
 
 function atomicWriteJson(filePath: string, value: unknown): void {
   ensureDir(dirname(filePath))
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
-  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
+  // 0o600: permission grants are user-scoped; do not leave them world-readable.
+  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   renameSync(tempPath, filePath)
 }
 

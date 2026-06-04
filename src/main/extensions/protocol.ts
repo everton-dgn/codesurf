@@ -103,15 +103,9 @@ export function registerExtensionProtocol(registry: ExtensionRegistry): void {
       // ── __runext_codicons__ — serve @vscode/codicons from node_modules ──
       if (firstSegment === '__runext_codicons__') {
         const codiconBase = join(__dirname, '..', '..', 'node_modules', '@vscode', 'codicons')
-        // Also check the runext extensions dir
-        const candidates = [
-          join(codiconBase, ...restSegments),
-          join('/Users/jkneen/clawd/runext/node_modules/@vscode/codicons', ...restSegments),
-        ]
-        for (const candidate of candidates) {
-          if (existsSync(candidate)) {
-            return serveFile(candidate)
-          }
+        const candidate = join(codiconBase, ...restSegments)
+        if (existsSync(candidate)) {
+          return serveFile(candidate)
         }
         return new Response('Codicon resource not found', { status: 404 })
       }

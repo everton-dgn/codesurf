@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { initWorkspaces, registerWorkspaceIPC } from './ipc/workspace'
+import { initWorkspaces, registerWorkspaceIPC, migrateGenerationKeysToKeychain } from './ipc/workspace'
 import { registerFsIPC } from './ipc/fs'
 import { registerCanvasIPC } from './ipc/canvas'
 import { registerTerminalIPC } from './ipc/terminal'
@@ -13,7 +13,7 @@ import { registerAgentsIPC } from './ipc/agents'
 import { registerStreamIPC } from './ipc/stream'
 import { registerGitIPC } from './ipc/git'
 import { registerBusIPC } from './ipc/bus'
-import { registerChatIPC } from './ipc/chat'
+import { registerChatIPC, killAllChatProcesses } from './ipc/chat'
 import { registerActivityIPC } from './ipc/activity'
 import { registerCollabIPC, stopAllCollabWatchers } from './ipc/collab'
 import { registerTileContextIPC } from './ipc/tile-context'
@@ -694,6 +694,10 @@ app.whenReady().then(async () => {
   registerChromeSyncIPC()
   registerLocalProxyIPC()
 
+  // gap-03: migrate any pre-existing plaintext generation keys into the keychain
+  // in the background (idempotent; never blocks boot).
+  void migrateGenerationKeysToKeychain()
+
   // Keep the extension system fully lazy. Do not scan or boot extension hosts
   // at startup; load them only when an extension tile or explicit management UI asks.
   extensionRegistry = new ExtensionRegistry({
@@ -1125,6 +1129,7 @@ app.on('before-quit', () => {
   stopAllCollabWatchers()
   extensionRegistry?.deactivateAll()
   stopAllRelayServices()
+  killAllChatProcesses()
   closeDb()
 })
 
