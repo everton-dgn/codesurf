@@ -49,10 +49,19 @@ function basename(p: string): string {
 
 // ─── Hook ─────────────────────────────────────────────────────────────────
 
+/** A plugin-contributed command exposed as a chat slash command (point 3). */
+export interface PluginSlashCommand {
+  slash: string
+  title: string
+  description?: string
+}
+
 export interface UseChatAutocompleteOptions {
   workspaceDir: string
   connectedPeers: DiscoveryPeer[]
   workspaceSkills: SkillDefinition[]
+  /** Slash commands contributed by enabled plugins (merged into the slash menu). */
+  pluginSlashCommands?: PluginSlashCommand[]
 }
 
 export interface UseChatAutocompleteResult {
@@ -69,6 +78,7 @@ export function useChatAutocomplete({
   workspaceDir,
   connectedPeers,
   workspaceSkills,
+  pluginSlashCommands = [],
 }: UseChatAutocompleteOptions): UseChatAutocompleteResult {
   const [acType, setAcType] = useState<'slash' | 'mention' | null>(null)
   const [acQuery, setAcQuery] = useState('')
@@ -220,8 +230,23 @@ export function useChatAutocomplete({
       })
     }
 
+    // Plugin-contributed slash commands (point 3 — plugins appear in the chat area).
+    for (const cmd of pluginSlashCommands) {
+      const trigger = (cmd.slash || '').trim()
+      if (!trigger) continue
+      const value = '/' + trigger.replace(/^\/+/, '')
+      if (seen.has(value)) continue
+      if (!value.toLowerCase().startsWith('/' + q)) continue
+      seen.add(value)
+      items.push({
+        key: `plugin:${value}`,
+        value,
+        description: cmd.description?.trim() || cmd.title,
+      })
+    }
+
     return items
-  }, [acQuery, workspaceSkills])
+  }, [acQuery, workspaceSkills, pluginSlashCommands])
 
   const acItems: AutocompleteItem[] = acType === 'slash'
     ? slashItems

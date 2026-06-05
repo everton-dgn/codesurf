@@ -19,6 +19,14 @@ import { getMCPPort, getMCPToken, getContexMcpToolNames, writeMCPConfigToWorkspa
 import { buildCodeSurfOutputConvention, joinPromptSections } from '../chat/prompt-conventions'
 import { sanitizeToolOutputText, formatClaudeSdkError } from '../chat/output-sanitizers'
 import { buildAsyncExecutionPrompt, buildPeerSystemPrompt } from '../chat/prompt-builders'
+import {
+  runCodesurfAgent,
+  stopCsagent,
+  steerCsagent,
+  disposeCsagent,
+  clearCsagentSession,
+  listCsagentModels,
+} from '../chat/pi-runtime'
 import { getAgentPath, getShellEnvPath } from '../agent-paths'
 import { updateLinks } from '../peer-state'
 import { CONTEX_HOME } from '../paths'
@@ -1309,6 +1317,30 @@ async function cancelChatDaemonJob(cardId: string): Promise<void> {
   }
 }
 
+// CodeSurf Agent (csagent) — the in-process coding-agent runtime, bridged to the
+// normalized agent:stream schema via src/main/chat/pi-runtime.ts.
+async function chatCsagent(req: ChatRequest): Promise<void> {
+  const prepared = getPreparedMessages(req)
+  const lastUser = [...prepared].reverse().find(m => m.role === 'user')
+  if (!lastUser) {
+    sendStream(req.cardId, { type: 'error', error: 'No user message to send.' })
+    sendStream(req.cardId, { type: 'done' })
+    return
+  }
+  await runCodesurfAgent(
+    {
+      cardId: req.cardId,
+      model: req.model,
+      workspaceDir: req.workspaceDir,
+      sessionId: req.sessionId ?? null,
+      thinking: req.thinking,
+      prompt: String(lastUser.content ?? ''),
+      imageAttachments: req.imageAttachments?.map(a => ({ path: a.path, mediaType: a.mediaType })),
+    },
+    (event) => sendStream(req.cardId, event),
+  )
+}
+
 function chatLocalProxy(req: ChatRequest): void {
   const transport = req.providerTransport
   if (!transport || transport.type !== 'local-proxy') {
@@ -2473,13 +2505,14 @@ function chatCodex(req: ChatRequest): void {
       args.push('--sandbox', 'read-only')
     }
   }
-  args.push(
-    // App-launched Codex runs should not inherit user-global MCP servers.
-    // A stale localhost entry there can abort the whole run before the model
-    // does useful work. Workspace-level `.mcp.json` remains available.
-    '-c',
-    'mcp_servers={}',
-  )
+  // App-launched Codex runs must NOT inherit the user's global ~/.codex/config.toml
+  // (its MCP servers, plugins, and hooks). In codex-cli 0.136.0 the older
+  // `-c mcp_servers={}` override no longer suppresses them, and a loaded MCP server
+  // — auth-required (slack/stripe) or a long-lived stdio server — can stall the run
+  // so codex never exits. That surfaces in the app as a hang (no `done` is ever
+  // emitted). `--ignore-user-config` skips config.toml entirely while still using
+  // CODEX_HOME for auth, giving a clean, predictable, isolated run.
+  args.push('--ignore-user-config')
   if (req.workspaceDir) {
     args.push('--skip-git-repo-check', '-C', req.workspaceDir)
   } else {
@@ -3637,6 +3670,7 @@ export function registerChatIPC(): void {
       case 'opencode': chatOpencode(requestWithFileReferences); break
       case 'openclaw': chatOpenclaw(requestWithFileReferences); break
       case 'hermes': chatHermes(requestWithFileReferences); break
+      case 'csagent': chatCsagent(requestWithFileReferences); break
       default:
         if (requestWithFileReferences.providerTransport?.type === 'local-proxy') {
           chatLocalProxy(requestWithFileReferences)
@@ -3657,6 +3691,14 @@ export function registerChatIPC(): void {
     const cardId = String(payload?.cardId ?? '').trim()
     const message = String(payload?.message ?? '').trim()
     if (!cardId || !message) return { ok: false, error: 'missing cardId or message' }
+    try {
+      if (await steerCsagent(cardId, message)) {
+        sendStream(cardId, { type: 'steer_sent', text: message })
+        return { ok: true }
+      }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
     const q = activeQueries.get(cardId)
     if (!q) return { ok: false, error: 'no active steerable Claude stream' }
     try {
@@ -3707,6 +3749,8 @@ export function registerChatIPC(): void {
         log('opencode abort error (non-fatal):', err.message)
       }
     }
+    try { await stopCsagent(cardId) } catch { /* best-effort */ }
+    disposeCsagent(cardId)
     sendStream(cardId, { type: 'done' })
   })
 
@@ -3720,6 +3764,7 @@ export function registerChatIPC(): void {
     opencodeSessionIds.delete(cardId)
     openclawSessionIds.delete(cardId)
     hermesSessionIds.delete(cardId)
+    disposeCsagent(cardId)
     cardPermissionModes.delete(cardId)
     // Schedule a rewrite of session-ids.json from the (now-pruned) map.
     persistSessionIds()
@@ -3732,6 +3777,7 @@ export function registerChatIPC(): void {
     opencodeSessionIds.delete(cardId)
     openclawSessionIds.delete(cardId)
     hermesSessionIds.delete(cardId)
+    clearCsagentSession(cardId)
     cancelPendingAskUserQuestionsForCard(cardId, 'Session cleared')
     cancelPendingToolPermissionsForCard(cardId, 'Session cleared')
     cardPermissionModes.delete(cardId)
@@ -4017,5 +4063,11 @@ export function registerChatIPC(): void {
       source: isFresh ? 'cache' : (cachedOpenCodeModels.length > 0 ? 'stale-cache' : 'fallback'),
       loading: openCodeModelsRefreshPromise !== null,
     }
+  })
+
+  // Pi (csagent) models from the user's installed pi ModelRegistry (auth-configured).
+  // Best-effort: returns [] if pi isn't installed/authed — the tile keeps its defaults.
+  ipcMain.handle('chat:csagentModels', async () => {
+    return { models: await listCsagentModels() }
   })
 }

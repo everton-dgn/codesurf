@@ -237,6 +237,7 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('chat:opencodeModelsUpdated', handler)
     },
     openclawAgents: () => ipcRenderer.invoke('chat:openclawAgents'),
+    csagentModels: () => ipcRenderer.invoke('chat:csagentModels'),
     selectFiles: () => ipcRenderer.invoke('chat:selectFiles') as Promise<string[]>,
     writeTempAttachment: (payload: { data: string; mime?: string; ext?: string; filenameHint?: string }) =>
       ipcRenderer.invoke('chat:writeTempAttachment', payload) as Promise<{ ok: true; path: string } | { ok: false; error: string }>,
@@ -296,6 +297,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Window management
   window: {
     new: () => ipcRenderer.invoke('window:new'),
+    openDevSandbox: () => ipcRenderer.invoke('window:openDevSandbox'),
     newTab: () => ipcRenderer.invoke('window:newTab'),
     newWorkspaceTab: (workspaceId?: string | null) => ipcRenderer.invoke('window:newWorkspaceTab', workspaceId ?? null),
     list: () => ipcRenderer.invoke('window:list'),
@@ -520,13 +522,23 @@ contextBridge.exposeInMainWorld('electron', {
     tileEntry: (extId: string, tileType: string, tileId?: string) => ipcRenderer.invoke('ext:tile-entry', extId, tileType, tileId),
     chatSurfaceEntry: (extId: string, surfaceId: string, instanceId?: string) => ipcRenderer.invoke('ext:chat-surface-entry', extId, surfaceId, instanceId),
     getBridgeScript: (tileId: string, extId: string) => ipcRenderer.invoke('ext:get-bridge-script', tileId, extId),
+    capabilityGate: (extId: string) => ipcRenderer.invoke('ext:capability-gate', extId),
     enable: (extId: string) => ipcRenderer.invoke('ext:enable', extId),
     disable: (extId: string) => ipcRenderer.invoke('ext:disable', extId),
+    installFromFile: () => ipcRenderer.invoke('ext:install-from-file'),
     refresh: (workspacePath?: string | null) => ipcRenderer.invoke('ext:refresh', workspacePath),
     invoke: (extId: string, method: string, ...args: unknown[]) => ipcRenderer.invoke(`ext:${extId}:${method}`, ...args),
     getSettings: (extId: string) => ipcRenderer.invoke('ext:settings-get', extId),
     setSettings: (extId: string, settings: Record<string, unknown>) => ipcRenderer.invoke('ext:settings-set', extId, settings),
     contextMenuItems: () => ipcRenderer.invoke('ext:context-menu-items'),
+    // v2: aggregated contributions (omit kind for all groups, or pass one kind)
+    contributions: (kind?: string) => ipcRenderer.invoke('ext:contributions', kind),
+    // v2: resolve a contribution entry to HTML (render:'mcp-ui' / 'iframe' feed)
+    surfaceHtml: (extId: string, kind: string, surfaceId: string) => ipcRenderer.invoke('ext:surface-html', extId, kind, surfaceId),
+    // v2: durable reactive per-plugin store
+    storeGet: (extId: string) => ipcRenderer.invoke('ext:store-get', extId),
+    storeSet: (extId: string, patch: Record<string, unknown>) => ipcRenderer.invoke('ext:store-set', extId, patch),
+    storeReplace: (extId: string, value: Record<string, unknown>) => ipcRenderer.invoke('ext:store-replace', extId, value),
   },
 
   // Event bus

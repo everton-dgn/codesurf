@@ -147,7 +147,7 @@ export function SidebarFooter({
 
         {!galleryEnabled && footerExtensions.length > 0 && (
           <div style={{ position: 'relative' }} ref={extMenuRef}>
-            <button title="Extensions" style={{
+            <button title="Plugins" style={{
               width: 28, height: 28, borderRadius: 6, border: 'none', background: footerButtonBackground,
               boxShadow: footerButtonEdge, color: showExtMenu ? theme.text.primary : footerIconColor, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',

@@ -84,6 +84,7 @@ interface ElectronAPI {
     opencodeModels(): Promise<{ models: Array<{ id: string; label: string; description?: string }>; source?: string; loading?: boolean }>
     onOpencodeModelsUpdated(cb: (payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }) => void): () => void
     openclawAgents(): Promise<{ agents: Array<{ id: string; label: string; description?: string }> }>
+    csagentModels(): Promise<{ models: Array<{ id: string; label: string; description?: string }> }>
     selectFiles(): Promise<string[]>
     writeTempAttachment(payload: { data: string; mime?: string; ext?: string; filenameHint?: string }): Promise<{ ok: true; path: string } | { ok: false; error: string }>
     answerUserQuestion(payload: {
@@ -236,6 +237,7 @@ interface ElectronAPI {
   }
   window: {
     new(): Promise<void>
+    openDevSandbox(): Promise<null>
     newTab(): Promise<void>
     newWorkspaceTab(workspaceId?: string | null): Promise<{ id: number }>
     isFresh(): Promise<boolean>
@@ -413,13 +415,27 @@ interface ElectronAPI {
     tileEntry(extId: string, tileType: string, tileId?: string): Promise<string | null>
     chatSurfaceEntry(extId: string, surfaceId: string, instanceId?: string): Promise<string | null>
     getBridgeScript(tileId: string, extId: string): Promise<string>
+    capabilityGate(extId: string): Promise<{ enforced: boolean; granted: string[] }>
     enable(extId: string): Promise<boolean>
     disable(extId: string): Promise<boolean>
+    installFromFile(): Promise<{ ok: boolean; extId?: string; name?: string; error?: string; canceled?: boolean }>
     refresh(workspacePath?: string | null): Promise<Array<{ id: string; name: string; version: string; description?: string; author?: string; tier: 'safe' | 'power'; ui?: import('../../shared/types').ExtensionManifest['ui']; enabled: boolean; contributes?: import('../../shared/types').ExtensionManifest['contributes'] }>>
     invoke(extId: string, method: string, ...args: unknown[]): Promise<unknown>
     getSettings(extId: string): Promise<Record<string, unknown>>
     setSettings(extId: string, settings: Record<string, unknown>): Promise<boolean>
     contextMenuItems(): Promise<import('../../shared/types').ExtensionContextMenuContrib[]>
+    contributions(): Promise<{
+      commands: Array<import('../../shared/types').ExtensionCommandContrib & { extId: string }>
+      footer: Array<import('../../shared/types').ExtensionFooterContrib & { extId: string }>
+      panels: Array<import('../../shared/types').ExtensionPanelContrib & { extId: string }>
+      settingsSections: Array<import('../../shared/types').ExtensionSettingsSectionContrib & { extId: string }>
+      layoutPresets: Array<import('../../shared/types').ExtensionLayoutPresetContrib & { extId: string }>
+    }>
+    contributions(kind: string): Promise<Array<{ extId: string } & Record<string, unknown>>>
+    surfaceHtml(extId: string, kind: string, surfaceId: string): Promise<string | null>
+    storeGet(extId: string): Promise<Record<string, unknown>>
+    storeSet(extId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>
+    storeReplace(extId: string, value: Record<string, unknown>): Promise<Record<string, unknown>>
   }
   chromeSync: {
     listProfiles(): Promise<Array<{ name: string; dir: string; email?: string; avatarIcon?: string }>>

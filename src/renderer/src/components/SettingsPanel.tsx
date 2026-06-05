@@ -9,6 +9,7 @@ import { ChromeSyncSection } from './settings/ChromeSyncSection'
 import { DisplaySettingsEditor } from './settings/DisplaySettingsEditor'
 import { VoiceSettingsEditor } from './settings/VoiceSettingsEditor'
 import { ColorSwatch, NumInput, RangeInput, SectionLabel, SettingRow, TextInput, Toggle } from './settings/controls'
+import { SettingsControl } from './codesurf-ui'
 
 const LazyPromptsSection = lazy(() => import('./CustomisationTile').then(m => ({ default: m.PromptsSection })))
 const LazySkillsSection = lazy(() => import('./CustomisationTile').then(m => ({ default: m.SkillsSection })))
@@ -46,7 +47,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ReactNode; description
   { id: 'tools',      label: 'Tools',      icon: <Wrench size={15} />,     description: 'MCP servers, tools, integrations and registry', group: 'customise' },
   { id: 'agents',     label: 'Agents',     icon: <Users size={15} />,      description: 'Agent modes with system prompts and tool access', group: 'customise' },
   // System
-  { id: 'extensions', label: 'Extensions', icon: <Puzzle size={15} />,     description: 'Installed extensions', group: 'system' },
+  { id: 'extensions', label: 'Plugins', icon: <Puzzle size={15} />,     description: 'Installed plugins', group: 'system' },
 ]
 
 // ─── MCP types ────────────────────────────────────────────────────────────────
@@ -735,6 +736,24 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
               onCheckForUpdates={checkForUpdates}
               onDownloadUpdate={downloadUpdate}
             />
+            <SettingRow
+              label="Welcome screen"
+              description="Replay the first-run welcome and feature tour."
+            >
+              <button
+                onClick={() => { updateSettingsPatch({ onboardingComplete: false }); onClose() }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '6px 12px', borderRadius: 8,
+                  border: `1px solid ${theme.border.default}`,
+                  background: theme.surface.panelMuted,
+                  color: theme.text.primary, cursor: 'pointer',
+                  fontSize: fonts.size, fontWeight: 600,
+                }}
+              >
+                Show welcome
+              </button>
+            </SettingRow>
           </>
         )
       }
@@ -1897,20 +1916,20 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
               transition: 'background 0.15s, border-color 0.15s',
             }}>
               <div>
-                <div style={{ fontSize: fonts.size, fontWeight: 600, color: theme.text.primary }}>Disable all extensions</div>
+                <div style={{ fontSize: fonts.size, fontWeight: 600, color: theme.text.primary }}>Disable all plugins</div>
                 <div style={{ fontSize: fonts.secondarySize, color: theme.text.muted, marginTop: 2 }}>
-                  {settings.extensionsDisabled ? 'Extensions are hidden from the sidebar and footer' : 'Hide all extensions from the sidebar and footer'}
+                  {settings.extensionsDisabled ? 'Plugins are hidden from the sidebar and footer' : 'Hide all plugins from the sidebar and footer'}
                 </div>
               </div>
               <Toggle value={settings.extensionsDisabled ?? false} onChange={v => updateSettingsPatch({ extensionsDisabled: v })} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
               <div style={{ fontSize: fonts.secondarySize, color: theme.text.disabled, lineHeight: 1.45, flex: 1, minWidth: 200 }}>
-                Extensions load from <code style={{ fontSize: fonts.secondarySize, color: theme.text.muted, fontFamily: fonts.mono }}>~/.contex/extensions</code>
+                Plugins load from <code style={{ fontSize: fonts.secondarySize, color: theme.text.muted, fontFamily: fonts.mono }}>~/.codesurf/extensions</code>
                 {workspaces.length > 0 && (
                   <> and the active workspace&apos;s <code style={{ fontSize: fonts.secondarySize, color: theme.text.muted, fontFamily: fonts.mono }}>.contex/extensions</code></>
                 )}
-                . Disable a power extension to unload its main process code; use Refresh after adding folders.
+                . Disable a power plugin to unload its main process code; use Refresh after adding folders.
               </div>
               <button
                 type="button"
@@ -1949,6 +1968,8 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                   const tiles = ext.contributes?.tiles?.length ?? 0
                   const menus = ext.contributes?.contextMenu?.length ?? 0
                   const extSettings = ext.contributes?.settings ?? []
+                  const extSettingsSections = ext.contributes?.settingsSections ?? []
+                  const hasAnySettings = extSettings.length > 0 || extSettingsSections.length > 0
                   const isHiddenFromSidebar = (settings.hiddenFromSidebarExtIds ?? []).includes(ext.id)
                   const isInSettingsPanel = (settings.settingsPanelExtIds ?? []).includes(ext.id)
                   const isPinned = (settings.pinnedExtensionIds ?? []).includes(ext.id)
@@ -2057,9 +2078,9 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                             </button>
                           )}
                           {/* Settings cog — only show if extension declares settings */}
-                          {extSettings.length > 0 && (
+                          {hasAnySettings && (
                             <button
-                              title="Extension settings"
+                              title="Plugin settings"
                               onClick={async () => {
                                 if (isExpanded) { setExpandedExtId(null); return }
                                 // Load current settings for this extension
@@ -2082,14 +2103,16 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                         </div>
                       </div>
                       {/* Inline settings panel */}
-                      {isExpanded && extSettings.length > 0 && (
+                      {isExpanded && hasAnySettings && (
                         <div style={{
                           borderTop: `1px solid ${theme.border.default}`,
                           padding: '12px 14px',
                           background: theme.surface.panel,
                           display: 'flex', flexDirection: 'column', gap: 10,
                         }}>
-                          <div style={{ fontSize: fonts.secondarySize, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Settings</div>
+                          {extSettings.length > 0 && (
+                            <div style={{ fontSize: fonts.secondarySize, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Settings</div>
+                          )}
                           {extSettings.map((s) => (
                             <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                               <label style={{ fontSize: fonts.secondarySize, color: theme.text.secondary, flex: 1 }}>{s.label}</label>
@@ -2119,6 +2142,28 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                                   }}
                                 />
                               )}
+                            </div>
+                          ))}
+                          {/* v2 settings sections — declarative control union rendered with @codesurf/ui */}
+                          {extSettingsSections.map((sec) => (
+                            <div key={sec.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: extSettings.length > 0 ? 8 : 0 }}>
+                              {sec.title && (
+                                <div style={{ fontSize: fonts.secondarySize, fontWeight: 600, color: theme.text.muted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>{sec.title}</div>
+                              )}
+                              {sec.items.map((control, i) => (
+                                <SettingsControl
+                                  key={('key' in control ? control.key : control.label) + ':' + i}
+                                  control={control}
+                                  value={'key' in control ? (savedExtSettings[control.key] ?? control.default) : undefined}
+                                  onChange={async (val) => {
+                                    if (!('key' in control)) return
+                                    const next = { ...savedExtSettings, [control.key]: val }
+                                    setExtSettingsMap(prev => ({ ...prev, [ext.id]: next }))
+                                    await window.electron.extensions?.setSettings?.(ext.id, next).catch(() => {})
+                                  }}
+                                  onCommand={(command) => { window.dispatchEvent(new CustomEvent('codesurf:command', { detail: { extId: ext.id, id: command } })) }}
+                                />
+                              ))}
                             </div>
                           ))}
                         </div>
@@ -2160,7 +2205,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
           if (ext && tile) {
             return <ExtSettingsPanel extId={extId} tileType={tile.type} />
           }
-          return <div style={{ color: theme.text.disabled, fontSize: fonts.secondarySize }}>Extension has no block.</div>
+          return <div style={{ color: theme.text.disabled, fontSize: fonts.secondarySize }}>Plugin has no block.</div>
         }
         return null
       }
@@ -2248,7 +2293,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
               if (panelExts.length === 0) return null
               return (
                 <div>
-                  <div style={{ padding: '14px 16px 4px', fontSize: 9, fontWeight: 700, color: theme.text.muted, letterSpacing: 1.2, textTransform: 'uppercase', userSelect: 'none' }}>Extensions</div>
+                  <div style={{ padding: '14px 16px 4px', fontSize: 9, fontWeight: 700, color: theme.text.muted, letterSpacing: 1.2, textTransform: 'uppercase', userSelect: 'none' }}>Plugins</div>
                   {panelExts.map(e => {
                     const sid = `ext:${e.id}` as Section
                     return (

@@ -1,0 +1,40 @@
+{
+  "id": "plugin-studio",
+  "name": "Plugin Studio",
+  "version": "1.0.0",
+  "description": "Author CodeSurf plugins: scaffold a v2 manifest, open a dev workspace (files + code + terminal), and launch the Dev Sandbox. Dogfoods the v2 platform.",
+  "author": "codesurf",
+  "manifestVersion": 2,
+  "kind": "codesurf",
+  "engines": { "codesurf": ">=0.1.0" },
+  "tier": "safe",
+  "execution": "iframe",
+  "render": "iframe",
+  "ui": { "mode": "custom" },
+  "capabilities": [
+    { "name": "canvas", "reason": "open file/code/terminal tiles for the dev workspace" }
+  ],
+  "contributes": {
+    "tiles": [
+      {
+        "type": "plugin-studio",
+        "label": "Plugin Studio",
+        "icon": "wrench",
+        "entry": "surface/index.html",
+        "defaultSize": { "w": 720, "h": 560 },
+        "minSize": { "w": 480, "h": 380 }
+      }
+    ],
+    "commands": [
+      { "id": "studio.open", "title": "Plugin Studio: Open", "slash": "studio", "category": "Developer", "run": { "action": "open" } },
+      { "id": "studio.scaffold", "title": "Plugin Studio: New Plugin", "category": "Developer", "run": { "action": "scaffold" } }
+    ],
+    "footer": [
+      { "id": "studio.launch", "label": "Studio", "icon": "wrench", "position": "right", "order": 20 }
+    ],
+    "contextMenu": [
+      { "label": "New Plugin Studio", "action": "createTile", "tileType": "ext:plugin-studio" }
+    ]
+  },
+  "permissions": []
+}

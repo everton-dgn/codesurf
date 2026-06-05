@@ -6,17 +6,7 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --ct-bg: transparent;
-      --ct-panel: rgba(0,0,0,0.04);
-      --ct-panel-2: rgba(0,0,0,0.06);
-      --ct-border: rgba(0,0,0,0.10);
-      --ct-text: #111111;
-      --ct-muted: #334155;
-      --ct-dim: #64748b;
-      --ct-accent: #4f46e5;
-      --ct-accent-s: rgba(79,70,229,0.12);
-      --ct-success: #1f8f5f;
-      --ct-warning: #c07b12;
+      /* --ct-* tokens are injected (theme-aware) by the shared kit; these are 1:1 aliases referenced by name in CSS + JS. */
       --bg:        var(--ct-bg);
       --surface:   var(--ct-panel);
       --surface2:  var(--ct-panel-2);
@@ -58,20 +48,8 @@
     .spacer { flex: 1; }
     .search-wrap { position: relative; display: flex; align-items: center; }
     .search-icon { position: absolute; left: 8px; color: var(--muted); pointer-events: none; }
-    .search-input {
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: 12px;
-      font-family: inherit;
-      padding: 5px 10px 5px 28px;
-      outline: none;
-      width: 180px;
-      transition: border-color 0.15s;
-    }
-    .search-input::placeholder { color: var(--muted); }
-    .search-input:focus { border-color: rgba(129,140,248,0.5); }
+    /* Bare <input> is themed by the shared kit; only layout overrides remain (icon padding + width). */
+    .search-input { padding-left: 28px; width: 180px; }
 
     /* ── Active model banner ── */
     .active-banner {
@@ -80,7 +58,7 @@
       gap: 8px;
       padding: 6px 12px;
       background: var(--accent-bg);
-      border-bottom: 1px solid rgba(129,140,248,0.2);
+      border-bottom: 1px solid var(--border);
       flex-shrink: 0;
       min-height: 32px;
     }
@@ -120,7 +98,7 @@
       background: var(--surface2); border-radius: 8px;
       font-size: 10px; padding: 1px 5px; margin-left: 4px; min-width: 16px;
     }
-    .tab.active .tab-count { background: rgba(129,140,248,0.25); }
+    .tab.active .tab-count { background: var(--accent-bg); }
 
     /* ── Content ── */
     .content {
@@ -137,11 +115,8 @@
     }
     .section-divider { height: 1px; background: var(--border); margin: 4px 0; }
 
-    /* ── Model card ── */
-    .model-card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; padding: 10px 12px; transition: border-color 0.15s;
-    }
+    /* ── Model card (base styling from .ct-card; only deltas below) ── */
+    .model-card { transition: border-color 0.15s; }
     .model-card:hover { border-color: var(--ct-border-2, var(--border)); }
     .model-card.is-active { border-color: color-mix(in srgb, var(--accent) 34%, transparent); background: var(--accent-bg); }
     .model-row1 { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
@@ -159,18 +134,13 @@
       font-size: 11px; color: var(--muted); font-family: 'SF Mono', 'Fira Code', monospace;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px;
     }
-    .use-btn {
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 5px; color: var(--text); font-size: 11px; font-weight: 500;
-      font-family: inherit; padding: 4px 10px; cursor: pointer; transition: all 0.1s; flex-shrink: 0;
-    }
-    .use-btn:hover { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 34%, transparent); color: var(--accent); }
+    /* Base <button> is themed by the shared kit; only the small "active" accent state + sizing remain custom. */
+    .use-btn { font-size: 11px; padding: 4px 10px; flex-shrink: 0; }
+    .use-btn:hover:not(:disabled) { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 34%, transparent); color: var(--accent); }
     .use-btn.is-active { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 34%, transparent); color: var(--accent); cursor: default; }
 
-    /* ── Running tab ── */
+    /* ── Running tab (card base from .ct-card; only internal layout below) ── */
     .info-block {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; padding: 14px 16px;
       display: flex; flex-direction: column; gap: 10px;
     }
     .info-block h3 { font-size: 13px; font-weight: 600; }
@@ -192,10 +162,8 @@
     .ep-status.offline { color: var(--muted); background: var(--surface2); }
     .ep-status.checking { color: var(--amber); background: var(--amber-bg); }
 
-    /* ── Running model card ── */
+    /* ── Running model card (base from .ct-card; only internal layout below) ── */
     .running-card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; padding: 10px 12px;
       display: flex; align-items: center; gap: 10px;
     }
     .running-dot {
@@ -212,27 +180,16 @@
     }
     .icon-btn:hover { color: var(--text); background: var(--surface2); }
 
-    /* ── Add form ── */
+    /* ── Add form (base from .ct-card; only internal layout below) ── */
     .add-form {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; padding: 12px;
       display: flex; flex-direction: column; gap: 8px;
     }
     .add-form h4 { font-size: 12px; font-weight: 600; }
     .form-row { display: flex; gap: 6px; }
-    .form-input {
-      flex: 1; background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 5px; color: var(--text); font-size: 12px;
-      font-family: inherit; padding: 5px 8px; outline: none; transition: border-color 0.15s;
-    }
-    .form-input::placeholder { color: var(--muted); }
-    .form-input:focus { border-color: rgba(129,140,248,0.5); }
-    .form-btn {
-      background: var(--accent-bg); border: 1px solid rgba(129,140,248,0.3);
-      border-radius: 5px; color: var(--accent); font-size: 12px; font-weight: 500;
-      font-family: inherit; padding: 5px 12px; cursor: pointer; transition: all 0.1s; flex-shrink: 0;
-    }
-    .form-btn:hover { background: rgba(129,140,248,0.2); }
+    /* Bare <input> is themed by the shared kit; only flex layout override remains. */
+    .form-input { flex: 1; }
+    /* "Models Dir" field spans the full daemon-config grid row. */
+    .ct-field.full { grid-column: 1 / -1; }
 
     /* ── Footer ── */
     .footer {
@@ -245,12 +202,7 @@
     .footer-text { font-size: 11px; color: var(--muted); }
     .footer-text b { color: var(--amber); }
 
-    /* ── Empty / no-results ── */
-    .empty-state {
-      display: flex; flex-direction: column; align-items: center;
-      justify-content: center; gap: 8px; padding: 32px 16px;
-      color: var(--muted); text-align: center;
-    }
+    /* ── Empty / no-results (base from .ct-empty; only icon dimming + text size below) ── */
     .empty-state svg { opacity: 0.3; }
     .empty-state p { font-size: 12px; }
     .no-results { padding: 24px; text-align: center; color: var(--muted); font-size: 12px; }
@@ -733,7 +685,7 @@ function buildModelCard(m) {
   var isCatalogModel = !!findModelById(m.id)
 
   var card = document.createElement('div')
-  card.className = 'model-card' + (isActive ? ' is-active' : '')
+  card.className = 'ct-card model-card' + (isActive ? ' is-active' : '')
 
   // Row 1: name + badges
   var row1 = document.createElement('div')
@@ -775,7 +727,8 @@ function buildModelCard(m) {
   ramIcon.setAttribute('height', '12')
   ramIcon.setAttribute('viewBox', '0 0 24 24')
   ramIcon.setAttribute('fill', 'none')
-  ramIcon.setAttribute('stroke', '#fbbf24')
+  ramIcon.setAttribute('stroke', 'currentColor')
+  ramIcon.style.color = 'var(--amber)'
   ramIcon.setAttribute('stroke-width', '2')
   ramIcon.setAttribute('stroke-linecap', 'round')
   ramIcon.setAttribute('stroke-linejoin', 'round')
@@ -842,7 +795,7 @@ function getDaemonConfigDraft() {
 function buildManagedDaemonBlock() {
   var config = getDaemonConfigDraft()
   var block = document.createElement('div')
-  block.className = 'info-block'
+  block.className = 'ct-card info-block'
 
   var h3 = document.createElement('h3')
   h3.textContent = 'Managed Daemon'
@@ -880,26 +833,26 @@ function buildManagedDaemonBlock() {
 
   if (daemonStatus && daemonStatus.pid) {
     var pidMeta = document.createElement('div')
-    pidMeta.className = 'hint'
+    pidMeta.className = 'ct-field-hint'
     pidMeta.textContent = 'PID ' + daemonStatus.pid + (daemonStatus.workspacePath ? ' • cwd ' + daemonStatus.workspacePath : '')
     block.appendChild(pidMeta)
   }
 
   if (daemonStatus && daemonStatus.lastError) {
     var errorEl = document.createElement('div')
-    errorEl.className = 'hint'
-    errorEl.style.color = 'var(--amber)'
+    errorEl.className = 'ct-field-hint ct-warning'
     errorEl.textContent = daemonStatus.lastError
     block.appendChild(errorEl)
   }
 
   var grid = document.createElement('div')
-  grid.className = 'grid'
+  grid.className = 'ct-grid'
 
   function buildField(labelText, input) {
     var field = document.createElement('div')
-    field.className = 'field' + (labelText === 'Models Dir' ? ' full' : '')
+    field.className = 'ct-field' + (labelText === 'Models Dir' ? ' full' : '')
     var label = document.createElement('label')
+    label.className = 'ct-field-label'
     label.textContent = labelText
     field.appendChild(label)
     field.appendChild(input)
@@ -939,10 +892,10 @@ function buildManagedDaemonBlock() {
   block.appendChild(grid)
 
   var controls = document.createElement('div')
-  controls.className = 'toolbar-row'
+  controls.className = 'ct-row'
 
   var saveBtn = document.createElement('button')
-  saveBtn.className = 'form-btn'
+  saveBtn.className = 'primary'
   saveBtn.textContent = 'Save Config'
   saveBtn.addEventListener('click', async function() {
     await persistDaemonConfig({
@@ -957,7 +910,7 @@ function buildManagedDaemonBlock() {
   controls.appendChild(saveBtn)
 
   var startBtn = document.createElement('button')
-  startBtn.className = 'form-btn'
+  startBtn.className = 'primary'
   startBtn.textContent = daemonStatus && daemonStatus.running ? 'Restart' : 'Start'
   startBtn.addEventListener('click', async function() {
     await persistDaemonConfig({
@@ -1013,7 +966,7 @@ function renderRunning(container) {
     })
   } else {
     var empty = document.createElement('div')
-    empty.className = 'empty-state'
+    empty.className = 'ct-empty empty-state'
 
     var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     svg.setAttribute('width', '32'); svg.setAttribute('height', '32')
@@ -1048,7 +1001,7 @@ function renderRunning(container) {
 
 function buildEndpointsBlock() {
   var block = document.createElement('div')
-  block.className = 'info-block'
+  block.className = 'ct-card info-block'
 
   var h3 = document.createElement('h3')
   h3.textContent = 'Local Inference Endpoints'
@@ -1097,7 +1050,7 @@ function buildEndpointsBlock() {
 
 function buildRunningCard(rm) {
   var card = document.createElement('div')
-  card.className = 'running-card'
+  card.className = 'ct-card running-card'
 
   var dot = document.createElement('div')
   dot.className = 'running-dot'
@@ -1158,7 +1111,7 @@ function buildRunningCard(rm) {
 
 function buildAddForm() {
   var form = document.createElement('div')
-  form.className = 'add-form'
+  form.className = 'ct-card add-form'
 
   var h4 = document.createElement('h4')
   h4.textContent = 'Add Running Model'
@@ -1183,7 +1136,7 @@ function buildAddForm() {
   row.appendChild(epInput)
 
   var addBtn = document.createElement('button')
-  addBtn.className = 'form-btn'
+  addBtn.className = 'primary'
   addBtn.textContent = 'Add'
   row.appendChild(addBtn)
 

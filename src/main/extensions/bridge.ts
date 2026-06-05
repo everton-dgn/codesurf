@@ -5,7 +5,23 @@
  * Returned as a string — evaluated in the iframe context.
  */
 
-export function getBridgeScript(tileId: string, extId: string): string {
+/**
+ * Capability gate (P1). When a plugin declares `capabilities`, the host records
+ * the granted set at enable time; this restricts the iframe bridge so the plugin
+ * only receives the namespaces it was granted. Baseline SDK namespaces (tile,
+ * bus, store, settings, ext, workspace, theme, actions, context, surface) are
+ * always present; only chat/relay/canvas map to gateable capabilities. Plugins
+ * that declare NO capabilities are ungated (enforced:false) — no regression.
+ */
+export interface BridgeCapabilityGate {
+  enforced: boolean
+  granted: string[]
+}
+
+/** Iframe-bridge namespaces that are gated by a same-named capability. */
+const CAPABILITY_GATED_NAMESPACES = ['chat', 'relay', 'canvas'] as const
+
+export function getBridgeScript(tileId: string, extId: string, gate?: BridgeCapabilityGate): string {
   return `
 ;(function() {
   const _tileId = ${JSON.stringify(tileId)};
@@ -147,6 +163,18 @@ export function getBridgeScript(tileId: string, extId: string): string {
       set: (settings) => _rpc('settings.set', settings),
     },
 
+    store: {
+      get: () => _rpc('store.get'),
+      set: (patch) => _rpc('store.set', { patch }),
+      replace: (value) => _rpc('store.replace', { value }),
+      subscribe: (cb) => {
+        var _ch = 'plugin:' + _extId + ':state';
+        _on('bus.event.' + _ch, function(evt) { try { cb((evt && evt.payload && evt.payload.state) || {}); } catch (e) { /* noop */ } });
+        _on('bus.event.*', function(evt) { if (evt && evt.channel === _ch) { try { cb((evt.payload && evt.payload.state) || {}); } catch (e) { /* noop */ } } });
+        return _rpc('bus.subscribe', { channel: _ch });
+      },
+    },
+
     ext: {
       invoke: (method, ...args) => _rpc('ext.invoke', { method, args }),
     },
@@ -231,6 +259,21 @@ export function getBridgeScript(tileId: string, extId: string): string {
     },
   };
 
+  ${gate?.enforced ? `
+  // Capability gate (P1): this plugin declared capabilities, so it only keeps the
+  // namespaces it was granted at enable time. Baseline namespaces stay; only the
+  // capability-gated ones (${CAPABILITY_GATED_NAMESPACES.join(', ')}) are pruned.
+  (function() {
+    var _granted = ${JSON.stringify(gate.granted)};
+    ${JSON.stringify([...CAPABILITY_GATED_NAMESPACES])}.forEach(function(ns) {
+      if (_granted.indexOf(ns) === -1 && window.contex[ns]) { delete window.contex[ns]; }
+    });
+  })();
+  ` : ''}
+
+  // Canonical alias going forward (window.contex stays for back-compat).
+  window.codesurf = window.contex;
+
   // Inject base component stylesheet (uses --ct-* vars; structural styles baked in at load time)
   (function() {
     var baseStyle = document.createElement('style');
@@ -276,6 +319,34 @@ export function getBridgeScript(tileId: string, extId: string): string {
       '.ct-danger{color:var(--ct-danger,#dc2626)}',
       '.ct-muted{color:var(--ct-muted,#666)}',
       '.ct-dim{color:var(--ct-dim,#999)}',
+      // ── Form controls: the "basics" that must look identical across every plugin ──
+      // Native checkbox/radio/range themed via accent-color (one line, consistent).
+      'input[type=checkbox],input[type=radio]{accent-color:var(--ct-accent,#4f46e5);width:14px;height:14px;cursor:pointer}',
+      'input[type=range]{accent-color:var(--ct-accent,#4f46e5);cursor:pointer}',
+      'input[type=color]{padding:0;width:28px;height:22px;border-radius:var(--ct-radius,6px);border:1px solid var(--ct-border,rgba(0,0,0,.12));background:none;cursor:pointer}',
+      // Switch/toggle — HTML has no native switch; .ct-switch turns a checkbox into one.
+      'input[type=checkbox].ct-switch{appearance:none;-webkit-appearance:none;width:32px;height:18px;border-radius:999px;background:var(--ct-border,rgba(0,0,0,.25));position:relative;cursor:pointer;transition:background .15s;border:none;flex:0 0 auto}',
+      'input[type=checkbox].ct-switch:checked{background:var(--ct-accent,#4f46e5)}',
+      'input[type=checkbox].ct-switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:999px;background:#fff;transition:transform .15s}',
+      'input[type=checkbox].ct-switch:checked::after{transform:translateX(14px)}',
+      'input[type=checkbox].ct-switch:disabled{opacity:.45;cursor:default}',
+      // Field / row / col / grid layout helpers — the scaffolding for "put together UIs easily".
+      '.ct-field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}',
+      '.ct-field>label,.ct-field-label{color:var(--ct-text,#111);font-size:var(--ct-font-secondary-size,12px);font-weight:500}',
+      '.ct-field-hint{color:var(--ct-dim,#999);font-size:11px}',
+      '.ct-row{display:flex;align-items:center;gap:8px}',
+      '.ct-row-between{display:flex;align-items:center;justify-content:space-between;gap:8px}',
+      '.ct-col{display:flex;flex-direction:column;gap:8px}',
+      '.ct-grid{display:grid;gap:8px}',
+      '.ct-spacer{flex:1 1 auto}',
+      // Segmented control / tabs — consistent tab strip.
+      '.ct-seg{display:inline-flex;gap:2px;padding:2px;border-radius:var(--ct-radius,6px);background:var(--ct-panel,rgba(0,0,0,.06));border:1px solid var(--ct-border,rgba(0,0,0,.1))}',
+      '.ct-seg>button,.ct-seg-item{background:transparent;border:none;border-radius:calc(var(--ct-radius,6px) - 2px);padding:4px 10px;color:var(--ct-muted,#666);cursor:pointer;font:inherit}',
+      '.ct-seg>button[aria-selected=true],.ct-seg-item.active{background:var(--ct-bg,#fff);color:var(--ct-text,#111);box-shadow:0 1px 2px rgba(0,0,0,.12)}',
+      // Button sizing variants (defaults already styled above).
+      '.ct-btn-sm{padding:3px 8px;font-size:11px}',
+      '.ct-btn-lg{padding:8px 16px}',
+      '.ct-btn-block{display:flex;width:100%;justify-content:center}',
     ].join('');
     (document.head || document.documentElement).appendChild(baseStyle);
   })();

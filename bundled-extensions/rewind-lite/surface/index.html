@@ -29,44 +29,10 @@
     min-height: 0;
     gap: 10px;
   }
-  .toolbar-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .field label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    color: var(--ct-dim, #888);
-    font-weight: 600;
-  }
   .meta {
     display: flex;
     flex-direction: column;
     gap: 8px;
-  }
-  .meta .row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 10px;
-    border-radius: 8px;
-    border: 1px solid var(--ct-border, rgba(0,0,0,.1));
-    background: var(--ct-panel-2, rgba(0,0,0,.05));
-  }
-  .meta .row strong {
-    font-size: 11px;
-    color: var(--ct-dim, #888);
-    text-transform: uppercase;
-    letter-spacing: .04em;
   }
   .digest {
     flex: 1;
@@ -75,18 +41,6 @@
     white-space: pre-wrap;
     font-size: 12px;
     line-height: 1.5;
-  }
-  .empty, .error {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 120px;
-    text-align: center;
-    padding: 18px;
-    color: var(--ct-dim, #888);
-  }
-  .error {
-    color: var(--ct-danger, #dc2626);
   }
   @media (max-width: 760px) {
     .app {
@@ -103,38 +57,38 @@
         <div class="ct-muted">Backend-powered chat surface using ext.invoke, settings, and workspace metadata.</div>
       </div>
 
-      <div class="field">
+      <div class="ct-field">
         <label for="commitLimit">Recent commits</label>
         <input id="commitLimit" type="number" min="1" max="12" step="1">
       </div>
 
-      <div class="toolbar-row">
+      <div class="ct-row-between">
         <button id="saveBtn" type="button">Save setting</button>
         <button id="refreshBtn" type="button" class="primary">Refresh digest</button>
       </div>
 
       <div class="meta">
-        <div class="row">
-          <strong>Workspace path</strong>
+        <div class="ct-stat">
+          <span class="ct-stat-label">Workspace path</span>
           <span id="workspacePathText">Waiting for bridge…</span>
         </div>
-        <div class="row">
-          <strong>Workspace id</strong>
+        <div class="ct-stat">
+          <span class="ct-stat-label">Workspace id</span>
           <span id="workspaceIdText">—</span>
         </div>
-        <div class="row">
-          <strong>Status</strong>
+        <div class="ct-stat">
+          <span class="ct-stat-label">Status</span>
           <span id="statusText">Idle</span>
         </div>
       </div>
     </section>
 
     <section class="panel ct-card">
-      <div class="toolbar-row">
+      <div class="ct-row-between">
         <div class="ct-toolbar-title">Digest preview</div>
         <div class="ct-pill" id="lineCountPill">0 lines</div>
       </div>
-      <div id="digestBox" class="digest empty">Refresh to generate a workspace rewind digest.</div>
+      <div id="digestBox" class="digest ct-empty">Refresh to generate a workspace rewind digest.</div>
     </section>
   </div>
 
@@ -179,7 +133,7 @@
 
     const box = $('digestBox')
     if (!state.digest) {
-      box.className = 'digest empty'
+      box.className = 'digest ct-empty'
       box.textContent = 'Refresh to generate a workspace rewind digest.'
     } else {
       box.className = 'digest'
@@ -203,7 +157,7 @@
     } catch (error) {
       state.digest = ''
       const box = $('digestBox')
-      box.className = 'digest error'
+      box.className = 'digest ct-empty ct-danger'
       box.textContent = error && error.message ? error.message : String(error)
       $('statusText').textContent = 'Error'
       publishDigest()

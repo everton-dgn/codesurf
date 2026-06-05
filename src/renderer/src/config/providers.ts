@@ -1,6 +1,6 @@
 /** Chat provider/model/mode configuration — extracted from ChatTile for reuse. */
 
-export type BuiltinProvider = 'claude' | 'codex' | 'opencode' | 'openclaw' | 'hermes'
+export type BuiltinProvider = 'claude' | 'codex' | 'opencode' | 'openclaw' | 'hermes' | 'csagent'
 
 export interface ModelOption {
   id: string
@@ -68,6 +68,9 @@ export const DEFAULT_MODELS: Record<BuiltinProvider, ModelOption[]> = {
     { id: 'openrouter/deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: 'openrouter' },
     { id: 'openrouter/qwen/qwen3.6-plus', label: 'Qwen 3.6 Plus', description: 'openrouter' },
   ],
+  csagent: [
+    { id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  ],
 }
 
 export const DEFAULT_PROVIDER_ID: BuiltinProvider = 'claude'
@@ -101,6 +104,10 @@ export const PROVIDER_MODES: Record<BuiltinProvider, ModeOption[]> = {
     { id: 'terminal', label: 'Terminal', description: 'Terminal + file tools', color: '#ffb432' },
     { id: 'web', label: 'Web', description: 'Web + browser tools', color: '#3fb950' },
     { id: 'query', label: 'Query', description: 'No tools, query only', color: '#58a6ff' },
+  ],
+  csagent: [
+    { id: 'default', label: 'Default', description: 'Ask before risky actions', color: '#3fb950' },
+    { id: 'bypass', label: 'Bypass', description: 'Full auto, no approval', color: '#e54d2e' },
   ],
 }
 
@@ -140,6 +147,7 @@ export const PROVIDER_LABELS: Record<BuiltinProvider, string> = {
   opencode: 'OpenCode',
   openclaw: 'OpenClaw',
   hermes: 'Hermes',
+  csagent: 'Pi',
 }
 
 export function isBuiltinProvider(providerId: string): providerId is BuiltinProvider {
@@ -148,6 +156,7 @@ export function isBuiltinProvider(providerId: string): providerId is BuiltinProv
     || providerId === 'opencode'
     || providerId === 'openclaw'
     || providerId === 'hermes'
+    || providerId === 'csagent'
 }
 
 export function getApproxContextWindowTokens(providerId: string, modelId: string): number {

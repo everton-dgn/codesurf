@@ -5,6 +5,7 @@ import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { Tooltip } from './Tooltip'
 import { buildDreamingStatusSummary, type DashboardDreamingSummary, type DreamingStatusTone } from './mainStatusBarDreaming'
+import { PluginFooterSlot } from './PluginFooterSlot'
 
 // Daemon-status popover typography. Hardcoded (not derived from user font
 // settings) because this is a dense glanceable surface — when a user scales
@@ -417,6 +418,7 @@ export function MainStatusBar({ onOpenDaemonTask, health = 'compact' }: MainStat
           letterSpacing: 0.2,
         }}
       >
+        <PluginFooterSlot />
         <div
           ref={daemonRef}
           title={daemonTitle}

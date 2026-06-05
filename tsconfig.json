@@ -17,7 +17,8 @@
     "paths": {
       "@/*": ["src/renderer/src/*"],
       "@contex/chat-bridge": ["packages/contex-chat-bridge/src/index.ts"],
-      "@contex/chat-bridge/*": ["packages/contex-chat-bridge/src/*"]
+      "@contex/chat-bridge/*": ["packages/contex-chat-bridge/src/*"],
+      "@codesurf/plugin": ["packages/codesurf-plugin/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "packages/**/*.ts"],

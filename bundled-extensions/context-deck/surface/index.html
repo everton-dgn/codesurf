@@ -29,22 +29,9 @@
     min-height: 0;
     gap: 10px;
   }
-  .toolbar-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+  /* let the shared .ct-row-between wrap on narrow widths */
+  .ct-row-between {
     flex-wrap: wrap;
-  }
-  .segmented {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .segmented button {
-    border-radius: 999px;
-    padding: 5px 10px;
-    font-size: 11px;
   }
   .grid {
     display: grid;
@@ -100,12 +87,12 @@
 <body>
   <div class="app">
     <section class="panel ct-card">
-      <div class="toolbar-row">
+      <div class="ct-row-between">
         <div>
           <div class="ct-toolbar-title">Context Deck</div>
           <div class="hint">AirJelly-style structured brief builder for the next turn.</div>
         </div>
-        <div class="segmented" id="templateButtons"></div>
+        <div class="ct-seg" id="templateButtons"></div>
       </div>
       <div class="grid">
         <div class="field full">
@@ -129,14 +116,14 @@
           <textarea id="notes" placeholder="Extra context, edge cases, observations."></textarea>
         </div>
       </div>
-      <div class="toolbar-row">
+      <div class="ct-row-between">
         <div class="hint">The generated markdown becomes a temporary attachment on the next send.</div>
         <button id="clearBtn" type="button">Clear</button>
       </div>
     </section>
 
     <section class="panel ct-card">
-      <div class="toolbar-row">
+      <div class="ct-row-between">
         <div>
           <div class="ct-toolbar-title">Preview</div>
           <div class="hint" id="statusText">Empty</div>

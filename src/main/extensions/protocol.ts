@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, extname, resolve } from 'path'
 import { pathToFileURL } from 'url'
 import type { ExtensionRegistry } from './registry'
 import { getBridgeScript } from './bridge'
+import { getSandboxProxyHtml } from './sandbox-proxy'
 
 const MIME_TYPES: Record<string, string> = {
   '.js': 'application/javascript',
@@ -110,6 +111,17 @@ export function registerExtensionProtocol(registry: ExtensionRegistry): void {
         return new Response('Codicon resource not found', { status: 404 })
       }
 
+      // ── __runext_sandbox__ — serve the MCP-UI double-iframe sandbox proxy ──
+      if (firstSegment === '__runext_sandbox__') {
+        return new Response(getSandboxProxyHtml(), {
+          status: 200,
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'cache-control': 'no-store, no-cache, must-revalidate',
+          },
+        })
+      }
+
       const extId = firstSegment
       const fileSegments = restSegments
       if (!extId || fileSegments.length === 0) {
@@ -133,7 +145,7 @@ export function registerExtensionProtocol(registry: ExtensionRegistry): void {
         // Chat surfaces route through the same bridge — use the surface instance
         // id as the bridge's tileId so host-side RPC routing stays uniform.
         const tileId = url.searchParams.get('tileId') || url.searchParams.get('surfaceId')
-        const html = tileId ? injectBridge(raw, getBridgeScript(tileId, extId)) : raw
+        const html = tileId ? injectBridge(raw, getBridgeScript(tileId, extId, registry.getCapabilityGate(extId))) : raw
         return new Response(html, {
           status: 200,
           headers: {

@@ -12,7 +12,7 @@ import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from
 import {
   ShieldCheck, ChevronDown, AlertTriangle,
   Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
-  Brain, Bug, ChevronRight, ClipboardCheck, Cog, Copy, CornerDownRight, DollarSign,
+  Brain, Bug, ChevronRight, ClipboardCheck, Cog, Copy, CornerDownRight,
   FileText, GripVertical, Maximize2, Mic, Pencil, Plus, Sparkles, Trash2, Wrench
 } from 'lucide-react'
 import { useChatGitState } from '../hooks/useChatGitState'
@@ -58,6 +58,8 @@ import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/
 import { CHAT_STREAM_FLUSH_INTERVAL_MS, isLargeArtifact, isLargeMessage, measureText, previewText, splitRawDiffText, type RawDiffFile } from './chat/largeContent'
 import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
 import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
+import { useContributions } from '../hooks/useContributions'
+import { executeCommand, type PaletteCommand } from '../lib/commandRegistry'
 import { ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 import {
@@ -108,7 +110,7 @@ function resolveChatSkillLocations(raw: string, homePath: string, workspacePath:
 }
 
 // Provider brand icons are shared with the sidebar via ./icons/providerIcons.
-import { ClaudeIcon, CodexIcon, HermesIcon, OpenClawIcon } from './icons/providerIcons'
+import { ClaudeIcon, CodexIcon, HermesIcon, OpenClawIcon, PiIcon } from './icons/providerIcons'
 
 // --- Thinking strength icon (brain + signal bars) --------------------------------
 
@@ -1357,6 +1359,7 @@ const PROVIDER_ICON: Record<BuiltinProvider, React.ReactNode> = {
   opencode: <Bot size={TOOLBAR_PILL_ICON_SIZE} />,
   openclaw: <OpenClawIcon size={TOOLBAR_PILL_ICON_SIZE} />,
   hermes: <HermesIcon size={TOOLBAR_PILL_ICON_SIZE} />,
+  csagent: <PiIcon size={TOOLBAR_PILL_ICON_SIZE} />,
 }
 
 
@@ -1809,6 +1812,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   })
   const [opencodeModels, setOpencodeModels] = useState<ModelOption[]>(DEFAULT_MODELS.opencode)
   const [openclawAgents, setOpenclawAgents] = useState<ModelOption[]>(DEFAULT_MODELS.openclaw)
+  const [csagentModels, setCsagentModels] = useState<ModelOption[]>(DEFAULT_MODELS.csagent)
   const [modelFilter, setModelFilter] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>(() => initialRuntimeStateRef.current?.attachments ?? [])
   const hasSendableDraft = input.trim().length > 0 || attachments.length > 0 || implicitPeerImageAttachments.length > 0
@@ -1941,7 +1945,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   }, [jobId])
   const latestStateRef = useRef<ChatTilePersistedState | null>(null)
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const requestedProviderOptionsRef = useRef<{ opencode: boolean; openclaw: boolean }>({ opencode: false, openclaw: false })
+  const requestedProviderOptionsRef = useRef<{ opencode: boolean; openclaw: boolean; csagent: boolean }>({ opencode: false, openclaw: false, csagent: false })
   const isFlushingQueuedTurnRef = useRef(false)
 
   // ─── TTS auto-speak (last-message-only, sentence-streamed) ──────────
@@ -2002,11 +2006,23 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     if (planTodos && planTodos.length > 0) setPlanUpdatedAt(Date.now())
   }, [planTodos])
 
+  // Plugin-contributed commands that expose a slash trigger surface in the chat
+  // composer's `/` menu (point 3 — plugins appear in the chat area).
+  const pluginCommands = useContributions('commands') as PaletteCommand[]
+  const pluginSlashCommands = useMemo(
+    () =>
+      pluginCommands
+        .filter(c => typeof c.slash === 'string' && c.slash.trim())
+        .map(c => ({ slash: c.slash as string, title: c.title })),
+    [pluginCommands],
+  )
+
   // Autocomplete state (extracted to hook)
   const { acType, setAcType, acQuery, setAcQuery, acIndex, setAcIndex, acItems } = useChatAutocomplete({
     workspaceDir: _workspaceDir,
     connectedPeers,
     workspaceSkills,
+    pluginSlashCommands,
   })
 
   const messagesRef = useRef<HTMLDivElement>(null)
@@ -2578,6 +2594,16 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         requestedProviderOptionsRef.current.openclaw = false
       })
     }
+
+    // Pi (csagent): pull real auth-configured models from the user's installed pi.
+    if (provider === 'csagent' && !requestedProviderOptionsRef.current.csagent) {
+      requestedProviderOptionsRef.current.csagent = true
+      window.electron?.chat?.csagentModels?.().then((result: any) => {
+        if (result?.models?.length) setCsagentModels(result.models)
+      }).catch(() => {
+        requestedProviderOptionsRef.current.csagent = false
+      })
+    }
   }, [provider])
 
 
@@ -3042,7 +3068,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       models: DEFAULT_MODELS.hermes,
       kind: 'builtin',
     },
-  }), [opencodeModels, openclawAgents])
+    csagent: {
+      id: 'csagent',
+      label: PROVIDER_LABELS.csagent,
+      noun: 'model',
+      icon: PROVIDER_ICON.csagent,
+      models: csagentModels,
+      kind: 'builtin',
+    },
+  }), [opencodeModels, openclawAgents, csagentModels])
 
   const extensionProviderEntries = useMemo<ProviderEntry[]>(() => {
     void peerContextVersion
@@ -3078,6 +3112,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     builtinProviderEntries.opencode,
     builtinProviderEntries.openclaw,
     builtinProviderEntries.hermes,
+    builtinProviderEntries.csagent,
     ...extensionProviderEntries,
   ], [builtinProviderEntries, extensionProviderEntries])
 
@@ -4461,6 +4496,24 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       return
     }
 
+    // Plugin slash commands (point 3) — run the contributed command locally
+    // instead of dispatching the text to the model. Match the first token only,
+    // so `/studio` runs even when the user typed a trailing description.
+    const slashToken = messageContent.trim().match(/^\/(\S+)/)?.[1]?.toLowerCase()
+    if (slashToken) {
+      const hit = pluginCommands.find(
+        c => typeof c.slash === 'string' && c.slash.replace(/^\/+/, '').toLowerCase() === slashToken,
+      )
+      if (hit) {
+        setInput('')
+        setAcType(null)
+        setAcQuery('')
+        if (textareaRef.current) textareaRef.current.style.height = 'auto'
+        await executeCommand(hit)
+        return
+      }
+    }
+
     // Signal the sidebar that the user just submitted a message in this thread
     // so it can promote the session to the top. This is the ONLY path that
     // should move a thread in the sidebar — opening, streaming-resume, or tool
@@ -4481,7 +4534,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     await dispatchMessageContent(messageContent)
-  }, [isStreaming, input, attachments, implicitPeerImageAttachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, getChatSurfaceIframe, postToChatSurface])
+  }, [isStreaming, input, attachments, implicitPeerImageAttachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, getChatSurfaceIframe, postToChatSurface, pluginCommands])
 
   const insertSteerMessageIntoStream = useCallback((content: string) => {
     const trimmed = content.trim()
@@ -5263,9 +5316,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
                     visibility: (!isLiveMessage && msg.cost != null) ? 'visible' : 'hidden',
                   }}>
                     {!isLiveMessage && msg.cost != null && (<>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                      <DollarSign size={9} /> ${msg.cost.toFixed(4)}
-                    </span>
+                    <span>${msg.cost.toFixed(4)}</span>
                     {msg.turns != null && (
                       <span>{msg.turns} turn{msg.turns !== 1 ? 's' : ''}</span>
                     )}

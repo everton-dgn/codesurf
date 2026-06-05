@@ -6,6 +6,7 @@ import { TileColorProvider } from './TileColorContext'
 import { withDefaultSettings, DEFAULT_SETTINGS, getCurvierBlockRadius } from '../../shared/types'
 import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
+import { useLayoutTemplates } from './hooks/useLayoutTemplates'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
 import { useDiscoveryGraph } from './hooks/useDiscoveryGraph'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
@@ -15,6 +16,7 @@ import { ThemeProvider } from './ThemeContext'
 import { applyContrast, DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
 import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf, replaceTabInLeaf } from './components/panelLayoutTree'
+import { panelTreeHasSplit, tilesToPanelNode } from './lib/layoutSnap'
 import { basename, getDroppedPaths, toFileUrl, isMediaFile } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
 import {
@@ -27,6 +29,7 @@ import {
 import { disposeChatTileRuntimeState, getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
 import { disposeMediaTile } from './components/mediaTileRegistry'
 import { MainStatusBar } from './components/MainStatusBar'
+import { DevSandboxFrame } from './components/DevSandboxFrame'
 import { resolveProviderModeId } from './config/providers'
 
 const LazyPanelLayout = React.lazy(() => import('./components/PanelLayout').then(m => ({ default: m.PanelLayout })))
@@ -105,6 +108,8 @@ const LazyClusoWidgetMount = React.lazy(() =>
 )
 const LazyAgentSetup = React.lazy(() => import('./components/AgentSetup').then(m => ({ default: m.AgentSetup })))
 const LazySkillInstallModal = React.lazy(() => import('./components/SkillInstallModal').then(m => ({ default: m.SkillInstallModal })))
+const LazyCommandPalette = React.lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
+const LazyOnboardingOverlay = React.lazy(() => import('./components/OnboardingOverlay').then(m => ({ default: m.OnboardingOverlay })))
 
 type DragState =
   | { type: null }
@@ -987,7 +992,12 @@ function App(): JSX.Element {
   const [showMCP, setShowMCP] = useState(false)
   const [showSettings, setShowSettings] = useState<string | false>(false)
   const [showExtensionsGallery, setShowExtensionsGallery] = useState(false)
+  // First-run onboarding (P9): gate on a real disk load so returning users
+  // (whose persisted settings already have the flag) never see a flash.
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [showMinimap, setShowMinimap] = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const { addTemplate: addLayoutTemplate } = useLayoutTemplates()
   const [expandedTileId, setExpandedTileId] = useState<string | null>(null)
   const [panelLayout, setPanelLayout] = useState<PanelNode | null>(null)
   const [chatReloadTokens, setChatReloadTokens] = useState<Record<string, number>>({})
@@ -1539,6 +1549,7 @@ function App(): JSX.Element {
       ])
       const persistedWorkspaceTabs = readPersistedWorkspaceTabState()
       if (savedSettings) setSettings(withDefaultSettings(savedSettings))
+      setSettingsLoaded(true)
       setWorkspaces(wsList)
       const workspaceById = new Map(wsList.map(entry => [entry.id, entry]))
       const miniWorkspaceId = getCanonicalWorkspaceId(wsList, miniChatOptions?.workspaceId ?? null)
@@ -1664,9 +1675,10 @@ function App(): JSX.Element {
     if (!anchorTileId) return
     const layout = panelLayoutRef.current
     if (!layout) return
+    // tabs != layout: a single leaf full of tabs is just "siblings reachable as
+    // tabs" and must stay transient. Only a real spatial split promotes.
+    if (!panelTreeHasSplit(layout)) return
     const tileIds = getAllTileIds(layout)
-    // Single tile = not a layout yet, no promotion
-    if (tileIds.length < 2) return
 
     const groupId = `group-${Date.now()}`
     const anchor = tilesRef.current.find(t => t.id === anchorTileId)
@@ -1719,8 +1731,7 @@ function App(): JSX.Element {
     if (!panelLayout) return
     if (expandLayoutGroupIdRef.current) return  // already a group
     if (!expandedTileIdRef.current) return       // not path-2
-    const ids = getAllTileIds(panelLayout)
-    if (ids.length >= 2) {
+    if (panelTreeHasSplit(panelLayout)) {
       promoteExpandedTileToLayoutGroup()
     }
   }, [panelLayout, promoteExpandedTileToLayoutGroup])
@@ -1758,11 +1769,22 @@ function App(): JSX.Element {
   }, [promoteExpandedTileToLayoutGroup])
 
   const enterExpandedMode = useCallback((tileId: string) => {
-    // Single-tile expand: only the double-clicked tile becomes the panel content.
-    // Other canvas tiles stay on canvas. If the user adds more tiles via
-    // splits/tabs in fullscreen, exitExpandedMode() will auto-group them
-    // into a persistent layout-group so the arrangement survives back to canvas.
-    const leaf = createLeaf([tileId], tileId)
+    // Fullscreen the clicked tile; its SAME-GROUP siblings become tabs in the same
+    // leaf (PanelLayout's existing tab strip renders them). Deliberately scoped to
+    // group siblings (not ALL canvas tiles): seeding every tile would, once one tab
+    // is dragged into a split, vacuum the whole canvas into one persistent layout
+    // group on exit. Tabs alone never promote (panelTreeHasSplit gate); only a real
+    // split does. Other canvas tiles stay on canvas.
+    const SIBLING_CAP = 8
+    const clicked = tilesRef.current.find(t => t.id === tileId)
+    const siblingIds = clicked?.groupId
+      ? tilesRef.current
+          .filter(t => t.id !== tileId && t.groupId === clicked.groupId && !panelTileIdsRef.current.has(t.id))
+          .map(t => t.id)
+          .slice(0, SIBLING_CAP - 1)
+      : []
+    const ordered = [tileId, ...siblingIds]
+    const leaf = createLeaf(ordered, tileId)
     setExpandedTileId(tileId)
     setPanelLayout(leaf)
     setActivePanelId(leaf.id)
@@ -3567,6 +3589,88 @@ function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedTileIds, groupSelectedTiles])
 
+  // ─── Cmd+Shift+P → Command Palette (plugin commands; built-ins added later) ──
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        setCommandPaletteOpen(v => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // ─── Open a layout preset contributed by a plugin (point 10) ──
+  // A plugin's contributes.layoutPresets[].layout (a LayoutTemplateNode) is applied
+  // through the existing template-launch path — so "AI Chat" (sessions | chat | git)
+  // and any other reusable arrangement become one-click, registerable layouts.
+  useEffect(() => {
+    const onPreset = (e: Event) => {
+      const preset = (e as CustomEvent).detail as
+        | { id: string; title?: string; layout: import('../../shared/types').LayoutTemplateNode }
+        | undefined
+      if (!preset?.layout) return
+      void handleLaunchTemplate({ id: preset.id, name: preset.title ?? preset.id, created_at: '', tree: preset.layout })
+    }
+    window.addEventListener('codesurf:open-layout-preset', onPreset as EventListener)
+    return () => window.removeEventListener('codesurf:open-layout-preset', onPreset as EventListener)
+  }, [handleLaunchTemplate])
+
+  // ─── Create a tile by type (built-in views surfaced via the command palette) ──
+  useEffect(() => {
+    const onNewTile = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { type?: string } | undefined
+      if (detail?.type) addTile(detail.type as TileState['type'])
+    }
+    window.addEventListener('codesurf:new-tile', onNewTile as EventListener)
+    return () => window.removeEventListener('codesurf:new-tile', onNewTile as EventListener)
+  }, [addTile])
+
+  // ─── A plugin footer chip was clicked → open that plugin's tile (point 3 loop) ──
+  // Reuses the exact tile-type form the canvas context menu uses, so the open path
+  // is identical to the proven one.
+  useEffect(() => {
+    const onFooterActivate = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { extId?: string } | undefined
+      if (!detail?.extId) return
+      try {
+        const tiles = await window.electron.extensions?.listTiles?.()
+        const tile = tiles?.find(t => t.extId === detail.extId)
+        if (tile?.type) addTile(tile.type as TileState['type'])
+      } catch { /* noop */ }
+    }
+    window.addEventListener('codesurf:footer-activate', onFooterActivate as EventListener)
+    return () => window.removeEventListener('codesurf:footer-activate', onFooterActivate as EventListener)
+  }, [addTile])
+
+  // ─── Save the current panel arrangement as a reusable Layout preset (point 10) ──
+  // Captures the live panel layout (PanelNode) into a LayoutTemplate; it then appears
+  // in the palette under "Layout:" via the saved-layouts integration. PanelNode sizes
+  // share the template's percentage scale (handleLaunchTemplate copies them 1:1), so
+  // no conversion is needed beyond mapping tabs → tile-type slots.
+  useEffect(() => {
+    const onSave = () => {
+      const layout = panelLayoutRef.current
+      if (!layout) { window.alert('Snap views into a panel layout first, then save it.'); return }
+      const toNode = (node: PanelNode): import('../../shared/types').LayoutTemplateNode => {
+        if (node.type === 'leaf') {
+          const slots = node.tabs.map(id => {
+            const t = tilesRef.current.find(x => x.id === id)
+            return { tileType: (t?.type ?? 'note') as TileType }
+          })
+          return { type: 'leaf', slots: slots.length ? slots : [{ tileType: 'note' as TileType }] }
+        }
+        return { type: 'split', direction: node.direction, children: node.children.map(toNode), sizes: node.sizes }
+      }
+      const name = window.prompt('Name this layout', 'My Layout')
+      if (!name) return
+      void addLayoutTemplate({ id: `saved-${Date.now()}`, name, created_at: new Date().toISOString(), tree: toNode(layout) })
+    }
+    window.addEventListener('codesurf:save-layout', onSave as EventListener)
+    return () => window.removeEventListener('codesurf:save-layout', onSave as EventListener)
+  }, [addLayoutTemplate])
+
   // Ungroup one level — tiles revert to parentGroupId if present
   const ungroupTiles = useCallback((groupId: string) => {
     setGroups(prevGroups => {
@@ -3743,16 +3847,20 @@ function App(): JSX.Element {
   }, [tiles, groups])
 
   const convertGroupToLayout = useCallback((groupId: string) => {
-    const memberTileIds = tiles.filter(t => t.groupId === groupId).map(t => t.id)
+    const members = tiles.filter(t => t.groupId === groupId)
+    const memberTileIds = members.map(t => t.id)
     if (memberTileIds.length === 0) return
     const bounds = groupBounds(groupId)
     if (!bounds) return
-    const leaf = createLeaf(memberTileIds, memberTileIds[0])
+    // Snap the arrangement into a SPATIAL layout (real splits) when the members
+    // form a guillotine-sliceable grid; otherwise fall back to flat tabs. (Point 10)
+    const rects = members.map(t => ({ id: t.id, x: t.x, y: t.y, width: t.width, height: t.height }))
+    const layout = tilesToPanelNode(rects) ?? createLeaf(memberTileIds, memberTileIds[0])
     setGroups(prev => {
       const updated = prev.map(g => g.id === groupId ? {
         ...g,
         layoutMode: true,
-        layout: leaf,
+        layout,
         layoutBounds: bounds,
       } : g)
       setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
@@ -7192,6 +7300,14 @@ function App(): JSX.Element {
           />
         </Suspense>
       )}
+      {settingsLoaded && !settings.onboardingComplete && (
+        <Suspense fallback={null}>
+          <LazyOnboardingOverlay
+            onComplete={() => updateAppSettings({ onboardingComplete: true })}
+            onOpenPlugins={() => setShowExtensionsGallery(true)}
+          />
+        </Suspense>
+      )}
       {ctxMenu && (
         <Suspense fallback={null}>
           <LazyContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxMenu.items} onClose={closeCtx} />
@@ -7216,6 +7332,15 @@ function App(): JSX.Element {
           />
         </Suspense>
       )}
+      {commandPaletteOpen && (
+        <Suspense fallback={null}>
+          <LazyCommandPalette
+            open={commandPaletteOpen}
+            onOpenChange={setCommandPaletteOpen}
+          />
+        </Suspense>
+      )}
+      <DevSandboxFrame />
     </div>
     </FontProvider>
     </FontTokenProvider>

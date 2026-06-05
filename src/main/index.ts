@@ -116,6 +116,8 @@ interface MainWindowOptions {
   workspaceId?: string | null
   workspacePicker?: boolean
   nativeTabOwner?: BrowserWindow | null
+  /** Dev Sandbox: an isolated CodeSurf instance for testing plugins (dashed border). */
+  devSandbox?: boolean
 }
 
 interface MiniChatWindowRequest {
@@ -138,6 +140,7 @@ function getMainWindowQuery(opts?: MainWindowOptions): Record<string, string> | 
   const workspaceId = typeof opts?.workspaceId === 'string' ? opts.workspaceId.trim() : ''
   if (workspaceId) query.workspaceId = workspaceId
   if (opts?.workspacePicker) query.workspacePicker = '1'
+  if (opts?.devSandbox) query.devSandbox = '1'
   return Object.keys(query).length > 0 ? query : undefined
 }
 
@@ -941,6 +944,8 @@ app.whenReady().then(async () => {
 
   // Window management
   ipcMain.handle('window:new', () => { createWindow({ fresh: true }); return null })
+  // Dev Sandbox: a fresh, visibly-marked instance for testing plugins in isolation.
+  ipcMain.handle('window:openDevSandbox', () => { createWindow({ fresh: true, devSandbox: true, workspacePicker: true }); return null })
   ipcMain.handle('window:newTab', (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender) ?? getFocusedMainWindow()
     if (process.platform === 'darwin') {
