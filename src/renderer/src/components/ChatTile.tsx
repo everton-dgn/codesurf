@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useMCPServers } from '../hooks/useMCPServers'
-import { useAutoSpeak, speakMessage, bargeIn } from '../hooks/useAutoSpeak'
+import { useAutoSpeak, bargeIn } from '../hooks/useAutoSpeak'
 import { ttsPlayer, type TtsPlayerState } from '../utils/ttsPlayer'
 import { useChatDictation } from '../hooks/useChatDictation'
 import { useChatExecutionHosts } from '../hooks/useChatExecutionHosts'
@@ -23,9 +23,10 @@ import { useChatTileProviders } from '../hooks/useChatTileProviders'
 import { useChatTilePersistence } from '../hooks/useChatTilePersistence'
 import { useChatTileMessaging } from '../hooks/useChatTileMessaging'
 import { useChatTileTranscript } from '../hooks/useChatTileTranscript'
+import { useChatTileBlockNotes } from '../hooks/useChatTileBlockNotes'
 
 import { useTheme } from '../ThemeContext'
-import { WorkingDots } from './shared/streamdown-utils'
+
 import { DiffView } from './chat/DiffView'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
 import {
@@ -33,11 +34,11 @@ import {
   getApproxSystemOverheadTokens,
 } from '../config/providers'
 import { stripCapabilityPrefix, getAllNodeTools } from '../../../shared/nodeTools'
-import type { ToolBlock, ChatMessage, BlockNote, FileChange } from '../../../shared/chat-types'
+import type { ChatMessage, FileChange } from '../../../shared/chat-types'
 import { useChatStreamHandler } from '../hooks/useChatStreamHandler'
 
 
-import { BlockNoteAffordance } from './chat/BlockNoteAffordance'
+import { ChatTileTranscriptMessages } from './chat/ChatTileTranscriptMessages'
 import { setChatStreaming } from './chatStreamingStore'
 import { setTileTodos, clearTileTodos, useTileTodos, type TileTodoItem } from '../state/tileTodosStore'
 import { CUSTOMISATION_LOCATIONS_CHANGED_EVENT, type CustomisationLocationsChangedDetail } from './CustomisationTile'
@@ -46,8 +47,7 @@ import { PlanChip } from './chat/PlanChip'
 
 import { ToolPermissionProvider } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
-import { isCheckpointToolBlock } from './chat/checkpointToolActions'
-import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
+import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME } from './chat/dreamToolActions'
 import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
 import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
 import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
@@ -63,29 +63,20 @@ import {
   ThinkingBlockView,
   WorkingChipView,
   StreamingLivenessIndicator,
-  MixedToolGroup,
-  CollapsedToolGroup,
-  ToolGroupChip,
-  ToolMegaChip,
-  ToolBlockView,
   parsePlanToolTodos,
 } from './chat/ToolBlockView'
-import { collateClusterChips, type ClusterChip } from './chat/toolChipCollation'
 import {
   ThinkingIcon,
   renderChatSurfaceIcon,
   normalizeChatSurfaceMenuEntry,
   ensureChatMdStyle,
-  ChatMessageContent,
 } from './chat/ChatTileViews'
 import {
-  CHAT_CHIP_ROW_STYLE,
   FONT_SANS,
   FONT_MONO,
   FONT_SIZE_DEFAULT,
   MONO_SIZE_DEFAULT,
   CHAT_MESSAGE_MAX_WIDTH,
-  CHAT_OFFSCREEN_MESSAGE_STYLE,
 
   CHAT_COMPOSER_WIDTH,
   CHAT_COMPOSER_MIN_WIDTH_STYLE,
@@ -100,16 +91,12 @@ import { FontCtx } from './chat/chatTileContexts'
 import {
   CHAT_DEFAULT_SKILL_LOCATIONS,
   resolveChatSkillLocations,
-  shouldRenderToolBlock,
   isUrgentQueuedContent,
   getImplicitPeerImageAttachments,
   collectModelReadPaths,
   canUsePagedLinkedHistory,
   hasVisibleFileChangeStats,
   hasRenderableFileChangeDiff,
-  getExternalAgentToolBlocks,
-  isExternalAgentToolOnlyText,
-  relativeTime,
   type ActiveChatSurface,
   type DiscoveryPeer,
 } from './chat/chatTileUtils'
@@ -693,6 +680,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setMessages,
     pagedLinkedHistoryEnabled,
     isStreaming,
+  })
+
+  const {
+    updateBlockNote,
+    exportNotesToClipboard,
+  } = useChatTileBlockNotes({
+    allMessages,
+    setMessagesSafe,
+    setHistoricalMessages,
   })
 
   // ─── TTS auto-speak (last-message-only, sentence-streamed) ──────────
@@ -1596,124 +1592,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [dictation])
 
-  /**
-   * Updates or clears the note attached to a specific block. Passing `text === null`
-   * deletes the note. Notes are stored inline on the underlying record (message,
-   * tool block, or thinking block) so they persist with the conversation.
-   */
-  const updateBlockNote = useCallback((
-    target:
-      | { kind: 'message'; messageId: string }
-      | { kind: 'tool'; messageId: string; toolBlockId: string }
-      | { kind: 'thinking'; messageId: string; thinkingId: string },
-    text: string | null,
-  ) => {
-    const nextNote: BlockNote | null = text && text.trim().length > 0
-      ? { text: text.trim(), createdAt: Date.now() }
-      : null
-    const applyToCollection = (collection: ChatMessage[]): ChatMessage[] => collection.map(msg => {
-      if (msg.id !== target.messageId) return msg
-      if (target.kind === 'message') {
-        if (nextNote) {
-          const merged: BlockNote = msg.note
-            ? { ...msg.note, text: nextNote.text, updatedAt: Date.now() }
-            : nextNote
-          return { ...msg, note: merged }
-        }
-        const { note: _discard, ...rest } = msg
-        return rest
-      }
-      if (target.kind === 'tool') {
-        const blocks = msg.toolBlocks?.map(b => {
-          if (b.id !== target.toolBlockId) return b
-          if (nextNote) {
-            const merged: BlockNote = b.note
-              ? { ...b.note, text: nextNote.text, updatedAt: Date.now() }
-              : nextNote
-            return { ...b, note: merged }
-          }
-          const { note: _discard, ...rest } = b
-          return rest
-        })
-        return { ...msg, toolBlocks: blocks }
-      }
-      // thinking
-      const thinkingBlocks = msg.thinkingBlocks?.map(tb => {
-        if (tb.id !== target.thinkingId) return tb
-        if (nextNote) {
-          const merged: BlockNote = tb.note
-            ? { ...tb.note, text: nextNote.text, updatedAt: Date.now() }
-            : nextNote
-          return { ...tb, note: merged }
-        }
-        const { note: _discard, ...rest } = tb
-        return rest
-      })
-      return { ...msg, thinkingBlocks }
-    })
-    setMessagesSafe(prev => applyToCollection(prev))
-    setHistoricalMessages(prev => applyToCollection(prev))
-  }, [setMessagesSafe])
-
-  /**
-   * Collects every attached note from the conversation into a flat array,
-   * tagged with the block kind and source snippet so downstream analysis
-   * (or export) can surface them with context.
-   */
-  const collectAllNotes = useCallback((): Array<{
-    kind: 'message' | 'tool' | 'thinking'
-    messageId: string
-    blockId?: string
-    role?: string
-    context: string
-    note: BlockNote
-  }> => {
-    const out: Array<{ kind: 'message' | 'tool' | 'thinking'; messageId: string; blockId?: string; role?: string; context: string; note: BlockNote }> = []
-    for (const m of allMessages) {
-      if (m.note) {
-        const snippet = m.content.trim().slice(0, 200)
-        out.push({ kind: 'message', messageId: m.id, role: m.role, context: snippet, note: m.note })
-      }
-      for (const tb of m.toolBlocks ?? []) {
-        if (tb.note) {
-          const snippet = `${tb.name}: ${(tb.summary ?? tb.input ?? '').slice(0, 160)}`
-          out.push({ kind: 'tool', messageId: m.id, blockId: tb.id, context: snippet, note: tb.note })
-        }
-      }
-      for (const tk of m.thinkingBlocks ?? []) {
-        if (tk.note) {
-          const snippet = tk.content.slice(0, 200)
-          out.push({ kind: 'thinking', messageId: m.id, blockId: tk.id, context: snippet, note: tk.note })
-        }
-      }
-    }
-    return out
-  }, [allMessages])
-
-  /** Copies a Markdown-formatted export of all attached notes to the clipboard. */
-  const exportNotesToClipboard = useCallback(async () => {
-    const notes = collectAllNotes()
-    if (notes.length === 0) {
-      try { await navigator.clipboard.writeText('# Chat notes\n\n_No notes yet._') } catch { /* ignore */ }
-      return
-    }
-    const lines = ['# Chat notes', '']
-    for (const entry of notes) {
-      const header = entry.kind === 'message'
-        ? `## ${entry.role ?? 'message'}`
-        : entry.kind === 'tool'
-          ? '## tool call'
-          : '## thinking'
-      lines.push(header)
-      lines.push(`> ${entry.context.replace(/\n/g, ' ')}`)
-      lines.push('')
-      lines.push(entry.note.text)
-      lines.push('')
-    }
-    const payload = lines.join('\n')
-    try { await navigator.clipboard.writeText(payload) } catch { /* ignore */ }
-  }, [collectAllNotes])
-
   // Stream listener -- handles all rich event types from Claude Agent SDK
   useChatStreamHandler({
     tileId,
@@ -2570,446 +2448,23 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             </div>
           )}
 
-          {(() => {
-            // Walk the message list and group *consecutive* chip-only
-            // assistant messages (thinking + tool calls, no prose text)
-            // into a single visual cluster so their chips all live in one
-            // wrapping row. The Claude Agent SDK emits a separate assistant
-            // message per tool-round, so without this grouping each round
-            // would render on its own line and waste horizontal space.
-            //
-            // Within a cluster, repeated tool calls are folded by name into
-            // `3×READ` / `N×TOOLS` summary chips via collateClusterChips —
-            // click a summary to explode it back to its parts inline.
-            const nodes: JSX.Element[] = []
-            // Read toolCollapseTick so the transcript only recomputes when a
-            // just-finished tool actually crosses the collapse grace window.
-            void toolCollapseTick
+          <ChatTileTranscriptMessages
+            renderedMessages={renderedMessages}
+            isStreaming={isStreaming}
+            toolCollapseTick={toolCollapseTick}
+            explodedChipGroups={explodedChipGroups}
+            toggleExplodedChipGroup={toggleExplodedChipGroup}
+            updateBlockNote={updateBlockNote}
+            onAnnotationComposerActiveChange={setAnnotationComposerActive}
+            readAttachmentPaths={readAttachmentPaths}
+            fontSize={fontSize}
+            fontLineHeight={fontLineHeight}
+            fontMono={fontMono}
+            monoSize={monoSize}
+            ttsState={ttsState}
+            voiceSettings={voiceSettings}
+          />
 
-            // Source chip slots are extracted flat (thinking + individual
-            // tools, in chronological order) then run through name-based
-            // two-tier collation (collateClusterChips) at flush time — see
-            // toolChipCollation.ts. This collapses noisy alternating runs
-            // (Read/Thought/Read/Bash…) into `3×READ` / `N×TOOLS` summary
-            // chips, which the user can click to explode back inline.
-            let clusterItems: ClusterChip[] = []
-            let clusterStartKey: string | null = null
-            let clusterMsgIds: string[] = []
-
-            const buildMessageBlockLookup = (msg: ChatMessage) => ({
-              thinkingById: new Map((msg.thinkingBlocks ?? []).map(block => [block.id, block])),
-              toolById: new Map((msg.toolBlocks ?? []).map(block => [block.id, block])),
-            })
-
-            // Extract flat chip slots (thinking + individual tools) from a
-            // single message's contentBlocks. Text blocks are ignored —
-            // callers only invoke this on chip-only messages. No grouping
-            // happens here; collation runs cluster-wide at flush time.
-            const extractChipsFromMessage = (msg: ChatMessage, isLiveMessage: boolean): ClusterChip[] => {
-              const items: ClusterChip[] = []
-              const blocks = msg.contentBlocks ?? []
-              if (blocks.length === 0 && isExternalAgentToolOnlyText(msg.content ?? '')) {
-                for (const tb of getExternalAgentToolBlocks(msg.content ?? '')) {
-                  if (!shouldRenderToolBlock(tb)) continue
-                  items.push({ kind: 'tool', key: `${msg.id}-${tb.id}`, block: tb, isLive: isLiveMessage })
-                }
-                return items
-              }
-              const { thinkingById, toolById } = buildMessageBlockLookup(msg)
-              for (const block of blocks) {
-                if (block.type === 'thinking') {
-                  const tb = thinkingById.get(block.thinkingId)
-                  // Active thinking for the live message renders above the input bar — skip here
-                  if (tb && (!isLiveMessage || tb.done)) items.push({
-                    kind: 'thinking',
-                    key: `${msg.id}-think-${block.thinkingId}`,
-                    block: !isLiveMessage && !tb.done ? { ...tb, done: true } : tb,
-                  })
-                  continue
-                }
-                if (block.type === 'tool') {
-                  const tb = toolById.get(block.toolId)
-                  if (tb && shouldRenderToolBlock(tb)) {
-                    items.push({ kind: 'tool', key: `${msg.id}-${tb.id}`, block: tb, isLive: isLiveMessage })
-                  }
-                }
-              }
-              return items
-            }
-
-            const renderChipItem = (item: ReturnType<typeof collateClusterChips>[number], clusterId: string): JSX.Element => {
-              if (item.kind === 'thinking') {
-                return <ThinkingBlockView key={item.key} thinking={item.block} />
-              }
-              if (item.kind === 'tool-single') {
-                return <ToolBlockView key={item.key} block={item.block} isLive={item.isLive} />
-              }
-              if (item.kind === 'tool-group') {
-                return (
-                  <ToolGroupChip
-                    key={item.key}
-                    toolName={item.toolName}
-                    count={item.blocks.length}
-                    expanded={item.expanded}
-                    onToggle={() => toggleExplodedChipGroup(clusterId, item.id)}
-                  />
-                )
-              }
-              return (
-                <ToolMegaChip
-                  key={item.key}
-                  count={item.blocks.length}
-                  expanded={item.expanded}
-                  onToggle={() => toggleExplodedChipGroup(clusterId, item.id)}
-                />
-              )
-            }
-
-            const renderChipRow = (items: JSX.Element[], key: string): JSX.Element => {
-              return (
-                <div key={key} style={CHAT_CHIP_ROW_STYLE}>
-                  {items}
-                </div>
-              )
-            }
-
-            // A message qualifies for clustering only when it is an assistant
-            // turn that is pure chip content — any prose text (content or a
-            // 'text' contentBlock) breaks the cluster so prose lines keep
-            // their normal bubble rendering.
-            const isChipOnly = (msg: ChatMessage): boolean => {
-              if (msg.role !== 'assistant') return false
-              const blocks = msg.contentBlocks ?? []
-              if (blocks.length === 0) return isExternalAgentToolOnlyText(msg.content ?? '')
-              if (blocks.some(b => b.type === 'text')) return false
-              if ((msg.content ?? '').trim().length > 0) return false
-              return blocks.some(b => b.type === 'tool' || b.type === 'thinking')
-            }
-
-            const flushCluster = () => {
-              if (clusterItems.length === 0) return
-              const lastId = clusterMsgIds[clusterMsgIds.length - 1]
-              const lastMsg = renderedMessages.find(m => m.id === lastId)
-              const clusterId = clusterStartKey ?? 'cluster'
-              // Derive this cluster's exploded-collation ids from the global
-              // set (entries are namespaced `${clusterId}::${collationId}`).
-              const prefix = `${clusterId}::`
-              const clusterExploded = new Set<string>()
-              for (const k of explodedChipGroups) {
-                if (k.startsWith(prefix)) clusterExploded.add(k.slice(prefix.length))
-              }
-              const finalItems = collateClusterChips(clusterItems, clusterExploded)
-              nodes.push(
-                <BlockNoteAffordance
-                  key={`cluster-${clusterId}`}
-                  note={lastMsg?.note}
-                  side="right"
-                  onComposerActiveChange={setAnnotationComposerActive}
-                  onUpdateNote={(text) => updateBlockNote({ kind: 'message', messageId: lastId }, text)}
-                >
-                  {renderChipRow(finalItems.map(item => renderChipItem(item, clusterId)), `cluster-row-${clusterId}`)}
-                </BlockNoteAffordance>
-              )
-              clusterItems = []
-              clusterStartKey = null
-              clusterMsgIds = []
-            }
-
-            for (const msg of renderedMessages) {
-              const isLiveMessage = Boolean(
-                msg.role === 'assistant'
-                && isStreaming
-                && msg.isStreaming
-                && msg.id === renderedMessages[renderedMessages.length - 1]?.id
-              )
-              if (isChipOnly(msg)) {
-                const items = extractChipsFromMessage(msg, isLiveMessage)
-                if (clusterItems.length === 0) clusterStartKey = msg.id
-                clusterItems.push(...items)
-                clusterMsgIds.push(msg.id)
-                continue
-              }
-              flushCluster()
-              const { thinkingById, toolById } = buildMessageBlockLookup(msg)
-              const visibleToolBlocks = msg.toolBlocks?.filter(shouldRenderToolBlock) ?? []
-              const hasVisibleToolBlocks = visibleToolBlocks.length > 0
-              // Smart-side: user bubbles are right-aligned, so the annotation
-              // icon sits on their LEFT where the gutter is; for assistant /
-              // tool / thinking content that's left-aligned, the icon sits on
-              // the RIGHT. This gives symmetrical "note in the empty space"
-              // behaviour without the user having to choose a side.
-              const annotationSide: 'left' | 'right' = msg.role === 'user' ? 'left' : 'right'
-              nodes.push(
-              <BlockNoteAffordance
-                key={msg.id}
-                note={msg.note}
-                side={annotationSide}
-                onComposerActiveChange={setAnnotationComposerActive}
-                onUpdateNote={(text) => updateBlockNote({ kind: 'message', messageId: msg.id }, text)}
-              >
-              <div style={{
-                display: 'flex', flexDirection: 'column',
-                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                width: msg.role === 'user' ? 'auto' : '100%',
-                maxWidth: msg.role === 'user' ? '60%' : '100%',
-                minWidth: 0,
-                alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                marginBottom: msg.role === 'user' ? 5 : 0,
-                gap: 2,
-                ...(isLiveMessage ? {} : CHAT_OFFSCREEN_MESSAGE_STYLE),
-              }}>
-                {/* Thinking block — show the pre-tools indicator only when there
-                    are no inline thinking content-blocks yet, so we don't render
-                    the first thinking block twice. */}
-                {(() => {
-                  const hasInlineThinking = (msg.contentBlocks ?? []).some(b => b.type === 'thinking')
-                  const legacyThinking = msg.thinking
-                    ? (!isLiveMessage && !msg.thinking.done ? { ...msg.thinking, done: true } : msg.thinking)
-                    : (isLiveMessage && !msg.content ? { content: '', done: false } : null)
-                  // Skip active legacy thinking for live messages — shown above input bar instead
-                  const showLegacy = !hasInlineThinking && Boolean(legacyThinking) && (!isLiveMessage || legacyThinking?.done)
-                  return showLegacy
-                    ? <ThinkingBlockView thinking={legacyThinking ?? { content: '', done: false }} />
-                    : null
-                })()}
-
-                {/* Interleaved content blocks — text and tool calls in stream order */}
-                {(msg.contentBlocks?.length ?? 0) > 0 ? (
-                    (() => {
-                      const elements: JSX.Element[] = []
-                      const blocks = msg.contentBlocks!
-                      let i = 0
-                      // Accumulator for a contiguous run of "chip-row" content
-                      // (thinking + tool blocks). Text blocks break the run and
-                      // cause the accumulator to flush into a single flex
-                      // container so thinking chips sit inline with tool chips
-                      // on the same wrapping row.
-                      let chipRow: JSX.Element[] = []
-                      let chipRowStartIdx = i
-                      const flushChipRow = () => {
-                        if (chipRow.length === 0) return
-                        elements.push(renderChipRow(chipRow, `chiprow-${chipRowStartIdx}`))
-                        chipRow = []
-                      }
-                      while (i < blocks.length) {
-                        const block = blocks[i]
-                        if (block.type === 'thinking') {
-                          if (chipRow.length === 0) chipRowStartIdx = i
-                          const tb = thinkingById.get(block.thinkingId)
-                          // Active (not-done) thinking blocks for the live message render
-                          // in the fixed zone above the input bar — skip them here so they
-                          // don't also appear inside the message scroll area. Once done they
-                          // fall through and render as the static "copy" in the chip row.
-                          if (tb && (!isLiveMessage || tb.done)) {
-                            chipRow.push(
-                              <ThinkingBlockView
-                                key={`think-${block.thinkingId}`}
-                                thinking={!isLiveMessage && !tb.done ? { ...tb, done: true } : tb}
-                              />
-                            )
-                          }
-                          i++
-                          continue
-                        }
-                        if (block.type === 'tool') {
-                          if (chipRow.length === 0) chipRowStartIdx = i
-                          // Collect consecutive tool blocks, then sub-group same-name completed ones
-                          const rawTools: ToolBlock[] = []
-                          while (i < blocks.length) {
-                            const cb = blocks[i]
-                            if (cb.type !== 'tool') break
-                            const tb = toolById.get(cb.toolId)
-                            if (tb && shouldRenderToolBlock(tb)) rawTools.push(tb)
-                            i++
-                          }
-                          // Grouping rules:
-                          //   - 3+ collapsible tool blocks all with the same name → "Read x6" chip.
-                          //   - 3+ collapsible tool blocks with mixed names → "Called N tools" chip.
-                          //   - Otherwise each chip renders inline.
-                          //   - Non-collapsible tools (running / file-change / checkpoints) always stay inline.
-                          const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length) && !isCheckpointToolBlock(tb) && !isDreamToolBlock(tb))
-                          const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
-                          const uniqueNames = new Set(collapsibleTools.map(t => t.name))
-                          const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
-                          const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
-                          let groupEmitted = false
-                          for (const tb of rawTools) {
-                            if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
-                              if (!groupEmitted) {
-                                groupEmitted = true
-                                if (useSameNameGroup) {
-                                  chipRow.push(<CollapsedToolGroup key={`grp-${tb.id}`} name={tb.name} blocks={collapsibleTools} />)
-                                } else {
-                                  chipRow.push(<MixedToolGroup key={`mgrp-${tb.id}`} blocks={collapsibleTools} />)
-                                }
-                              }
-                              continue
-                            }
-                            chipRow.push(<ToolBlockView key={tb.id} block={tb} isLive={isLiveMessage} />)
-                          }
-                          continue
-                        }
-                        {
-                          // Any non-chip block (text) flushes the pending chip row
-                          // first, then renders itself at block level.
-                          flushChipRow()
-                          const isLastBlock = i === blocks.length - 1
-                          elements.push(
-                            <div key={`text-${i}`} style={{
-                              background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                              border: msg.role === 'user' ? '1px solid transparent' : '0',
-                              boxShadow: msg.role === 'user'
-                                ? theme.mode === 'light'
-                                  ? `var(--cs-edge-shadow), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
-                                  : 'var(--cs-edge-shadow)'
-                                : undefined,
-                              borderRadius: 14,
-                              padding: '8px 12px',
-                              margin: msg.role === 'user' ? '2px' : 0,
-                              fontSize, lineHeight: fontLineHeight,
-                              wordBreak: 'break-word',
-                              color: theme.chat.text, position: 'relative',
-                              width: msg.role === 'user' ? 'calc(100% - 4px)' : '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
-                            }}>
-                              <ChatMessageContent text={block.text} isStreaming={isLiveMessage && isLastBlock} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
-                            </div>
-                          )
-                          i++
-                        }
-                      }
-                      // Flush any trailing chip row (e.g. stream ended on a
-                      // thinking or tool block without a subsequent text block).
-                      flushChipRow()
-                      // WorkingChipView moved to the fixed zone above the input bar.
-                      return elements
-                    })()
-                ) : (
-                  <>
-                    {/* Fallback: legacy layout for messages without contentBlocks */}
-                    {hasVisibleToolBlocks && (
-                      (() => {
-                        const out: JSX.Element[] = []
-                        const collapsibleTools = visibleToolBlocks.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length))
-                        const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
-                        const uniqueNames = new Set(collapsibleTools.map(t => t.name))
-                        const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
-                        const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
-                        let groupEmitted = false
-                        for (const tb of visibleToolBlocks) {
-                          if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
-                            if (!groupEmitted) {
-                              groupEmitted = true
-                              if (useSameNameGroup) {
-                                out.push(<CollapsedToolGroup key={`grp-${tb.id}`} name={tb.name} blocks={collapsibleTools} />)
-                              } else {
-                                out.push(<MixedToolGroup key={`mgrp-${tb.id}`} blocks={collapsibleTools} />)
-                              }
-                            }
-                            continue
-                          }
-                          out.push(<ToolBlockView key={tb.id} block={tb} isLive={isLiveMessage} />)
-                        }
-                        return renderChipRow(out, `legacy-tools-${msg.id}`)
-                      })()
-                    )}
-                    {msg.content && (
-                      <div style={{
-                        background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                        border: msg.role === 'user' ? '1px solid transparent' : '0',
-                        boxShadow: msg.role === 'user'
-                          ? theme.mode === 'light'
-                            ? `var(--cs-edge-shadow), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
-                            : 'var(--cs-edge-shadow)'
-                          : undefined,
-                        borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-                        padding: '8px 12px',
-                        margin: msg.role === 'user' ? '2px' : 0,
-                        fontSize, lineHeight: fontLineHeight,
-                        wordBreak: 'break-word',
-                        color: theme.chat.text, position: 'relative',
-                        width: msg.role === 'user' ? 'calc(100% - 4px)' : '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
-                      }}>
-                        <ChatMessageContent text={msg.content} isStreaming={isLiveMessage} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
-                        {isLiveMessage && msg.content.length === 0 && !hasVisibleToolBlocks && (
-                          <WorkingDots />
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-                {/* Cost/turns/time footer */}
-                {msg.role === 'assistant' && (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    fontSize: monoSize - 2, color: theme.chat.subtle, fontFamily: fontMono,
-                    padding: '0 4px',
-                    marginTop: -5,
-                    // Reserve a stable footer line so the layout doesn't jump
-                    // ~10px when streaming finishes and cost/turns/time first
-                    // appear. Without this the auto-pin shifts content up.
-                    minHeight: monoSize + 2,
-                    visibility: (!isLiveMessage && msg.cost != null) ? 'visible' : 'hidden',
-                  }}>
-                    {!isLiveMessage && msg.cost != null && (<>
-                    <span>${msg.cost.toFixed(4)}</span>
-                    {msg.turns != null && (
-                      <span>{msg.turns} turn{msg.turns !== 1 ? 's' : ''}</span>
-                    )}
-                    <span>{relativeTime(msg.timestamp)}</span>
-                    {/* Per-message speak / stop button — appears on every
-                        completed assistant message. Click speaks (or
-                        re-speaks) this message; if it's currently being
-                        spoken, click stops just that message. */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (ttsState.currentMessageId === msg.id) {
-                          ttsPlayer.stopMessage(msg.id)
-                        } else {
-                          void speakMessage({
-                            messageId: msg.id,
-                            text: msg.content,
-                            ttsProvider: voiceSettings.ttsProvider,
-                            ttsVoice: voiceSettings.ttsVoice,
-                            spokifyModel: voiceSettings.spokifyModel,
-                            force: true,
-                          })
-                        }
-                      }}
-                      onMouseDown={e => e.preventDefault()}
-                      title={ttsState.currentMessageId === msg.id ? 'Stop speaking' : 'Speak this message'}
-                      style={{
-                        marginLeft: 'auto', background: 'transparent', border: 'none',
-                        cursor: 'pointer', padding: 2, display: 'flex',
-                        color: ttsState.currentMessageId === msg.id ? theme.accent.base : theme.chat.subtle,
-                      }}
-                    >
-                      <Mic size={10} strokeWidth={2.2} />
-                    </button>
-                    </>)}
-                  </div>
-                )}
-                {/* User message time footer */}
-                {!isLiveMessage && msg.role === 'user' && (
-                  <div style={{
-                    fontSize: monoSize - 2, color: theme.chat.subtle, fontFamily: fontMono,
-                    padding: '0 6px', textAlign: 'right',
-                    marginTop: 2,
-                    lineHeight: 1.2,
-                    alignSelf: 'flex-end',
-                    overflow: 'visible',
-                  }}>
-                    {relativeTime(msg.timestamp)}
-                  </div>
-                )}
-
-              </div>
-              </BlockNoteAffordance>
-              )
-            }
-            flushCluster()
-            return nodes
-          })()}
         </div>
       </div>
 
