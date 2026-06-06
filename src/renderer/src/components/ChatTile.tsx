@@ -19,6 +19,8 @@ import { useAutoSpeak, speakMessage, bargeIn } from '../hooks/useAutoSpeak'
 import { ttsPlayer, type TtsPlayerState } from '../utils/ttsPlayer'
 import { useChatDictation } from '../hooks/useChatDictation'
 import { useChatExecutionHosts } from '../hooks/useChatExecutionHosts'
+import { useChatTileCoreState } from '../hooks/useChatTileCoreState'
+import type { ChatTilePersistedState, QueuedChatTurn } from './chat/chatTileTypes'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { WorkingDots } from './shared/streamdown-utils'
@@ -27,7 +29,7 @@ import { normalizeMessagesForMemory, estimateMessageChars } from './chat/message
 import {
   type BuiltinProvider, type ModelOption, type ModeOption,
   DEFAULT_MODELS, DEFAULT_PROVIDER_ID, PROVIDER_MODES, EXTENSION_PROVIDER_MODE,
-  THINKING_OPTIONS, PROVIDER_LABELS, isBuiltinProvider, getApproxContextWindowTokens,
+  THINKING_OPTIONS, PROVIDER_LABELS, getApproxContextWindowTokens,
   getApproxSystemOverheadTokens, resolveProviderModeId,
 } from '../config/providers'
 import { stripCapabilityPrefix, getAllNodeTools } from '../../../shared/nodeTools'
@@ -44,11 +46,7 @@ import { CUSTOMISATION_LOCATIONS_CHANGED_EVENT, type CustomisationLocationsChang
 import { PlanPane } from './chat/PlanPane'
 import { PlanChip } from './chat/PlanChip'
 import { splitInsightSegments } from './chat/insightSegments'
-import {
-  ToolPermissionProvider,
-  type ToolPermissionDecision,
-  type ToolPermissionRequest,
-} from './ai-elements/ToolPermission'
+import { ToolPermissionProvider } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
@@ -127,18 +125,6 @@ import { ClaudeIcon, CodexIcon, HermesIcon, OpenClawIcon, PiIcon } from './icons
 
 // --- Types -----------------------------------------------------------------------
 
-interface QueuedChatTurn {
-  id: string
-  content: string
-  preview: string
-  attachmentCount: number
-  createdAt: number
-  /** Optional parent turn id — when set, this turn renders indented beneath
-   *  its parent as a sub-item, representing work the user intends to run
-   *  *as part of* the parent turn rather than as its own top-level turn. */
-  parentId?: string | null
-}
-
 type LatestChangeDrawerState = {
   key: string
   messageId: string
@@ -149,33 +135,6 @@ type LatestChangeDrawerState = {
   deletions: number
   changeBlockCount: number
 }
-
-interface ChatTilePersistedState {
-  messages: ChatMessage[]
-  input: string
-  attachments: PendingAttachment[]
-  queuedTurns?: QueuedChatTurn[]
-  openChatSurfaces?: ActiveChatSurface[]
-  activeChatSurfaceId?: string | null
-  provider: string
-  model: string
-  mcpEnabled: boolean
-  mode: string
-  thinking: string
-  agentMode: boolean
-  autoAgentMode: boolean
-  preserveSessionSummary?: boolean
-  linkedSessionEntryId?: string | null
-  linkedSessionHint?: SessionEntryHint | null
-  hasEarlierMessages?: boolean
-  sessionId: string | null
-  jobId?: string | null
-  jobSequence?: number
-  cloudHostId?: string | null
-  isStreaming: boolean
-  executionTarget?: 'local' | 'cloud'
-}
-
 
 interface Props {
   tileId: string
@@ -655,66 +614,21 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     '--ct-font-title-size': `${fontSize}px`,
     '--ct-font-title-weight': String(Math.max(fontWeight, 600)),
   }), [fontLineHeight, fontMono, fontSans, fontSecondary, fontSize, fontWeight, secondaryLineHeight, secondarySize, secondaryWeight, theme])
-  const initialRuntimeStateRef = useRef<ChatTilePersistedState | null>(getChatTileRuntimeState<ChatTilePersistedState>(tileId))
-  const initialProvider = initialRuntimeStateRef.current?.provider ?? DEFAULT_PROVIDER_ID
-  const initialModel = initialRuntimeStateRef.current?.model
-    ?? (isBuiltinProvider(initialProvider)
-      ? DEFAULT_MODELS[initialProvider][0]?.id
-      : DEFAULT_MODELS[DEFAULT_PROVIDER_ID][0]?.id)
-    ?? ''
-  const initialMode = resolveProviderModeId(
-    initialProvider,
-    initialRuntimeStateRef.current?.mode ?? settings?.chatProviderModes?.[initialProvider],
-  )
-  const initialExecutionTarget = initialRuntimeStateRef.current?.executionTarget ?? 'local'
-  const initialCloudHostId = initialRuntimeStateRef.current?.cloudHostId ?? null
-  const initialJobId = initialRuntimeStateRef.current?.jobId ?? null
-  const initialJobSequence = initialRuntimeStateRef.current?.jobSequence ?? 0
-
-  const [messages, setMessages] = useState<ChatMessage[]>(() => initialRuntimeStateRef.current?.messages ?? [])
-  const [input, setInput] = useState(() => initialRuntimeStateRef.current?.input ?? '')
-  const [isStreaming, setIsStreaming] = useState(() => initialRuntimeStateRef.current?.isStreaming ?? false)
-  // Subtle liveness tracking — when streaming, we bump `lastActivityAtRef` on
-  // every message/block mutation so the quiet-indicator can show how long the
-  // server has been idle without forcing the whole transcript to rerender.
-  const lastActivityAtRef = useRef<number>(Date.now())
-  // Sparse ticker used only when a just-finished tool crosses the collapse
-  // grace window and the chip cluster needs to recompute once.
-  const [toolCollapseTick, setToolCollapseTick] = useState(0)
-  // Name-based chip collation: which collation summary chips the user has
-  // exploded back to their parts. Keyed `${clusterId}::${collationId}` so the
-  // same tool-name group in different clusters toggles independently.
-  const [explodedChipGroups, setExplodedChipGroups] = useState<ReadonlySet<string>>(() => new Set())
-  const toggleExplodedChipGroup = useCallback((clusterId: string, collationId: string) => {
-    const key = `${clusterId}::${collationId}`
-    setExplodedChipGroups(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }, [])
-  // Progressive tool-chip collapse: remember when each ToolBlock first
-  // flipped to 'done' so we can fold chips into a group summary only after
-  // a grace period (keeps just-finished chips readable for a few seconds
-  // before they get tucked into "Called N tools"). Populated by an effect
-  // that walks messages; cleared when the chip is gone from state.
-  const toolCompletedAtRef = useRef<Map<string, number>>(new Map())
-  // Inline tool-permission prompts. Keyed by tool_use id.
-  // `pending` holds active requests awaiting a user decision.
-  // `resolved` holds recently-answered ones so the chip collapses gracefully
-  // instead of vanishing the moment the user clicks.
-  const [pendingToolPermissions, setPendingToolPermissions] = useState<Map<string, ToolPermissionRequest>>(() => new Map())
-  const [resolvedToolPermissions, setResolvedToolPermissions] = useState<Map<string, ToolPermissionDecision>>(() => new Map())
-  const handleToolPermissionDecision = useCallback(async (args: { cardId: string; toolId: string; decision: ToolPermissionDecision }) => {
-    const res = await window.electron?.chat?.answerToolPermission?.(args)
-    return res ?? { ok: true }
-  }, [])
-  const [executionTarget, setExecutionTarget] = useState<'local' | 'cloud'>(() => initialExecutionTarget)
-  const [cloudHostId, setCloudHostId] = useState<string | null>(() => initialCloudHostId)
-  const [provider, setProvider] = useState<string>(() => initialProvider)
-  const [model, setModel] = useState(() => initialModel)
-  const [mcpEnabled, setMcpEnabled] = useState(() => initialRuntimeStateRef.current?.mcpEnabled ?? true)
+  const {
+    initialRuntimeStateRef, initialMode, initialJobSequence,
+    messages, setMessages, input, setInput, isStreaming, setIsStreaming,
+    executionTarget, setExecutionTarget, cloudHostId, setCloudHostId,
+    provider, setProvider, model, setModel, mcpEnabled, setMcpEnabled,
+    mode, setMode, thinking, setThinking, autoAgentMode, setAutoAgentMode,
+    attachments, setAttachments, queuedTurns, setQueuedTurns,
+    openChatSurfaces, setOpenChatSurfaces, activeChatSurfaceId, setActiveChatSurfaceId,
+    sessionId, setSessionId, jobId, setJobId, jobSequence, setJobSequence,
+    linkedSessionEntryId, setLinkedSessionEntryId, linkedSessionHint, setLinkedSessionHint,
+    preserveSessionSummary, setPreserveSessionSummary, hasEarlierMessages, setHasEarlierMessages,
+    lastActivityAtRef, toolCollapseTick, setToolCollapseTick, explodedChipGroups, toggleExplodedChipGroup,
+    pendingToolPermissions, setPendingToolPermissions, resolvedToolPermissions, setResolvedToolPermissions,
+    handleToolPermissionDecision, toolCompletedAtRef,
+  } = useChatTileCoreState({ tileId, settings })
   const [workspaceSkills, setWorkspaceSkills] = useState<SkillDefinition[]>([])
   const mcpServers = useMCPServers()
   const [disabledServers, setDisabledServers] = useState<Set<string>>(new Set())
@@ -894,13 +808,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
     return () => { for (const u of unsubs) u() }
   }, [connectedPeerSignature, tileId])
-  const [mode, setMode] = useState(() => initialMode)
   // Tracks the permission mode we last pushed to the running Claude query so
   // user-initiated mid-stream mode switches (Default -> Bypass etc.) propagate
   // into the active canUseTool closure via chat:setPermissionMode.
   const lastPushedModeRef = useRef<string>(initialMode)
-  const [thinking, setThinking] = useState(() => initialRuntimeStateRef.current?.thinking ?? 'adaptive')
-  const [autoAgentMode, setAutoAgentMode] = useState(() => initialRuntimeStateRef.current?.autoAgentMode ?? false)
   const effectiveAgentMode = Boolean(isConnected || isAutoConnected || autoAgentMode)
   const [showModelMenu, setShowModelMenu] = useState(false)
   const [showProviderMenu, setShowProviderMenu] = useState(false)
@@ -910,11 +821,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [showLocationMenu, setShowLocationMenu] = useState(false)
   const [showBranchMenu, setShowBranchMenu] = useState(false)
   const [showContextMenu, setShowContextMenu] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(() => initialRuntimeStateRef.current?.sessionId ?? null)
-  const [linkedSessionEntryId, setLinkedSessionEntryId] = useState<string | null>(() => initialRuntimeStateRef.current?.linkedSessionEntryId ?? null)
-  const [linkedSessionHint, setLinkedSessionHint] = useState<SessionEntryHint | null>(() => initialRuntimeStateRef.current?.linkedSessionHint ?? null)
-  const [preserveSessionSummary, setPreserveSessionSummary] = useState<boolean>(() => initialRuntimeStateRef.current?.preserveSessionSummary === true)
-  const [hasEarlierMessages, setHasEarlierMessages] = useState<boolean>(() => initialRuntimeStateRef.current?.hasEarlierMessages === true)
   const pagedLinkedHistoryEnabled = canUsePagedLinkedHistory(linkedSessionEntryId, linkedSessionHint, sessionId)
 
   // Publish this tile's streaming state so the sidebar can swap the row icon
@@ -932,8 +838,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [earlierLoadError, setEarlierLoadError] = useState<string | null>(null)
   const pendingHistoryPrependRef = useRef<{ previousHeight: number; previousTop: number } | null>(null)
   const loadEarlierMessagesRef = useRef<() => Promise<void>>(async () => {})
-  const [jobId, setJobId] = useState<string | null>(() => initialJobId)
-  const [jobSequence, setJobSequence] = useState<number>(() => initialJobSequence)
   const { localExecutionLabel, remoteHosts, activeCloudHost, executionDisplayLabel, executionDisplayDetail } = useChatExecutionHosts({
     executionPreference: settings?.execution ?? null,
     executionTarget,
@@ -943,13 +847,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [openclawAgents, setOpenclawAgents] = useState<ModelOption[]>(DEFAULT_MODELS.openclaw)
   const [csagentModels, setCsagentModels] = useState<ModelOption[]>(DEFAULT_MODELS.csagent)
   const [modelFilter, setModelFilter] = useState('')
-  const [attachments, setAttachments] = useState<PendingAttachment[]>(() => initialRuntimeStateRef.current?.attachments ?? [])
   const hasSendableDraft = input.trim().length > 0 || attachments.length > 0 || implicitPeerImageAttachments.length > 0
   // Chat-surface extensions (e.g. Sketch, Builder) mounted above the composer.
   // Multiple surfaces can stay open as tabs so a sketch can sit beside its
   // enhanced builder output inside the same chat.
-  const [openChatSurfaces, setOpenChatSurfaces] = useState<ActiveChatSurface[]>(() => normalizePersistedChatSurfaces(initialRuntimeStateRef.current?.openChatSurfaces))
-  const [activeChatSurfaceId, setActiveChatSurfaceId] = useState<string | null>(() => initialRuntimeStateRef.current?.activeChatSurfaceId ?? null)
   const [chatSurfaceMenu, setChatSurfaceMenu] = useState<ChatSurfaceMenuEntry[]>([])
   const openChatSurfacesRef = useRef<ActiveChatSurface[]>([])
   useEffect(() => { openChatSurfacesRef.current = openChatSurfaces }, [openChatSurfaces])
@@ -987,7 +888,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       setActiveChatSurfaceId(openChatSurfaces[openChatSurfaces.length - 1]?.instanceId ?? null)
     }
   }, [activeChatSurfaceId, openChatSurfaces])
-  const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>(() => initialRuntimeStateRef.current?.queuedTurns ?? [])
   // Drag-reorder state for the queued-turn list. A row can be dropped above
   // ('before'), below ('after'), or onto ('into') another row — the last case
   // nests it as a child of that row, rendered indented underneath.
