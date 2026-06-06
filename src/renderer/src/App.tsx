@@ -9,6 +9,19 @@ import { useExtensions } from './hooks/useExtensions'
 import { useLayoutTemplates } from './hooks/useLayoutTemplates'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
 import { useDiscoveryGraph } from './hooks/useDiscoveryGraph'
+import {
+  useCanvasEngine,
+  useCanvasDragSync,
+  useCanvasPointerHandlers,
+  useCanvasExpandedGroup,
+  useConnectionHandleHover,
+  useCanvasContextMenu,
+  useTileContextMenu,
+  useLockConnection,
+  useEnforceTileMinimumSizes,
+  useLockedConnectionHelpers,
+  type CanvasDragState,
+} from './hooks/useCanvasEngine'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
@@ -111,54 +124,8 @@ const LazySkillInstallModal = React.lazy(() => import('./components/SkillInstall
 const LazyCommandPalette = React.lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
 const LazyOnboardingOverlay = React.lazy(() => import('./components/OnboardingOverlay').then(m => ({ default: m.OnboardingOverlay })))
 
-type DragState =
-  | { type: null }
-  | { type: 'pan'; startX: number; startY: number; initTx: number; initTy: number }
-  | { type: 'tile'; tileId: string; startX: number; startY: number; initX: number; initY: number; groupSnapshots: { id: string; x: number; y: number }[] }
-  | { type: 'resize'; tileId: string; dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw'; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number }
-  | { type: 'select'; startWx: number; startWy: number; curWx: number; curWy: number }
-  | { type: 'group'; groupId: string; startX: number; startY: number; snapshots: { id: string; x: number; y: number }[]; initLayoutBounds?: { x: number; y: number; w: number; h: number } }
-  | { type: 'group-resize'; groupId: string; dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw'; startX: number; startY: number; initBounds: { x: number; y: number; w: number; h: number }; snapshots: { id: string; x: number; y: number; width: number; height: number }[] }
-  | { type: 'connection'; sourceTileId: string; startX: number; startY: number; side: AnchorPoint['side']; anchor: AnchorPoint; current: { x: number; y: number }; targetTileId: string | null }
-
 const GRID = 20 // default, overridden by settings at runtime
 const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
-const ALIGN_GUIDE_THRESH = 6
-
-type AlignmentGuide = { x?: number; y?: number }
-
-function computeAlignmentGuides(
-  newX: number,
-  newY: number,
-  w: number,
-  h: number,
-  others: TileState[],
-): AlignmentGuide[] {
-  const newGuides: AlignmentGuide[] = []
-  for (const o of others) {
-    const dx_checks: [number, number][] = [
-      [newX, o.x], [newX, o.x + o.width / 2 - w / 2], [newX, o.x + o.width - w],
-      [newX + w / 2, o.x + o.width / 2], [newX + w, o.x], [newX + w, o.x + o.width],
-    ]
-    for (const [a, b] of dx_checks) {
-      if (Math.abs(a - b) < ALIGN_GUIDE_THRESH) newGuides.push({ x: b })
-    }
-    const dy_checks: [number, number][] = [
-      [newY, o.y], [newY, o.y + o.height / 2 - h / 2], [newY, o.y + o.height - h],
-      [newY + h / 2, o.y + o.height / 2], [newY + h, o.y], [newY + h, o.y + o.height],
-    ]
-    for (const [a, b] of dy_checks) {
-      if (Math.abs(a - b) < ALIGN_GUIDE_THRESH) newGuides.push({ y: b })
-    }
-  }
-  const seen = new Set<string>()
-  return newGuides.filter(g => {
-    const k = g.x !== undefined ? `x:${g.x}` : `y:${g.y}`
-    if (seen.has(k)) return false
-    seen.add(k)
-    return true
-  })
-}
 
 function findFirstLeafId(node: PanelNode): string | null {
   if (node.type === 'leaf') return node.id
@@ -1014,28 +981,11 @@ function App(): JSX.Element {
   const [tiles, setTiles] = useState<TileState[]>([])
   const [groups, setGroups] = useState<GroupState[]>([])
   const [lockedConnections, setLockedConnections] = useState<Array<{ sourceTileId: string; targetTileId: string }>>([])
-  const [viewport, setViewport] = useState({ tx: 0, ty: 0, zoom: 1 })
-  const prevZoomRef = React.useRef(1)
-  const panVelocityRef = useRef({ vx: 0, vy: 0 })
-  const panLastPos = useRef({ x: 0, y: 0, t: 0 })
-  const panInertiaRaf = useRef<number>(0)
-  const snapGuideRafRef = useRef<number | null>(null)
-  const pendingTileDragRef = useRef<{
-    tileId: string
-    groupSnapshots: { id: string; x: number; y: number }[]
-    newX: number
-    newY: number
-    ddx: number
-    ddy: number
-    width: number
-    height: number
-  } | null>(null)
-  const [nextZIndex, setNextZIndex] = useState(1)
   const [selectedTileId, setSelectedTileId] = useState<string | null>(null)
   const [selectedTileIds, setSelectedTileIds] = useState<Set<string>>(new Set())
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  const [dragState, setDragState] = useState<DragState>({ type: null })
+  const [dragState, setDragState] = useState<CanvasDragState>({ type: null })
   const [showMCP, setShowMCP] = useState(false)
   const [showSettings, setShowSettings] = useState<string | false>(false)
   const [showExtensionsGallery, setShowExtensionsGallery] = useState(false)
@@ -1055,12 +1005,9 @@ function App(): JSX.Element {
   // Non-layout group expanded as a fullscreen sub-canvas. Members stay free-floating.
   const [expandedCanvasGroupId, setExpandedCanvasGroupId] = useState<string | null>(null)
   const expandedCanvasGroupIdRef = useRef<string | null>(null)
-  const expandedCanvasPriorViewportRef = useRef<{ tx: number; ty: number; zoom: number } | null>(null)
   // Forward ref so early-defined effects (e.g. Esc handler) can call the
   // canvas-expand exit before its useCallback is declared further down.
   const exitCanvasExpandedRef = useRef<() => void>(() => {})
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const persistCanvasStateRef = useRef<((...args: any[]) => void) | null>(null)
   const savedLayoutRef = useRef<PanelNode | null>(null)
   const panelLayoutRef = useRef<PanelNode | null>(null)
   const activePanelIdRef = useRef<string | null>(null)
@@ -1076,7 +1023,6 @@ function App(): JSX.Element {
   const [autoConnectionsEnabled] = useState(false)
   const [canvasPointerWorld, setCanvasPointerWorld] = useState<{ x: number; y: number } | null>(null)
   const [hoveredConnectionHandle, setHoveredConnectionHandle] = useState<{ tileId: string; side: AnchorPoint['side'] } | null>(null)
-  const connectionHandleHideTimerRef = useRef<number | null>(null)
   const [showAgentSetup, setShowAgentSetup] = useState(false)
   // .skill install dialog — populated when user drops a .skill file on the
   // canvas or double-clicks one in Finder (forwarded via `skill:file-opened`
@@ -1331,10 +1277,6 @@ function App(): JSX.Element {
   const ungroupTilesRef = useRef<(groupId: string) => void>(() => {})
   const ungroupAllRef = useRef<(groupId: string) => void>(() => {})
 
-  // Undo/redo history stacks — each entry is a full canvas snapshot
-  type HistoryEntry = { tiles: TileState[]; groups: GroupState[] }
-  const historyBack = useRef<HistoryEntry[]>([])
-  const historyForward = useRef<HistoryEntry[]>([])
   // Refs that always reflect the latest tiles/groups state (for use in keyboard handlers)
   const tilesRef = useRef<TileState[]>(tiles)
   const groupsRef = useRef<GroupState[]>(groups)
@@ -1344,34 +1286,9 @@ function App(): JSX.Element {
   const suppressedConnectionsRef = useRef(suppressedConnections)
   useEffect(() => { suppressedConnectionsRef.current = suppressedConnections }, [suppressedConnections])
 
-  const viewportRef = useRef(viewport)
-  const nextZIndexRef = useRef(nextZIndex)
-  const viewportAnimationFrameRef = useRef<number | null>(null)
-  const pendingViewportRef = useRef(viewport)
-
-  // Keep tilesRef / groupsRef / viewportRef / nextZIndexRef in sync with state
+  // Keep tilesRef / groupsRef in sync with state
   tilesRef.current = tiles
   groupsRef.current = groups
-  viewportRef.current = viewport
-  pendingViewportRef.current = viewport
-  nextZIndexRef.current = nextZIndex
-
-  const _scheduleViewportUpdate = useCallback((nextViewport: typeof viewport) => {
-    pendingViewportRef.current = nextViewport
-    if (viewportAnimationFrameRef.current !== null) return
-    viewportAnimationFrameRef.current = requestAnimationFrame(() => {
-      viewportAnimationFrameRef.current = null
-      setViewport(pendingViewportRef.current)
-    })
-  }, [])
-  void _scheduleViewportUpdate
-
-  useEffect(() => () => {
-    if (viewportAnimationFrameRef.current !== null) {
-      cancelAnimationFrame(viewportAnimationFrameRef.current)
-      viewportAnimationFrameRef.current = null
-    }
-  }, [])
 
   // Context menus
   type CtxMenu = { x: number; y: number; items: MenuItem[] }
@@ -1379,6 +1296,55 @@ function App(): JSX.Element {
   const closeCtx = useCallback(() => setCtxMenu(null), [])
 
   const canvasRef = useRef<HTMLDivElement>(null)
+
+  const canvasEngine = useCanvasEngine({
+    workspace,
+    canvasRef,
+    tiles,
+    groups,
+    panelLayout,
+    activePanelId,
+    expandedTileId,
+    persistRefs: {
+      tilesRef,
+      groupsRef,
+      lockedConnectionsRef,
+      panelLayoutRef,
+      savedLayoutRef,
+      activePanelIdRef,
+      expandedTileIdRef,
+      expandedCanvasGroupIdRef,
+    },
+    setTiles,
+    setGroups,
+    isEditableTarget,
+  })
+
+  const {
+    viewport,
+    setViewport,
+    viewportRef,
+    nextZIndex,
+    setNextZIndex,
+    nextZIndexRef,
+    expandedCanvasPriorViewportRef,
+    persistCanvasStateRef,
+    panLastPos,
+    screenToWorld,
+    worldToScreen: worldToScreenPoint,
+    viewportCenter,
+    saveCanvas,
+    persistCanvasState,
+    zoomToFitArrangedTiles,
+    panToTile,
+    toggleZoomOne,
+    cancelPanInertia,
+    findManualConnectionTarget,
+    restoreViewport,
+    resetViewportState,
+    handleWheel,
+  } = canvasEngine
+
   const dotGlowSmallRef = useRef<HTMLDivElement>(null)
   const dotGlowLargeRef = useRef<HTMLDivElement>(null)
   const discoveryGlowRef = useRef<HTMLDivElement>(null)
@@ -1398,9 +1364,7 @@ function App(): JSX.Element {
   const panelTileIdsRef = useRef<Set<string>>(new Set())
   const canvasGlowRafRef = useRef<number | null>(null)
   const canvasGlowPointRef = useRef<{ clientX: number; clientY: number } | null>(null)
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const spaceHeld = useRef(false)
-  const skipHistory = useRef(false)
   const canvasGlowEnabled = settings.canvasGlowEnabled
   const canvasGlowRadius = Math.max(50, Math.min(200, settings.canvasGlowRadius ?? 120))
   const cursorGlowBrightnessScale = 1 + ((viewport.zoom - 1) / 0.2) * 0.1
@@ -1471,13 +1435,12 @@ function App(): JSX.Element {
     setTiles([])
     setGroups([])
     setLockedConnections([])
-    setViewport({ tx: 0, ty: 0, zoom: 1 })
-    setNextZIndex(1)
+    resetViewportState()
     savedLayoutRef.current = emptyPanel
     setPanelLayout(emptyPanel)
     setActivePanelId(emptyPanel.id)
     setExpandedTileId(null)
-  }, [])
+  }, [resetViewportState])
 
   // ─── Load workspace + canvas state on mount ───────────────────────────────
   useEffect(() => {
@@ -1646,9 +1609,7 @@ function App(): JSX.Element {
           setTiles(savedTiles)
           setGroups(saved.groups ?? [])
           setLockedConnections(saved.lockedConnections ?? [])
-          setViewport(saved.viewport
-            ? { tx: saved.viewport.tx, ty: saved.viewport.ty, zoom: saved.viewport.zoom }
-            : { tx: 0, ty: 0, zoom: 1 })
+          restoreViewport(saved.viewport)
           setNextZIndex(saved.nextZIndex ?? 1)
           savedLayoutRef.current = sanitizedPanel.layout
           setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
@@ -1913,104 +1874,6 @@ function App(): JSX.Element {
     }
   }, [])
 
-  // ─── Cmd+0 reset zoom, Cmd+=/- UI zoom ─────────────────────────────────────
-  // We drive UI zoom via webFrame directly (exposed in preload) because
-  // Electron's menu-role accelerators for zoomIn/zoomOut/resetZoom don't
-  // fire reliably on macOS under our key listener setup — Cmd+Minus in
-  // particular was a no-op, and resetZoom only cleared the canvas viewport
-  // without touching the window UI zoom level.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return
-      if (e.key === '0') {
-        e.preventDefault()
-        setViewport(prev => ({ ...prev, zoom: 1 }))
-        window.electron.zoom.setLevel(0)
-      } else if (e.key === '=' || e.key === '+') {
-        e.preventDefault()
-        window.electron.zoom.setLevel(window.electron.zoom.getLevel() + 0.5)
-      } else if (e.key === '-') {
-        e.preventDefault()
-        window.electron.zoom.setLevel(window.electron.zoom.getLevel() - 0.5)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  // ─── Auto-save canvas state ───────────────────────────────────────────────
-  const persistCanvasState = useCallback((tileList: TileState[], vp: { tx: number; ty: number; zoom: number }, nz: number, grps?: GroupState[]) => {
-    if (!workspace) return
-    const resolvedGroups = grps ?? groupsRef.current
-
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      const state: CanvasState = {
-        tiles: tileList,
-        groups: resolvedGroups,
-        viewport: vp,
-        nextZIndex: nz,
-        panelLayout: panelLayoutRef.current ?? savedLayoutRef.current,
-        activePanelId: activePanelIdRef.current,
-        tabViewActive: Boolean(panelLayoutRef.current),
-        expandedTileId: expandedTileIdRef.current,
-        expandedCanvasGroupId: expandedCanvasGroupIdRef.current,
-        expandedCanvasPriorViewport: expandedCanvasPriorViewportRef.current,
-        lockedConnections: lockedConnectionsRef.current.length > 0 ? lockedConnectionsRef.current : undefined,
-      }
-      window.electron.canvas.save(workspace.id, state)
-    }, 500)
-  }, [workspace])
-
-  const saveCanvas = useCallback((tileList: TileState[], vp: { tx: number; ty: number; zoom: number }, nz: number, grps?: GroupState[]) => {
-    if (!workspace) return
-    // Use explicitly passed groups, or fall back to current groups state
-    const resolvedGroups = grps ?? groupsRef.current
-
-    // Push to undo history unless this save was triggered by undo/redo itself
-    if (!skipHistory.current) {
-      historyBack.current.push({ tiles: tilesRef.current, groups: groupsRef.current })
-      if (historyBack.current.length > 50) historyBack.current.shift()
-      historyForward.current = []
-    }
-
-    persistCanvasState(tileList, vp, nz, resolvedGroups)
-  }, [workspace, persistCanvasState])
-
-  // ─── Coordinate helpers ───────────────────────────────────────────────────
-  useEffect(() => {
-    if (!workspace) return
-    persistCanvasState(tiles, viewport, nextZIndex, groups)
-  }, [workspace, panelLayout, activePanelId, expandedTileId, persistCanvasState, tiles, viewport, nextZIndex, groups])
-
-  const screenToWorld = useCallback((sx: number, sy: number) => {
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
-    return {
-      x: (sx - rect.left - viewport.tx) / viewport.zoom,
-      y: (sy - rect.top - viewport.ty) / viewport.zoom
-    }
-  }, [viewport])
-
-  const viewportCenter = useCallback(() => {
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 200, y: 100 }
-    return screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2)
-  }, [screenToWorld])
-
-  const worldToScreenPoint = useCallback((point: { x: number; y: number }) => ({
-    x: point.x * viewport.zoom + viewport.tx,
-    y: point.y * viewport.zoom + viewport.ty,
-  }), [viewport])
-
-  const _worldToScreenRect = useCallback((tile: TileState) => ({
-    left: tile.x * viewport.zoom + viewport.tx,
-    top: tile.y * viewport.zoom + viewport.ty,
-    width: tile.width * viewport.zoom,
-    height: tile.height * viewport.zoom,
-  }), [viewport])
-  void _worldToScreenRect
-
   const triggerDiscoveryPulse = useCallback((tileId: string, tileList: TileState[]) => {
     if (!autoConnectionsEnabled) return
     const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
@@ -2044,44 +1907,16 @@ function App(): JSX.Element {
     discoveryTimeoutsRef.current.push(timeout)
   }, [autoConnectionsEnabled, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge])
 
-  const findManualConnectionTarget = useCallback((sourceTileId: string, point: { x: number; y: number }): string | null => {
-    const snapPadding = 34 / Math.max(0.25, viewportRef.current.zoom)
-    const candidates = tilesRef.current
-      .filter(tile => tile.id !== sourceTileId && !panelTileIdsRef.current.has(tile.id))
-      .filter(tile => (
-        point.x >= tile.x - snapPadding
-        && point.x <= tile.x + tile.width + snapPadding
-        && point.y >= tile.y - snapPadding
-        && point.y <= tile.y + tile.height + snapPadding
-      ))
-      .map(tile => ({
-        tile,
-        distance: Math.hypot(point.x - getTileCenter(tile).x, point.y - getTileCenter(tile).y),
-      }))
-      .sort((a, b) => a.distance - b.distance)
-    return candidates[0]?.tile.id ?? null
-  }, [])
-
-  const lockConnection = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    if (a === b) return
-    setSuppressedConnections(prev => {
-      const next = new Set(prev)
-      next.delete(`${a}::${b}`)
-      return next
-    })
-    setLockedConnections(prev => {
-      const alreadyLocked = prev.some(lc => {
-        const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-        return la === a && lb === b
-      })
-      if (alreadyLocked) return prev
-      const next = [...prev, { sourceTileId: a, targetTileId: b }]
-      lockedConnectionsRef.current = next
-      setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, groupsRef.current), 0)
-      return next
-    })
-  }, [persistCanvasState])
+  const lockConnection = useLockConnection({
+    persistCanvasState,
+    tilesRef,
+    groupsRef,
+    viewportRef,
+    nextZIndexRef,
+    lockedConnectionsRef,
+    setLockedConnections,
+    setSuppressedConnections,
+  })
 
   const getInitialTileSize = useCallback((type: TileState['type']) => {
     const configured = settings.defaultTileSizes[type]
@@ -2377,26 +2212,15 @@ function App(): JSX.Element {
     return () => window.removeEventListener(CODESURF_OPEN_LINK_EVENT, handleOpenLink as EventListener)
   }, [addTile, settings.linkOpenMode])
 
-  useEffect(() => {
-    if (!tiles.some(tile => tile.width < getMinTileWidth(tile) || tile.height < getMinTileHeight(tile))) return
-    setTiles(prev => {
-      let changed = false
-      const updated = prev.map(tile => {
-        const minW = getMinTileWidth(tile)
-        const minH = getMinTileHeight(tile)
-        if (tile.width >= minW && tile.height >= minH) return tile
-        changed = true
-        return {
-          ...tile,
-          width: Math.max(tile.width, minW),
-          height: Math.max(tile.height, minH),
-        }
-      })
-      if (!changed) return prev
-      saveCanvas(updated, viewport, nextZIndex)
-      return updated
-    })
-  }, [tiles, viewport, nextZIndex, saveCanvas])
+  useEnforceTileMinimumSizes({
+    tiles,
+    viewport,
+    nextZIndex,
+    saveCanvas,
+    setTiles,
+    getMinTileWidth,
+    getMinTileHeight,
+  })
 
   // ─── MCP canvas tool handlers (must be after addTile) ────────────────────
   useEffect(() => {
@@ -2518,539 +2342,66 @@ function App(): JSX.Element {
     return () => window.removeEventListener(CODESURF_OPEN_CHAT_SURFACE_EVENT, handleOpenChatSurfaceRequest as EventListener)
   }, [activeChatTileId, addTile, bringToFront, tiles])
 
-  // ─── Canvas mouse handlers ────────────────────────────────────────────────
-  const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
-    // Block if click originated from a tile or UI element (they stopPropagation — so anything
-    // that reaches here is either the canvas bg, world container, or group frames)
-    const t = e.target as HTMLElement
-    // If the target has a tile chrome ancestor, ignore (tiles call stopPropagation on titlebar)
-    if (t.closest('[data-tile-chrome]')) return
-    e.preventDefault()
-    const isPan = e.button === 1 || (e.button === 0 && (e.metaKey || spaceHeld.current))
-    if (isPan) {
-      cancelAnimationFrame(panInertiaRaf.current)
-      panVelocityRef.current = { vx: 0, vy: 0 }
-      panLastPos.current = { x: e.clientX, y: e.clientY, t: performance.now() }
-      setDragState({ type: 'pan', startX: e.clientX, startY: e.clientY, initTx: viewport.tx, initTy: viewport.ty })
-      setSelectedTileId(null)
-      return
-    }
-    if (e.button === 0) {
-      // Start rubber-band select on empty canvas
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (!rect) return
-      const wx = (e.clientX - rect.left - viewport.tx) / viewport.zoom
-      const wy = (e.clientY - rect.top - viewport.ty) / viewport.zoom
-      setDragState({ type: 'select', startWx: wx, startWy: wy, curWx: wx, curWy: wy })
-      setSelectedTileIds(new Set())
-      setSelectedTileId(null)
-    }
-  }, [viewport])
+  const { handleCanvasMouseDown, handleConnectionMouseDown, handleResizeMouseDown, handleCanvasDoubleClick, handleTileMouseDown } = useCanvasPointerHandlers({
+    canvasRef,
+    viewport,
+    setDragState,
+    setSelectedTileId,
+    setSelectedTileIds,
+    panLastPos,
+    cancelPanInertia,
+    screenToWorld,
+    spaceHeld,
+    bringToFront,
+    getConnectionHandlePoint: (tile, side) => getConnectionHandlePoint(tile, side),
+    panelLayout,
+    addTile,
+  })
 
-  // Double-click on blank canvas creates a terminal (not in tab view, not over a tile)
-  const handleCanvasDoubleClick = useCallback((e: React.MouseEvent) => {
-    if (panelLayout) return
-    if (e.target !== e.currentTarget) return
-    const world = screenToWorld(e.clientX, e.clientY)
-    addTile('terminal', undefined, world)
-  }, [screenToWorld, addTile, panelLayout])
+  const { showConnectionHandleForSide, scheduleConnectionHandleHide } = useConnectionHandleHover({
+    setHoveredConnectionHandle,
+  })
 
-  // Right-click on empty canvas
-  const handleCanvasContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    if (panelLayout) return
-    const world = screenToWorld(e.clientX, e.clientY)
-    const hitGroup = groups.find(g => {
-      const b = groupBoundsRef.current(g.id)
-      return b && world.x >= b.x && world.x <= b.x + b.w && world.y >= b.y && world.y <= b.y + b.h
-    })
-    const items: MenuItem[] = [
-      { label: 'New Terminal', action: () => addTile('terminal', undefined, world) },
-      { label: 'New Note',     action: () => addTile('note',     undefined, world) },
-      { label: 'New Browser',  action: () => addTile('browser',  undefined, world) },
-      { label: 'New Board',    action: () => addTile('kanban',   undefined, world) },
-    ]
-    // Extension tile types
-    if (pinnedCanvasExtensionTiles.length > 0) {
-      items.push({ label: '', action: () => {}, divider: true })
-      for (const ext of pinnedCanvasExtensionTiles) {
-        items.push({
-          label: ext.label,
-          action: () => addTile(ext.type as TileType, undefined, world),
-        })
-      }
-    }
-    if (clipboard.current.length > 0) {
-      items.push({ label: '', action: () => {}, divider: true })
-      items.push({ label: 'Paste', action: () => pasteTilesRef.current(world) })
-      if (hitGroup) {
-        items.push({ label: 'Paste into group', action: () => pasteTilesRef.current(world, hitGroup.id) })
-      }
-    }
-    if (selectedTileIds.size >= 2) {
-      items.push({ label: '', action: () => {}, divider: true })
-      items.push({ label: `Group ${selectedTileIds.size} blocks`, action: () => groupSelectedTilesRef.current() })
-    }
-    setCtxMenu({ x: e.clientX, y: e.clientY, items })
-  }, [screenToWorld, addTile, selectedTileIds, groups, panelLayout, pinnedCanvasExtensionTiles])
+  const handleCanvasContextMenu = useCanvasContextMenu({
+    screenToWorld,
+    panelLayout,
+    groups,
+    groupBoundsRef,
+    addTile,
+    pinnedCanvasExtensionTiles,
+    clipboardRef: clipboard,
+    pasteAt: (pos, groupId) => pasteTilesRef.current(pos, groupId),
+    selectedTileIds,
+    groupSelectedTiles: () => groupSelectedTilesRef.current(),
+    setCtxMenu,
+  })
 
-  // Right-click on a tile titlebar
-  const handleTileContextMenu = useCallback((e: React.MouseEvent, tile: TileState) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const items: MenuItem[] = [
-      { label: 'Duplicate', action: () => duplicateTilesRef.current([tile.id]) },
-      { label: 'Copy',      action: () => { setSelectedTileId(tile.id); setSelectedTileIds(new Set()); copyTilesRef.current(false) } },
-      { label: 'Cut',       action: () => { setSelectedTileId(tile.id); setSelectedTileIds(new Set()); copyTilesRef.current(true) } },
-    ]
-    // Paste options
-    if (clipboard.current.length > 0) {
-      items.push({ label: '', action: () => {}, divider: true })
-      items.push({ label: 'Paste', action: () => pasteTilesRef.current() })
-      if (tile.groupId) {
-        items.push({ label: 'Paste into this group', action: () => pasteTilesRef.current(undefined, tile.groupId) })
-      }
-    }
-    items.push({ label: '', action: () => {}, divider: true })
-    // Group membership
-    if (tile.groupId) {
-      items.push({ label: 'Remove from group', action: () => {
-        setTiles(prev => {
-          const updated = prev.map(t => t.id === tile.id ? { ...t, groupId: undefined } : t)
-          saveCanvas(updated, viewport, nextZIndex)
-          return updated
-        })
-      }})
-      items.push({ label: 'Ungroup',     action: () => ungroupTilesRef.current(tile.groupId!) })
-      items.push({ label: 'Ungroup All', action: () => ungroupAllRef.current(tile.groupId!) })
-      items.push({ label: '', action: () => {}, divider: true })
-    }
-    // Add to group options — show available groups this tile isn't already in
-    const availableGroups = groups.filter(g => g.id !== tile.groupId)
-    if (availableGroups.length > 0) {
-      availableGroups.forEach(g => {
-        items.push({
-          label: `Add to ${g.label ?? g.id.slice(-6)}`,
-          action: () => {
-            setTiles(prev => {
-              const updated = prev.map(t => t.id === tile.id ? { ...t, groupId: g.id } : t)
-              saveCanvas(updated, viewport, nextZIndex)
-              return updated
-            })
-          }
-        })
-      })
-      items.push({ label: '', action: () => {}, divider: true })
-    }
-    if (tile.type === 'file' && tile.filePath && workspace?.path && !tile.filePath.startsWith(workspace.path)) {
-      items.push({
-        label: 'Add to workspace',
-        action: () => { void importFileToWorkspace(tile.filePath!, tile.id) }
-      })
-      items.push({ label: '', action: () => {}, divider: true })
-    }
-    // Chrome toggle — media files open chromeless; this restores titlebar +
-    // browser navbar (for browser tiles). Toggling them together keeps the
-    // two states coherent.
-    const currentlyChromeless = !!tile.hideTitlebar || !!tile.hideNavbar
-    items.push({
-      label: currentlyChromeless ? 'Show Controls' : 'Hide Controls',
-      action: () => {
-        setTiles(prev => {
-          const updated = prev.map(t => t.id === tile.id
-            ? { ...t, hideTitlebar: !currentlyChromeless, hideNavbar: !currentlyChromeless }
-            : t)
-          saveCanvas(updated, viewport, nextZIndex)
-          return updated
-        })
-      }
-    })
-    items.push({ label: '', action: () => {}, divider: true })
-    items.push({ label: 'Close', action: () => closeTile(tile.id), danger: true })
-    setCtxMenu({ x: e.clientX, y: e.clientY, items })
-  }, [closeTile, groups, viewport, nextZIndex, saveCanvas])
-
-  const handleTileMouseDown = useCallback((e: React.MouseEvent, tile: TileState) => {
-    e.stopPropagation()
-    bringToFront(tile.id)
-    // Tiles drag individually — even when grouped. The group itself can be
-    // dragged via its label bar or background. The group's bounds are
-    // computed from member positions, so moving a tile inside (or outside)
-    // its group's previous bounds expands/contracts the dashed frame.
-    setDragState({
-      type: 'tile',
-      tileId: tile.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      initX: tile.x,
-      initY: tile.y,
-      groupSnapshots: [],
-    })
-  }, [bringToFront])
-
-  const handleConnectionMouseDown = useCallback((e: React.MouseEvent, tile: TileState, side: AnchorPoint['side']) => {
-    e.stopPropagation()
-    e.preventDefault()
-    bringToFront(tile.id)
-    const anchor = getConnectionHandlePoint(tile, side)
-    setDragState({
-      type: 'connection',
-      sourceTileId: tile.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      side,
-      anchor,
-      current: screenToWorld(e.clientX, e.clientY),
-      targetTileId: null,
-    })
-  }, [bringToFront, screenToWorld])
-
-  const showConnectionHandleForSide = useCallback((tileId: string, side: AnchorPoint['side']) => {
-    if (connectionHandleHideTimerRef.current !== null) {
-      window.clearTimeout(connectionHandleHideTimerRef.current)
-      connectionHandleHideTimerRef.current = null
-    }
-    setHoveredConnectionHandle({ tileId, side })
-  }, [])
-
-  const scheduleConnectionHandleHide = useCallback((tileId: string, side: AnchorPoint['side']) => {
-    if (connectionHandleHideTimerRef.current !== null) {
-      window.clearTimeout(connectionHandleHideTimerRef.current)
-    }
-    connectionHandleHideTimerRef.current = window.setTimeout(() => {
-      connectionHandleHideTimerRef.current = null
-      setHoveredConnectionHandle(prev => prev?.tileId === tileId && prev.side === side ? null : prev)
-    }, 140)
-  }, [])
-
-  useEffect(() => () => {
-    if (connectionHandleHideTimerRef.current !== null) {
-      window.clearTimeout(connectionHandleHideTimerRef.current)
-      connectionHandleHideTimerRef.current = null
-    }
-  }, [])
-
-  const handleResizeMouseDown = useCallback((e: React.MouseEvent, tile: TileState, dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw') => {
-    e.stopPropagation()
-    e.preventDefault()
-    setDragState({
-      type: 'resize', tileId: tile.id, dir,
-      startX: e.clientX, startY: e.clientY,
-      initX: tile.x, initY: tile.y,
-      initW: tile.width, initH: tile.height
-    })
-  }, [])
-
-  // ─── Global mouse move/up ─────────────────────────────────────────────────
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (dragState.type === null) return
-      if (dragState.type === 'select') {
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect) return
-        const curWx = (e.clientX - rect.left - viewport.tx) / viewport.zoom
-        const curWy = (e.clientY - rect.top - viewport.ty) / viewport.zoom
-        setDragState(prev => prev.type === 'select' ? { ...prev, curWx, curWy } : prev)
-        return
-      }
-      const dx = e.clientX - dragState.startX
-      const dy = e.clientY - dragState.startY
-
-      if (dragState.type === 'pan') {
-        const now = performance.now()
-        const dt = now - panLastPos.current.t
-        if (dt > 0) {
-          const decay = 0.4
-          panVelocityRef.current = {
-            vx: decay * panVelocityRef.current.vx + (1 - decay) * (e.clientX - panLastPos.current.x) / dt * 16,
-            vy: decay * panVelocityRef.current.vy + (1 - decay) * (e.clientY - panLastPos.current.y) / dt * 16,
-          }
-        }
-        panLastPos.current = { x: e.clientX, y: e.clientY, t: now }
-        setViewport(prev => ({ ...prev, tx: dragState.initTx + dx, ty: dragState.initTy + dy }))
-      } else if (dragState.type === 'group-resize') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        const { dir, initBounds: ib, snapshots: snaps } = dragState
-
-        // Compute new bounds
-        let nx = ib.x, ny = ib.y, nw = ib.w, nh = ib.h
-        if (dir.includes('e'))  nw = Math.max(100, ib.w + wdx)
-        if (dir.includes('s'))  nh = Math.max(100, ib.h + wdy)
-        if (dir.includes('w')) { nw = Math.max(100, ib.w - wdx); nx = ib.x + ib.w - nw }
-        if (dir.includes('n')) { nh = Math.max(100, ib.h - wdy); ny = ib.y + ib.h - nh }
-
-        // For layout groups, just update layoutBounds directly — no tile scaling
-        const resizingGroup = groupsRef.current.find(g => g.id === dragState.groupId)
-        if (resizingGroup?.layoutMode) {
-          setGroups(prev => prev.map(g => g.id === dragState.groupId
-            ? { ...g, layoutBounds: { x: snapValue(nx), y: snapValue(ny), w: snapValue(nw), h: snapValue(nh) } }
-            : g))
-        } else {
-          const scaleX = nw / ib.w
-          const scaleY = nh / ib.h
-          setTiles(prev => prev.map(t => {
-            const s = snaps.find(s2 => s2.id === t.id)
-            if (!s) return t
-            const minW = getMinTileWidth(t)
-            const minH = getMinTileHeight(t)
-            // Scale position relative to group origin
-            const relX = s.x - ib.x
-            const relY = s.y - ib.y
-            return {
-              ...t,
-              x: snapValue(nx + relX * scaleX),
-              y: snapValue(ny + relY * scaleY),
-              width: Math.max(minW, snapValue(s.width * scaleX)),
-              height: Math.max(minH, snapValue(s.height * scaleY)),
-            }
-          }))
-        }
-      } else if (dragState.type === 'group') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        if (dragState.initLayoutBounds) {
-          // Layout group — move the stored bounds, not individual tiles
-          const lb = dragState.initLayoutBounds
-          setGroups(prev => prev.map(g => g.id === dragState.groupId ? {
-            ...g,
-            layoutBounds: { ...lb, x: snapValue(lb.x + wdx), y: snapValue(lb.y + wdy) }
-          } : g))
-        } else {
-          setTiles(prev => prev.map(t => {
-            const snap2 = dragState.snapshots.find(s => s.id === t.id)
-            if (!snap2) return t
-            return { ...t, x: snapValue(snap2.x + wdx), y: snapValue(snap2.y + wdy) }
-          }))
-        }
-      } else if (dragState.type === 'connection') {
-        const current = screenToWorld(e.clientX, e.clientY)
-        const targetTileId = findManualConnectionTarget(dragState.sourceTileId, current)
-        setCanvasPointerWorld(current)
-        setDragState(prev => prev.type === 'connection' ? { ...prev, current, targetTileId } : prev)
-      } else if (dragState.type === 'tile') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        const newX = snapValue(dragState.initX + wdx)
-        const newY = snapValue(dragState.initY + wdy)
-        const ddx = newX - dragState.initX
-        const ddy = newY - dragState.initY
-        const dragging = tilesRef.current.find(t => t.id === dragState.tileId)
-        if (!dragging) return
-
-        // Buffer latest drag position; apply tile moves + guides once per frame.
-        pendingTileDragRef.current = {
-          tileId: dragState.tileId,
-          groupSnapshots: dragState.groupSnapshots,
-          newX,
-          newY,
-          ddx,
-          ddy,
-          width: dragging.width,
-          height: dragging.height,
-        }
-        if (snapGuideRafRef.current !== null) return
-        snapGuideRafRef.current = requestAnimationFrame(() => {
-          snapGuideRafRef.current = null
-          const pending = pendingTileDragRef.current
-          if (!pending) return
-
-          const excludeIds = new Set([
-            pending.tileId,
-            ...pending.groupSnapshots.map(g => g.id),
-          ])
-          const others = tilesRef.current.filter(t => !excludeIds.has(t.id))
-          setGuides(computeAlignmentGuides(
-            pending.newX,
-            pending.newY,
-            pending.width,
-            pending.height,
-            others,
-          ))
-          setTiles(prev => prev.map(t => {
-            if (t.id === pending.tileId) return { ...t, x: pending.newX, y: pending.newY }
-            const snap2 = pending.groupSnapshots.find(g => g.id === t.id)
-            if (snap2) {
-              return {
-                ...t,
-                x: snapValue(snap2.x + pending.ddx),
-                y: snapValue(snap2.y + pending.ddy),
-              }
-            }
-            return t
-          }))
-        })
-      } else if (dragState.type === 'resize') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        const dir = dragState.dir
-        setTiles(prev => prev.map(t => {
-          if (t.id !== dragState.tileId) return t
-          const minW = getMinTileWidth(t)
-          const minH = getMinTileHeight(t)
-          let { x, y, width: w, height: h } = t
-          if (dir.includes('e'))  w = Math.max(minW, snapValue(dragState.initW + wdx))
-          if (dir.includes('s'))  h = Math.max(minH, snapValue(dragState.initH + wdy))
-          if (dir.includes('w')) { w = Math.max(minW, snapValue(dragState.initW - wdx)); x = snapValue(dragState.initX + wdx) }
-          if (dir.includes('n')) { h = Math.max(minH, snapValue(dragState.initH - wdy)); y = snapValue(dragState.initY + wdy) }
-          return { ...t, x, y, width: w, height: h }
-        }))
-      }
-    }
-
-    const flushPendingTileDrag = () => {
-      if (snapGuideRafRef.current !== null) {
-        cancelAnimationFrame(snapGuideRafRef.current)
-        snapGuideRafRef.current = null
-      }
-      const pending = pendingTileDragRef.current
-      if (!pending) return
-      setTiles(prev => prev.map(t => {
-        if (t.id === pending.tileId) return { ...t, x: pending.newX, y: pending.newY }
-        const snap2 = pending.groupSnapshots.find(g => g.id === t.id)
-        if (snap2) {
-          return {
-            ...t,
-            x: snapValue(snap2.x + pending.ddx),
-            y: snapValue(snap2.y + pending.ddy),
-          }
-        }
-        return t
-      }))
-      pendingTileDragRef.current = null
-    }
-
-    const onUp = () => {
-      if (dragState.type === 'tile') flushPendingTileDrag()
-      if (dragState.type === 'connection') {
-        if (dragState.targetTileId) {
-          lockConnection(dragState.sourceTileId, dragState.targetTileId)
-        }
-      } else if (dragState.type === 'tile') {
-        setTiles(prev => {
-          const tile = prev.find(t => t.id === dragState.tileId)
-          if (!tile) { saveCanvas(prev, viewport, nextZIndex); return prev }
-
-          // If tile didn't actually move, don't touch group membership
-          const didMove = tile.x !== dragState.initX || tile.y !== dragState.initY
-          // Clear suppressed connections for this tile when it moves
-          if (didMove && suppressedConnectionsRef.current.size > 0) {
-            setSuppressedConnections(prev => {
-              const next = new Set(prev)
-              for (const key of prev) {
-                if (key.includes(tile.id)) next.delete(key)
-              }
-              return next.size === prev.size ? prev : next
-            })
-          }
-          if (!didMove) { saveCanvas(prev, viewport, nextZIndex); return prev }
-
-          const tileCx = tile.x + tile.width / 2
-          const tileCy = tile.y + tile.height / 2
-
-          // Check if dropped inside a different group's bounds
-          let newGroupId: string | undefined = tile.groupId
-          for (const g of groups) {
-            if (g.id === tile.groupId) continue // already in this group
-            const b = groupBoundsRef.current(g.id)
-            if (b && tileCx >= b.x && tileCx <= b.x + b.w && tileCy >= b.y && tileCy <= b.y + b.h) {
-              newGroupId = g.id
-              break
-            }
-          }
-
-          // Tiles dragged outside their group's bounds STAY in the group —
-          // the group frame expands to include the tile's new position. Only
-          // moving a tile into a DIFFERENT group's bounds (handled above)
-          // changes its groupId. This matches the user's expectation that a
-          // group is a logical container, not a physical cage.
-
-          if (newGroupId !== tile.groupId) {
-            const updated = prev.map(t => t.id === tile.id ? { ...t, groupId: newGroupId } : t)
-            saveCanvas(updated, viewport, nextZIndex)
-            window.setTimeout(() => triggerDiscoveryPulse(tile.id, updated), 40)
-            return updated
-          }
-          saveCanvas(prev, viewport, nextZIndex)
-          window.setTimeout(() => triggerDiscoveryPulse(tile.id, prev), 40)
-          return prev
-        })
-      } else if (dragState.type === 'resize' || dragState.type === 'group' || dragState.type === 'group-resize') {
-        setTiles(prev => { saveCanvas(prev, viewport, nextZIndex, groupsRef.current); return prev })
-      }
-      if (dragState.type === 'select') {
-        const minX = Math.min(dragState.startWx, dragState.curWx)
-        const maxX = Math.max(dragState.startWx, dragState.curWx)
-        const minY = Math.min(dragState.startWy, dragState.curWy)
-        const maxY = Math.max(dragState.startWy, dragState.curWy)
-        const size = Math.max(maxX - minX, maxY - minY)
-        if (size > 10) {
-          setTiles(prev => {
-            const hit = new Set(
-              prev
-                .filter(t => !panelTileIdsRef.current.has(t.id))  // exclude layout-group / panel tiles
-                .filter(t => t.x < maxX && t.x + t.width > minX && t.y < maxY && t.y + t.height > minY)
-                .map(t => t.id)
-            )
-            setSelectedTileIds(hit)
-            return prev
-          })
-        }
-      }
-      // Kick off inertia when releasing a pan
-      if (dragState.type === 'pan') {
-        const { vx, vy } = panVelocityRef.current
-        if (Math.abs(vx) > 0.5 || Math.abs(vy) > 0.5) {
-          const friction = 0.92
-          const animate = () => {
-            const v = panVelocityRef.current
-            if (Math.abs(v.vx) < 0.5 && Math.abs(v.vy) < 0.5) return
-            setViewport(prev => ({ ...prev, tx: prev.tx + v.vx, ty: prev.ty + v.vy }))
-            panVelocityRef.current = { vx: v.vx * friction, vy: v.vy * friction }
-            panInertiaRaf.current = requestAnimationFrame(animate)
-          }
-          panInertiaRaf.current = requestAnimationFrame(animate)
-        }
-      }
-      setGuides([])
-      setDragState({ type: null })
-    }
-
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      if (snapGuideRafRef.current !== null) {
-        cancelAnimationFrame(snapGuideRafRef.current)
-        snapGuideRafRef.current = null
-      }
-      pendingTileDragRef.current = null
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [dragState, findManualConnectionTarget, groups, lockConnection, nextZIndex, saveCanvas, screenToWorld, snapValue, triggerDiscoveryPulse, viewport])
-
-  // ─── Zoom — native listener needed for { passive: false } ────────────────
-  useEffect(() => {
-    const el = canvasRef.current
-    if (!el) return
-    const onWheel = (e: WheelEvent) => {
-      if (!e.metaKey && !e.ctrlKey) return
-      e.preventDefault()
-      const factor = e.deltaY < 0 ? 1.08 : 0.92
-      const newZoom = Math.max(0.25, Math.min(2, viewport.zoom * factor))
-      const rect = el.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
-      const wx = (mx - viewport.tx) / viewport.zoom
-      const wy = (my - viewport.ty) / viewport.zoom
-      setViewport({ tx: mx - wx * newZoom, ty: my - wy * newZoom, zoom: newZoom })
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [viewport])
-
-  // Keep as no-op for JSX prop (wheel handled natively above)
-  const handleWheel = useCallback((_e: React.WheelEvent) => {}, [])
+  useCanvasDragSync({
+    canvasRef,
+    dragState,
+    setDragState,
+    engine: canvasEngine,
+    tilesRef,
+    groupsRef,
+    groups,
+    setTiles,
+    setGroups,
+    setGuides,
+    setCanvasPointerWorld,
+    setSelectedTileIds,
+    setSuppressedConnections,
+    suppressedConnectionsRef,
+    panelTileIdsRef,
+    groupBoundsRef,
+    snapValue,
+    resolveManualConnectionTarget: (sourceTileId, point) => (
+      findManualConnectionTarget(sourceTileId, point, tilesRef.current, panelTileIdsRef.current, getTileCenter)
+    ),
+    lockConnection,
+    triggerDiscoveryPulse,
+    getMinTileWidth,
+    getMinTileHeight,
+  })
 
   // ─── Workspace switching ──────────────────────────────────────────────────
   const handleSwitchWorkspace = useCallback(async (id: string) => {
@@ -3081,7 +2432,7 @@ function App(): JSX.Element {
           : sanitizedPanel.fallbackActivePanelId
         setTiles(savedTiles)
         setGroups(saved.groups ?? [])
-        setViewport(saved.viewport ? { tx: saved.viewport.tx, ty: saved.viewport.ty, zoom: saved.viewport.zoom } : { tx: 0, ty: 0, zoom: 1 })
+        restoreViewport(saved.viewport)
         setNextZIndex(saved.nextZIndex ?? 1)
         savedLayoutRef.current = sanitizedPanel.layout
         setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
@@ -3093,15 +2444,14 @@ function App(): JSX.Element {
       } else {
         setTiles([])
         setGroups([])
-        setViewport({ tx: 0, ty: 0, zoom: 1 })
-        setNextZIndex(1)
+        resetViewportState()
         savedLayoutRef.current = null
         setPanelLayout(null)
         setActivePanelId(null)
         setExpandedTileId(null)
       }
     }
-  }, [workspaces])
+  }, [workspaces, restoreViewport, resetViewportState])
 
   const handleDeleteWorkspace = useCallback(async (id: string) => {
     const wasActive = workspace?.id === id
@@ -3914,6 +3264,26 @@ function App(): JSX.Element {
     setSelectedTileId(null)
   }, [tiles, getActiveTiles, viewport, nextZIndex, saveCanvas, snapValue])
 
+  const handleTileContextMenu = useTileContextMenu({
+    viewport,
+    nextZIndex,
+    groups,
+    workspacePath: workspace?.path,
+    saveCanvas,
+    setTiles,
+    setSelectedTileId,
+    setSelectedTileIds,
+    setCtxMenu,
+    clipboardRef: clipboard,
+    duplicateTiles,
+    copyTiles,
+    pasteTiles,
+    ungroupTiles,
+    ungroupAll,
+    closeTile,
+    importFileToWorkspace,
+  })
+
   // ─── Group frame bounds (recursive — includes child group tiles) ─────────
   const groupBounds = useCallback((groupId: string): { x: number; y: number; w: number; h: number } | null => {
     const group = groups.find(g => g.id === groupId)
@@ -3991,58 +3361,17 @@ function App(): JSX.Element {
     setExpandedTileId(null)
   }, [])
 
-  // ─── Canvas-expand a non-layout group ────────────────────────────────────
-  // Collect the recursive set of group ids (the expanded group + every descendant).
-  const collectGroupIdsRecursive = useCallback((groupId: string): string[] => {
-    const childGroups = groupsRef.current.filter(g => g.parentGroupId === groupId)
-    return [groupId, ...childGroups.flatMap(g => collectGroupIdsRecursive(g.id))]
-  }, [])
-
-  /**
-   * Compute the viewport that fits the expanded group's bounds to the canvas
-   * area. Returns { tx, ty, zoom }.
-   *
-   * USER-AUTHORED DECISION POINT — see request below.
-   */
-  const computeFitViewport = useCallback((bounds: { x: number; y: number; w: number; h: number }, screen: { w: number; h: number }): { tx: number; ty: number; zoom: number } => {
-    // TODO(user): tune feel. See request in chat.
-    const PAD_PX = 48              // screen-space padding around the group
-    const MAX_ZOOM = 1.5            // never zoom in past this
-    const availW = Math.max(1, screen.w - PAD_PX * 2)
-    const availH = Math.max(1, screen.h - PAD_PX * 2)
-    const zoom = Math.min(MAX_ZOOM, availW / bounds.w, availH / bounds.h)
-    const tx = (screen.w - bounds.w * zoom) / 2 - bounds.x * zoom
-    const ty = (screen.h - bounds.h * zoom) / 2 - bounds.y * zoom
-    return { tx, ty, zoom }
-  }, [])
-
-  const enterCanvasExpanded = useCallback((groupId: string) => {
-    const g = groupsRef.current.find(gr => gr.id === groupId)
-    if (!g || g.layoutMode) return
-    const bounds = groupBounds(groupId)
-    if (!bounds) return
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return
-    expandedCanvasPriorViewportRef.current = { ...viewportRef.current }
-    const fit = computeFitViewport(bounds, { w: rect.width, h: rect.height })
-    setViewport(fit)
-    viewportRef.current = fit
-    setExpandedCanvasGroupId(groupId)
-    expandedCanvasGroupIdRef.current = groupId
-    // Mutually exclusive with single-tile expand
-    setExpandedTileId(null)
-  }, [groupBounds, computeFitViewport])
-
-  const exitCanvasExpanded = useCallback(() => {
-    const prior = expandedCanvasPriorViewportRef.current
-    setExpandedCanvasGroupId(null)
-    expandedCanvasGroupIdRef.current = null
-    if (prior) {
-      setViewport(prior)
-      viewportRef.current = prior
-    }
-    expandedCanvasPriorViewportRef.current = null
-  }, [])
+  const { enterCanvasExpanded, exitCanvasExpanded } = useCanvasExpandedGroup({
+    canvasRef,
+    viewportRef,
+    expandedCanvasPriorViewportRef,
+    expandedCanvasGroupIdRef,
+    groupsRef,
+    setViewport,
+    setExpandedCanvasGroupId,
+    setExpandedTileId,
+    groupBounds,
+  })
   exitCanvasExpandedRef.current = exitCanvasExpanded
 
   // Keep action refs in sync so early-defined callbacks can call them safely
@@ -4051,7 +3380,6 @@ function App(): JSX.Element {
   copyTilesRef.current = copyTiles
   groupSelectedTilesRef.current = groupSelectedTiles
   groupBoundsRef.current = groupBounds
-  persistCanvasStateRef.current = persistCanvasState
   ungroupTilesRef.current = ungroupTiles
   ungroupAllRef.current = ungroupAll
 
@@ -4084,60 +3412,6 @@ function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [copyTiles, pasteTiles, duplicateTiles, selectedTileId, selectedTileIds, viewport, nextZIndex, saveCanvas])
 
-  // ─── Undo / redo ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return
-      const mod = e.metaKey || e.ctrlKey
-      if (!mod) return
-
-      const isUndo = e.key === 'z' && !e.shiftKey
-      const isRedo = (e.key === 'z' && e.shiftKey) || e.key === 'y'
-      if (!isUndo && !isRedo) return
-      e.preventDefault()
-
-      if (isUndo && historyBack.current.length > 0) {
-        const prev = historyBack.current.pop()!
-        historyForward.current.push({ tiles: tilesRef.current, groups: groupsRef.current })
-        skipHistory.current = true
-        setTiles(prev.tiles)
-        setGroups(prev.groups)
-        // Persist the restored state without adding another history entry
-        if (workspace) {
-          if (saveTimer.current) clearTimeout(saveTimer.current)
-          saveTimer.current = setTimeout(() => {
-            const state: CanvasState = { tiles: prev.tiles, groups: prev.groups, viewport: viewportRef.current, nextZIndex: nextZIndexRef.current }
-            window.electron.canvas.save(workspace.id, state)
-            skipHistory.current = false
-          }, 500)
-        } else {
-          skipHistory.current = false
-        }
-      }
-
-      if (isRedo && historyForward.current.length > 0) {
-        const next = historyForward.current.pop()!
-        historyBack.current.push({ tiles: tilesRef.current, groups: groupsRef.current })
-        if (historyBack.current.length > 50) historyBack.current.shift()
-        skipHistory.current = true
-        setTiles(next.tiles)
-        setGroups(next.groups)
-        if (workspace) {
-          if (saveTimer.current) clearTimeout(saveTimer.current)
-          saveTimer.current = setTimeout(() => {
-            const state: CanvasState = { tiles: next.tiles, groups: next.groups, viewport: viewportRef.current, nextZIndex: nextZIndexRef.current }
-            window.electron.canvas.save(workspace.id, state)
-            skipHistory.current = false
-          }, 500)
-        } else {
-          skipHistory.current = false
-        }
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [workspace, viewport, nextZIndex])
-
   // ─── Arrange handler ──────────────────────────────────────────────────────
   const handleArrange = useCallback((updated: TileState[]) => {
     const getArrangeWidth = (tile: TileState) => tile.width + ((tile.type === 'terminal' || tile.type === 'chat') ? 272 : 0)
@@ -4158,33 +3432,12 @@ function App(): JSX.Element {
         }
       })
       saveCanvas(merged, viewport, nextZIndex)
-
-      // Zoom to fit — compensate for sidebar width if open
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (rect && merged.length > 0) {
-        const sidebarOffset = sidebarCollapsed ? 0 : sidebarWidth + 8
-        const availableWidth = rect.width - sidebarOffset
-        const minX = Math.min(...merged.map(t => t.x))
-        const minY = Math.min(...merged.map(t => t.y))
-        const maxX = Math.max(...merged.map(t => t.x + getArrangeWidth(t)))
-        const maxY = Math.max(...merged.map(t => t.y + t.height))
-        const PAD = 60
-        const fitZoom = Math.min(
-          availableWidth / (maxX - minX + PAD * 2),
-          rect.height   / (maxY - minY + PAD * 2),
-          2
-        )
-        const newZoom = fitZoom * 0.9
-        // Center within the available area (shifted right by sidebar)
-        const centerX = sidebarOffset + availableWidth / 2
-        const tx = centerX - ((minX + maxX) / 2) * newZoom
-        const ty = rect.height / 2 - ((minY + maxY) / 2) * newZoom
-        setViewport({ tx, ty, zoom: newZoom })
-      }
+      const sidebarOffset = sidebarCollapsed ? 0 : sidebarWidth + 8
+      zoomToFitArrangedTiles(merged, getArrangeWidth, sidebarOffset)
 
       return merged
     })
-  }, [viewport, nextZIndex, saveCanvas, sidebarCollapsed, sidebarWidth])
+  }, [viewport, nextZIndex, saveCanvas, sidebarCollapsed, sidebarWidth, zoomToFitArrangedTiles])
 
   // ─── Render tile body ─────────────────────────────────────────────────────
   const renderTileBody = (tile: TileState, options?: { isInteracting?: boolean; isActive?: boolean; isSelected?: boolean }): React.ReactNode => {
@@ -4257,14 +3510,8 @@ function App(): JSX.Element {
             onFocusTile={(linkedId) => {
               const target = tiles.find(t => t.id === linkedId)
               if (!target) return
-              // Bring to front
               bringToFront(linkedId)
-              // Pan canvas to center the tile
-              const rect = canvasRef.current?.getBoundingClientRect()
-              if (!rect) return
-              const newTx = rect.width / 2 - (target.x + target.width / 2) * viewport.zoom
-              const newTy = rect.height / 2 - (target.y + target.height / 2) * viewport.zoom
-              setViewport(prev => ({ ...prev, tx: newTx, ty: newTy }))
+              panToTile(target)
             }}
           />
         )
@@ -4620,48 +3867,17 @@ function App(): JSX.Element {
     prevPeerLinksRef.current = newMap
   }, [negotiatedDiscoveryState.byTileConnections, tiles, workspace?.path])
 
-  // ─── Locked connection helpers ──────────────────────────────────────────────
-  const isConnectionLocked = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    return lockedConnections.some(lc => {
-      const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-      return la === a && lb === b
-    })
-  }, [lockedConnections])
-
-  const toggleConnectionLock = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    setLockedConnections(prev => {
-      const idx = prev.findIndex(lc => {
-        const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-        return la === a && lb === b
-      })
-      const next = idx >= 0
-        ? prev.filter((_, i) => i !== idx)
-        : [...prev, { sourceTileId: a, targetTileId: b }]
-      lockedConnectionsRef.current = next
-      console.log('[Lock]', idx >= 0 ? 'Unlocked' : 'Locked', a, b, 'total:', next.length)
-      setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, groupsRef.current), 0)
-      return next
-    })
-  }, [persistCanvasState])
-
-  const deleteConnection = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    const key = `${a}::${b}`
-    // Remove from locked connections
-    setLockedConnections(prev => {
-      const next = prev.filter(lc => {
-        const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-        return !(la === a && lb === b)
-      })
-      lockedConnectionsRef.current = next
-      setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, groupsRef.current), 0)
-      return next
-    })
-    // Suppress proximity auto-reconnect until tiles move
-    setSuppressedConnections(prev => new Set(prev).add(key))
-  }, [persistCanvasState])
+  const { isConnectionLocked, toggleConnectionLock, deleteConnection } = useLockedConnectionHelpers({
+    lockedConnections,
+    persistCanvasState,
+    tilesRef,
+    groupsRef,
+    viewportRef,
+    nextZIndexRef,
+    lockedConnectionsRef,
+    setLockedConnections,
+    setSuppressedConnections,
+  })
 
   const lockedConnectionKeys = React.useMemo(() => {
     return new Set(lockedConnections.map(lc => [lc.sourceTileId, lc.targetTileId].sort().join('::')))
@@ -6056,16 +5272,7 @@ function App(): JSX.Element {
             if (linkedTileId) {
               bringToFront(linkedTileId)
               const target = tiles.find(t => t.id === linkedTileId)
-              if (target) {
-                const rect = canvasRef.current?.getBoundingClientRect()
-                if (rect) {
-                  setViewport(prev => ({
-                    ...prev,
-                    tx: rect.width / 2 - (target.x + target.width / 2) * prev.zoom,
-                    ty: rect.height / 2 - (target.y + target.height / 2) * prev.zoom
-                  }))
-                }
-              }
+              if (target) panToTile(target)
               return
             }
 
@@ -7350,15 +6557,7 @@ function App(): JSX.Element {
               if (panelLayout) exitExpandedMode()
               else enterTabbedView()
             }}
-            onZoomToggle={() => {
-              setViewport(prev => {
-                if (prev.zoom === 1) {
-                  return { ...prev, zoom: prevZoomRef.current !== 1 ? prevZoomRef.current : 1 }
-                }
-                prevZoomRef.current = prev.zoom
-                return { ...prev, zoom: 1 }
-              })
-            }}
+            onZoomToggle={toggleZoomOne}
           />
         </Suspense>
       </div>
