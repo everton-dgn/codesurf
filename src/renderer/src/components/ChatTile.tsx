@@ -79,7 +79,29 @@ import {
   ensureChatMdStyle,
   ChatMessageContent,
 } from './chat/ChatTileViews'
-import { CHAT_CHIP_ROW_STYLE } from './chat/chatTileLayout'
+import {
+  CHAT_CHIP_ROW_STYLE,
+  FONT_SANS,
+  FONT_MONO,
+  FONT_SIZE_DEFAULT,
+  MONO_SIZE_DEFAULT,
+  CHAT_MESSAGE_MAX_WIDTH,
+  CHAT_OFFSCREEN_MESSAGE_STYLE,
+  CHAT_RENDER_PAGE_SIZE,
+  CHAT_INITIAL_RENDER_WINDOW,
+  LINKED_SESSION_LIVE_TAIL_LIMIT,
+  LINKED_SESSION_HISTORY_PAGE_SIZE,
+  LINKED_SESSION_HISTORY_LOAD_THRESHOLD,
+  CHAT_COMPOSER_WIDTH,
+  CHAT_COMPOSER_MIN_WIDTH_STYLE,
+  CHAT_COMPOSER_MIN_HEIGHT,
+  CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT,
+  CHAT_AUTO_SCROLL_THRESHOLD,
+  TOOLBAR_ICON_SIZE,
+  TOOLBAR_PILL_ICON_SIZE,
+  LIVE_TOOL_COLLAPSE_GRACE_MS,
+} from './chat/chatTileLayout'
+import { FontCtx } from './chat/chatTileContexts'
 import {
   CHAT_DEFAULT_SKILL_LOCATIONS,
   resolveChatSkillLocations,
@@ -152,45 +174,12 @@ export interface CheckpointRestoreContextValue {
 
 export const CheckpointRestoreContext = React.createContext<CheckpointRestoreContextValue | null>(null)
 
-// --- Font defaults (used when no settings are provided) --------------------------
-
-// Use the canonical font stacks from shared/types.ts DEFAULT_FONTS
-const FONT_SANS = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
-const FONT_MONO = '"JetBrains Mono", "Menlo", "Monaco", "SF Mono", "Fira Code", monospace'
-const FONT_SIZE_DEFAULT = 13
-const MONO_SIZE_DEFAULT = 13
-const CHAT_MESSAGE_MAX_WIDTH = 'var(--cs-thread-content-max-width)'
-const CHAT_OFFSCREEN_MESSAGE_STYLE: React.CSSProperties = {
-  contentVisibility: 'auto',
-  containIntrinsicSize: '0 160px',
-}
-const CHAT_RENDER_PAGE_SIZE = 20
-const CHAT_INITIAL_RENDER_PAGES = 2
-const CHAT_INITIAL_RENDER_WINDOW = CHAT_RENDER_PAGE_SIZE * CHAT_INITIAL_RENDER_PAGES
-const LINKED_SESSION_LIVE_TAIL_LIMIT = 40
-const LINKED_SESSION_HISTORY_PAGE_SIZE = 20
-const LINKED_SESSION_HISTORY_LOAD_THRESHOLD = 32
-
-const CHAT_COMPOSER_MAX_WIDTH = CHAT_MESSAGE_MAX_WIDTH
-const CHAT_COMPOSER_MIN_WIDTH = 'var(--cs-chat-composer-min-width)'
-const CHAT_COMPOSER_SIDE_INSET = 'var(--cs-chat-composer-side-inset)'
-const CHAT_COMPOSER_WIDTH = `min(calc(100% - calc(${CHAT_COMPOSER_SIDE_INSET} * 2)), ${CHAT_COMPOSER_MAX_WIDTH})`
-const CHAT_COMPOSER_MIN_WIDTH_STYLE = `min(${CHAT_COMPOSER_MIN_WIDTH}, calc(100% - calc(${CHAT_COMPOSER_SIDE_INSET} * 2)))`
-const CHAT_COMPOSER_MIN_HEIGHT = 105
-const CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT = 56
-const CHAT_AUTO_SCROLL_THRESHOLD = 48
-const TOOLBAR_ICON_SIZE = 16
-const TOOLBAR_PILL_ICON_SIZE = 14
 export const TOOL_BLOCK_MAX_WIDTH = 420
 
-const LIVE_TOOL_COLLAPSE_GRACE_MS = 5000
 export const NON_SELECTABLE_UI_STYLE = {
   userSelect: 'none' as const,
   WebkitUserSelect: 'none' as const,
 }
-// Font context so sub-components can read settings-derived fonts without prop drilling
-export const FontCtx = React.createContext({ sans: FONT_SANS, secondary: FONT_SANS, mono: FONT_MONO, size: FONT_SIZE_DEFAULT, monoSize: MONO_SIZE_DEFAULT, lineHeight: 1.5, weight: 400, monoLineHeight: 1.5, monoWeight: 400, secondarySize: 11, secondaryLineHeight: 1.4, secondaryWeight: 400 })
-export function useFonts() { return React.useContext(FontCtx) }
 
 // Dispatch context — lets deeply-nested tool renderers (e.g. AskUserQuestion form)
 // send answers back into the chat as the next user turn.

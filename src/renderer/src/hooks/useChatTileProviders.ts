@@ -17,8 +17,7 @@ import {
 import { ClaudeIcon, CodexIcon, HermesIcon, OpenClawIcon, PiIcon } from '../components/icons/providerIcons'
 import { getExtensionProviderIcon } from '../components/chat/ChatTileViews'
 import { normalizeExtensionProviders, type DiscoveryPeer } from '../components/chat/chatTileUtils'
-
-const TOOLBAR_PILL_ICON_SIZE = 14
+import { TOOLBAR_PILL_ICON_SIZE } from '../components/chat/chatTileLayout'
 
 export interface ProviderEntry {
   id: string

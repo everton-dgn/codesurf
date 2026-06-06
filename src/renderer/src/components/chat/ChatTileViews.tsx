@@ -22,7 +22,7 @@ import {
   withAlpha,
   splitExternalAgentMarkup,
 } from './chatTileUtils'
-import { CHAT_CHIP_ROW_STYLE } from './chatTileLayout'
+import { CHAT_CHIP_ROW_STYLE, TOOLBAR_PILL_ICON_SIZE } from './chatTileLayout'
 
 const THINKING_LEVELS: Record<string, number> = { none: 0, low: 1, medium: 2, adaptive: 3, high: 4, max: 5 }
 
@@ -48,8 +48,6 @@ export function ThinkingIcon({ level }: { level: string }): JSX.Element {
     </div>
   )
 }
-
-const TOOLBAR_PILL_ICON_SIZE = 14
 
 export function renderChatSurfaceIcon(icon: string | undefined, size = 14): JSX.Element {
   const name = String(icon ?? '').toLowerCase()
