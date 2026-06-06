@@ -20,26 +20,24 @@ import { useChatDictation } from '../hooks/useChatDictation'
 import { useChatExecutionHosts } from '../hooks/useChatExecutionHosts'
 import { useChatTileCoreState } from '../hooks/useChatTileCoreState'
 import { useChatTileProviders } from '../hooks/useChatTileProviders'
-import type { ChatTilePersistedState, QueuedChatTurn } from './chat/chatTileTypes'
+import { useChatTilePersistence } from '../hooks/useChatTilePersistence'
+import { useChatTileMessaging } from '../hooks/useChatTileMessaging'
+
 import { useTheme } from '../ThemeContext'
 import { WorkingDots } from './shared/streamdown-utils'
 import { DiffView } from './chat/DiffView'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
 import {
-  type BuiltinProvider,
-  DEFAULT_PROVIDER_ID, PROVIDER_MODES, EXTENSION_PROVIDER_MODE,
   getApproxContextWindowTokens,
-  getApproxSystemOverheadTokens, resolveProviderModeId,
+  getApproxSystemOverheadTokens,
 } from '../config/providers'
 import { stripCapabilityPrefix, getAllNodeTools } from '../../../shared/nodeTools'
 import type { ToolBlock, ChatMessage, BlockNote, FileChange } from '../../../shared/chat-types'
 import { useChatStreamHandler } from '../hooks/useChatStreamHandler'
-import type { SessionEntryHint } from '../../../shared/session-types'
+
 import { buildChatMessageHistoryFingerprint } from '../../../shared/chat-history'
 import { BlockNoteAffordance } from './chat/BlockNoteAffordance'
-import { getChatTileRuntimeState, setChatTileRuntimeState, reviveChatTileRuntimeState, isChatTileRuntimeStateDisposed } from './chatTileRuntimeState'
 import { setChatStreaming } from './chatStreamingStore'
-import { recordChatMessageSent } from './chatMessageSentStore'
 import { setTileTodos, clearTileTodos, useTileTodos, type TileTodoItem } from '../state/tileTodosStore'
 import { CUSTOMISATION_LOCATIONS_CHANGED_EVENT, type CustomisationLocationsChangedDetail } from './CustomisationTile'
 import { PlanPane } from './chat/PlanPane'
@@ -53,7 +51,7 @@ import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
 import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
 import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
 import { useContributions } from '../hooks/useContributions'
-import { executeCommand, type PaletteCommand } from '../lib/commandRegistry'
+import { type PaletteCommand } from '../lib/commandRegistry'
 import { ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
 import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 import {
@@ -107,18 +105,7 @@ import {
   resolveChatSkillLocations,
   shouldRenderToolBlock,
   isUrgentQueuedContent,
-  mergeAttachments,
   getImplicitPeerImageAttachments,
-  normalizePersistedChatSurfaces,
-  buildOutgoingMessageContent,
-  encodeUtf8Base64,
-  buildQueuedTurnPreview,
-  shouldAttachRecentEditContext,
-  resolveEditedFilePath,
-  extractChangedLineRangesFromDiff,
-  buildSnippetFromRanges,
-  buildBlockNotesContext,
-  splitMessageAttachmentPaths,
   collectModelReadPaths,
   canUsePagedLinkedHistory,
   mergeHistoricalMessages,
@@ -127,7 +114,6 @@ import {
   getExternalAgentToolBlocks,
   isExternalAgentToolOnlyText,
   relativeTime,
-  type PendingAttachment,
   type ActiveChatSurface,
   type DiscoveryPeer,
 } from './chat/chatTileUtils'
@@ -187,66 +173,6 @@ type ChatDispatchValue = {
   sendAnswer: (text: string) => void | Promise<void>
 }
 const ChatDispatchCtx = React.createContext<ChatDispatchValue | null>(null)
-
-const RECENT_EDIT_CONTEXT_FILE_LIMIT = 3
-const RECENT_EDIT_CONTEXT_MAX_CHARS = 5000
-
-async function buildRecentEditContext(messages: ChatMessage[], workspaceDir: string, userText: string): Promise<string | null> {
-  if (!shouldAttachRecentEditContext(userText) || !workspaceDir.trim() || !window.electron?.fs?.readFile) return null
-
-  const seenPaths = new Set<string>()
-  const recentChanges: Array<{ displayPath: string; resolvedPath: string; diff: string; changeType: string }> = []
-
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const message = messages[messageIndex]
-    if (message.role !== 'assistant') continue
-    const toolBlocks = message.toolBlocks ?? []
-    for (let blockIndex = toolBlocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
-      const block = toolBlocks[blockIndex]
-      for (const change of [...(block.fileChanges ?? [])].reverse()) {
-        const resolvedPath = resolveEditedFilePath(change.path, workspaceDir)
-        if (!resolvedPath || seenPaths.has(resolvedPath)) continue
-        seenPaths.add(resolvedPath)
-        recentChanges.push({
-          displayPath: change.path,
-          resolvedPath,
-          diff: change.diff,
-          changeType: change.changeType,
-        })
-        if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
-      }
-      if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
-    }
-    if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
-  }
-
-  if (recentChanges.length === 0) return null
-
-  const sections: string[] = []
-  for (const change of recentChanges) {
-    try {
-      const fileContent = await window.electron.fs.readFile(change.resolvedPath)
-      const snippet = buildSnippetFromRanges(fileContent, extractChangedLineRangesFromDiff(change.diff))
-      if (!snippet) continue
-      sections.push(
-        `File: ${change.displayPath}\n` +
-        `Recent change type: ${change.changeType}\n` +
-        `Current nearby code:\n${snippet}`,
-      )
-    } catch {
-      // If the file no longer exists or can't be read, skip it quietly.
-    }
-  }
-
-  if (sections.length === 0) return null
-
-  const combined =
-    'Recent edit context from the immediately previous implementation pass. Use this only as fast-follow context if the user is referring to the same change area.\n\n'
-    + sections.join('\n\n---\n\n')
-
-  if (combined.length <= RECENT_EDIT_CONTEXT_MAX_CHARS) return combined
-  return `${combined.slice(0, RECENT_EDIT_CONTEXT_MAX_CHARS - 1).trimEnd()}…`
-}
 
 // --- Component -------------------------------------------------------------------
 
@@ -676,7 +602,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       flushPendingStreamText()
     }, CHAT_STREAM_FLUSH_INTERVAL_MS)
   }, [flushPendingStreamText])
-  const stateLoadedRef = useRef(false)
   const lastJobSequenceRef = useRef<number>(initialJobSequence)
   const resumedJobKeyRef = useRef<string | null>(null)
 
@@ -699,9 +624,60 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       resumedJobKeyRef.current = null
     }
   }, [jobId])
-  const latestStateRef = useRef<ChatTilePersistedState | null>(null)
-  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isFlushingQueuedTurnRef = useRef(false)
+
+  const { latestStateRef, stateLoadedRef, persistLatestState } = useChatTilePersistence({
+    tileId,
+    workspaceId,
+    reloadToken,
+    initialRuntimeStateRef,
+    fallbackProvider: provider,
+    messages,
+    input,
+    attachments,
+    queuedTurns,
+    openChatSurfaces,
+    activeChatSurfaceId,
+    executionTarget,
+    provider,
+    model,
+    mcpEnabled,
+    mode,
+    thinking,
+    effectiveAgentMode,
+    autoAgentMode,
+    preserveSessionSummary,
+    linkedSessionEntryId,
+    linkedSessionHint,
+    hasEarlierMessages,
+    sessionId,
+    jobId,
+    jobSequence,
+    cloudHostId,
+    isStreaming,
+    setMessagesSafe,
+    setInput,
+    setAttachments,
+    setQueuedTurns,
+    setOpenChatSurfaces,
+    setActiveChatSurfaceId,
+    setProvider,
+    setModel,
+    setExecutionTarget,
+    setMcpEnabled,
+    setMode,
+    setThinking,
+    setAutoAgentMode,
+    setPreserveSessionSummary,
+    setLinkedSessionEntryId,
+    setLinkedSessionHint,
+    setHasEarlierMessages,
+    setSessionId,
+    setJobId,
+    setJobSequence,
+    setCloudHostId,
+    setIsStreaming,
+    lastJobSequenceRef,
+  })
 
   // ─── TTS auto-speak (last-message-only, sentence-streamed) ──────────
   // Voice config comes from the persisted AppSettings.voice block (edited
@@ -1347,38 +1323,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setHasEarlierMessages(true)
   }, [pagedLinkedHistoryEnabled, isStreaming, messages])
 
-  useEffect(() => {
-    latestStateRef.current = {
-      messages,
-      input,
-      attachments,
-      queuedTurns,
-      openChatSurfaces,
-      activeChatSurfaceId,
-      executionTarget,
-      provider,
-      model,
-      mcpEnabled,
-      mode,
-      thinking,
-      agentMode: effectiveAgentMode,
-      autoAgentMode,
-      preserveSessionSummary,
-      linkedSessionEntryId,
-      linkedSessionHint,
-      hasEarlierMessages,
-      sessionId,
-      jobId,
-      jobSequence,
-      cloudHostId,
-      isStreaming,
-    }
-    if (stateLoadedRef.current) {
-      if (isChatTileRuntimeStateDisposed(tileId)) return
-      setChatTileRuntimeState(tileId, latestStateRef.current)
-    }
-  }, [tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming])
-
   // Publish the latest task list for this tile so external chrome (tab bar,
   // sidebar) can surface the agent's current plan without drilling into
   // ChatTile internals. Walks reverse-chronologically across both the live
@@ -1458,147 +1402,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     prevQueuedCountRef.current = next
   }, [queuedTurns.length])
 
-  const persistLatestState = useCallback((stateOverride?: ChatTilePersistedState | null) => {
-    if (persistTimerRef.current) {
-      clearTimeout(persistTimerRef.current)
-      persistTimerRef.current = null
-    }
-    const nextState = stateOverride ?? latestStateRef.current
-    if (!workspaceId || !stateLoadedRef.current || !nextState || isChatTileRuntimeStateDisposed(tileId)) return
-    const persistedState = nextState.linkedSessionEntryId
-      ? { ...nextState, messages: [] }
-      : nextState
-    void window.electron.canvas.saveTileState(workspaceId, tileId, persistedState).catch(() => {})
-  }, [workspaceId, tileId])
-
-  useEffect(() => {
-    reviveChatTileRuntimeState(tileId)
-    stateLoadedRef.current = false
-
-    const applySavedState = (saved: Partial<ChatTilePersistedState> | null | undefined) => {
-      if (!saved) return
-      if (Array.isArray(saved.messages)) setMessagesSafe(saved.messages)
-      if (typeof saved.input === 'string') setInput(saved.input)
-      if (Array.isArray(saved.attachments)) {
-        setAttachments(saved.attachments.filter((item: any) => typeof item?.path === 'string').map((item: any) => ({
-          path: item.path,
-          kind: item.kind === 'image' || isImagePath(item.path) ? 'image' : 'file',
-        })))
-      }
-      if (Array.isArray(saved.queuedTurns)) {
-        setQueuedTurns(saved.queuedTurns.filter((item: any) => typeof item?.id === 'string' && typeof item?.content === 'string').map((item: any) => ({
-          id: item.id,
-          content: item.content,
-          preview: typeof item.preview === 'string' ? item.preview : buildQueuedTurnPreview(item.content, Number(item.attachmentCount) || 0),
-          attachmentCount: Number(item.attachmentCount) || 0,
-          createdAt: Number(item.createdAt) || Date.now(),
-          parentId: typeof item.parentId === 'string' ? item.parentId : null,
-        })))
-      }
-      if (Array.isArray(saved.openChatSurfaces)) {
-        const restoredSurfaces = normalizePersistedChatSurfaces(saved.openChatSurfaces)
-        setOpenChatSurfaces(restoredSurfaces)
-        if (typeof saved.activeChatSurfaceId === 'string' && restoredSurfaces.some(surface => surface.instanceId === saved.activeChatSurfaceId)) {
-          setActiveChatSurfaceId(saved.activeChatSurfaceId)
-        } else if (saved.activeChatSurfaceId === null) {
-          setActiveChatSurfaceId(null)
-        } else {
-          setActiveChatSurfaceId(restoredSurfaces[restoredSurfaces.length - 1]?.instanceId ?? null)
-        }
-      } else if (saved.activeChatSurfaceId === null) {
-        setActiveChatSurfaceId(null)
-      }
-      const savedProvider = typeof saved.provider === 'string' ? saved.provider : provider
-      if (saved.provider) setProvider(saved.provider)
-      if (typeof saved.model === 'string') setModel(saved.model)
-      if (saved.executionTarget === 'local' || saved.executionTarget === 'cloud') setExecutionTarget(saved.executionTarget)
-      if (typeof saved.mcpEnabled === 'boolean') setMcpEnabled(saved.mcpEnabled)
-      if (typeof saved.mode === 'string') setMode(resolveProviderModeId(savedProvider, saved.mode))
-      if (typeof saved.thinking === 'string') setThinking(saved.thinking)
-      if (typeof saved.autoAgentMode === 'boolean') setAutoAgentMode(saved.autoAgentMode)
-      if (typeof saved.preserveSessionSummary === 'boolean') setPreserveSessionSummary(saved.preserveSessionSummary)
-      if (typeof saved.linkedSessionEntryId === 'string' || saved.linkedSessionEntryId === null) setLinkedSessionEntryId(saved.linkedSessionEntryId ?? null)
-      if (saved.linkedSessionHint === null) {
-        setLinkedSessionHint(null)
-      } else if (saved.linkedSessionHint && typeof saved.linkedSessionHint === 'object') {
-        const hint = saved.linkedSessionHint as Partial<SessionEntryHint>
-        if (typeof hint.id === 'string' && typeof hint.source === 'string') {
-          setLinkedSessionHint({
-            id: hint.id,
-            source: hint.source as SessionEntryHint['source'],
-            filePath: typeof hint.filePath === 'string' ? hint.filePath : undefined,
-            sessionId: typeof hint.sessionId === 'string' || hint.sessionId === null ? hint.sessionId : null,
-            provider: typeof hint.provider === 'string' ? hint.provider : '',
-            model: typeof hint.model === 'string' ? hint.model : '',
-            messageCount: typeof hint.messageCount === 'number' ? hint.messageCount : 0,
-            title: typeof hint.title === 'string' ? hint.title : '',
-            projectPath: typeof hint.projectPath === 'string' || hint.projectPath === null ? hint.projectPath : null,
-          })
-        }
-      }
-      if (typeof saved.hasEarlierMessages === 'boolean') setHasEarlierMessages(saved.hasEarlierMessages)
-      else if (saved.linkedSessionEntryId == null) setHasEarlierMessages(false)
-      if (typeof saved.sessionId === 'string' || saved.sessionId === null) setSessionId(saved.sessionId)
-      if (typeof saved.jobId === 'string' || saved.jobId === null) setJobId(saved.jobId ?? null)
-      if (typeof saved.jobSequence === 'number') {
-        setJobSequence(saved.jobSequence)
-        lastJobSequenceRef.current = saved.jobSequence
-      }
-      if (typeof saved.cloudHostId === 'string' || saved.cloudHostId === null) setCloudHostId(saved.cloudHostId ?? null)
-      if (typeof saved.isStreaming === 'boolean') setIsStreaming(saved.isStreaming)
-    }
-
-    const cached = reloadToken > 0
-      ? getChatTileRuntimeState<ChatTilePersistedState>(tileId)
-      : (initialRuntimeStateRef.current ?? getChatTileRuntimeState<ChatTilePersistedState>(tileId))
-    if (cached) {
-      applySavedState(cached)
-      stateLoadedRef.current = true
-      return
-    }
-
-    if (!workspaceId) {
-      stateLoadedRef.current = true
-      return
-    }
-
-    window.electron.canvas.loadTileState(workspaceId, tileId).then((saved: any) => {
-      applySavedState(saved)
-    }).catch(() => {}).finally(() => {
-      stateLoadedRef.current = true
-    })
-  }, [workspaceId, tileId, reloadToken])
-
-  useEffect(() => {
-    if (!stateLoadedRef.current) return
-    if (!workspaceId || !linkedSessionEntryId) return
-    if (isStreaming) return
-
-    const usePagedHistory = canUsePagedLinkedHistory(linkedSessionEntryId, linkedSessionHint, sessionId)
-    let cancelled = false
-    void window.electron.canvas.getSessionState(workspaceId, linkedSessionEntryId, {
-      entryHint: linkedSessionHint ?? null,
-      tailLimit: usePagedHistory ? LINKED_SESSION_HISTORY_PAGE_SIZE : undefined,
-    })
-      .then((saved: any) => {
-        if (cancelled || !saved) return
-        const savedProvider = typeof saved.provider === 'string'
-          ? saved.provider
-          : (latestStateRef.current?.provider ?? DEFAULT_PROVIDER_ID)
-        if (Array.isArray(saved.messages)) setMessagesSafe(saved.messages)
-        if (typeof saved.provider === 'string') setProvider(saved.provider)
-        if (typeof saved.model === 'string') setModel(saved.model)
-        if (typeof saved.mode === 'string') setMode(resolveProviderModeId(savedProvider, saved.mode))
-        if (typeof saved.hasEarlierMessages === 'boolean') setHasEarlierMessages(saved.hasEarlierMessages)
-        if (typeof saved.sessionId === 'string' || saved.sessionId === null) setSessionId(saved.sessionId ?? null)
-        if (saved.executionTarget === 'local' || saved.executionTarget === 'cloud') setExecutionTarget(saved.executionTarget)
-        if (typeof saved.cloudHostId === 'string' || saved.cloudHostId === null) setCloudHostId(saved.cloudHostId ?? null)
-      })
-      .catch(() => {})
-
-    return () => { cancelled = true }
-  }, [workspaceId, linkedSessionEntryId, linkedSessionHint, reloadToken, isStreaming, sessionId, setMessagesSafe])
-
   // Reset the "last activity" clock every time streaming toggles on so the
   // quiet-indicator starts from zero for each new turn. The message-change
   // effect below then keeps it current while tokens/tool-blocks arrive.
@@ -1668,53 +1471,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     }, timeoutMs)
     return () => window.clearTimeout(id)
   }, [historicalMessages, messages, toolCollapseTick])
-
-  useEffect(() => {
-    if (!workspaceId || !stateLoadedRef.current || isChatTileRuntimeStateDisposed(tileId)) return
-    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
-    persistTimerRef.current = setTimeout(() => {
-      persistTimerRef.current = null
-      persistLatestState()
-    }, isStreaming ? 2000 : 500)
-
-    return () => {
-      if (persistTimerRef.current) {
-        clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-    }
-  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, persistLatestState])
-
-  useEffect(() => {
-    // Flush pending state on window close so the last few seconds of a
-    // conversation are not lost. The unmount cleanup fires async IPC which
-    // may not survive Electron's window teardown — beforeunload fires
-    // earlier and gives the main process time to write.
-    const handleBeforeUnload = (): void => {
-      if (persistTimerRef.current) {
-        clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-      const latest = latestStateRef.current
-      if (latest && !isChatTileRuntimeStateDisposed(tileId)) {
-        persistLatestState(latest)
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      if (persistTimerRef.current) {
-        clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-      const latest = latestStateRef.current
-      if (!latest) return
-      if (isChatTileRuntimeStateDisposed(tileId)) return
-      setChatTileRuntimeState(tileId, latest)
-      persistLatestState(latest)
-    }
-  }, [tileId, persistLatestState])
 
   useEffect(() => {
     if (!stateLoadedRef.current) return
@@ -2259,6 +2015,71 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [])
 
+  const {
+    dispatchMessageContent,
+    sendMessage,
+    reorderQueuedTurn,
+    flushQueueStateNow,
+    logQueueEvent,
+    stopStreaming,
+    handleQueuedTurnSteer,
+  } = useChatTileMessaging({
+    tileId,
+    workspaceId,
+    workspaceDir: _workspaceDir,
+    settings,
+    isStreaming,
+    input,
+    attachments,
+    implicitPeerImageAttachments,
+    queuedTurns,
+    messages,
+    provider,
+    model,
+    mode,
+    thinking,
+    sessionId,
+    mcpEnabled,
+    executionTarget,
+    cloudHostId,
+    effectiveAgentMode,
+    autoAgentMode,
+    linkedSessionEntryId,
+    linkedSessionHint,
+    hasEarlierMessages,
+    connectedPeers,
+    peerContextRef,
+    peerToolNames,
+    providerEntryById,
+    currentProviderEntry,
+    activeCloudHost,
+    latestStateRef,
+    persistLatestState,
+    lastJobSequenceRef,
+    resumedJobKeyRef,
+    stickToBottomRef,
+    activeChatSurfaceRef,
+    openChatSurfacesRef,
+    textareaRef,
+    setMessagesSafe,
+    setInput,
+    setAttachments,
+    setQueuedTurns,
+    setOpenChatSurfaces,
+    setActiveChatSurfaceId,
+    setIsStreaming,
+    setJobId,
+    setJobSequence,
+    setPreserveSessionSummary,
+    setAcType,
+    setAcQuery,
+    focusComposer,
+    getChatSurfaceIframe,
+    postToChatSurface,
+    exportNotesToClipboard,
+    pluginCommands,
+  })
+
   const syncComposerHeight = useCallback(() => {
     const ta = textareaRef.current
     if (!ta) return
@@ -2699,448 +2520,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     addAttachments(droppedPaths)
   }, [addAttachments])
 
-  const dispatchMessageContent = useCallback(async (messageContent: string): Promise<boolean> => {
-    const trimmedContent = messageContent.trim()
-    if (!trimmedContent) return false
-    const { bodyText: userBodyText } = splitMessageAttachmentPaths(trimmedContent)
-
-    const state = latestStateRef.current
-    const activeProvider = state?.provider ?? provider
-    const activeModel = state?.model ?? model
-    const activeThinking = state?.thinking ?? thinking
-    const activeSessionId = state?.sessionId ?? sessionId
-    const activeMcpEnabled = state?.mcpEnabled ?? mcpEnabled
-    const activeMessages = state?.messages ?? messages
-    const activeProviderEntry = providerEntryById.get(activeProvider) ?? currentProviderEntry
-    const activeModeOptions = activeProviderEntry?.kind === 'builtin'
-      ? PROVIDER_MODES[activeProviderEntry.id as BuiltinProvider]
-      : [EXTENSION_PROVIDER_MODE]
-    const rawActiveMode = state?.mode ?? mode
-    const activeMode = activeModeOptions.some(option => option.id === rawActiveMode)
-      ? rawActiveMode
-      : resolveProviderModeId(activeProvider, settings?.chatProviderModes?.[activeProvider])
-    const nextCloudHostId = executionTarget === 'cloud'
-      ? (cloudHostId ?? activeCloudHost?.id ?? null)
-      : null
-
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      role: 'user',
-      content: trimmedContent,
-      timestamp: Date.now(),
-    }
-    const assistantId = `msg-${Date.now() + 1}`
-    const optimisticMessages = normalizeMessagesForMemory([
-      ...activeMessages,
-      userMsg,
-      {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        isStreaming: true,
-      },
-    ])
-    const optimisticState: ChatTilePersistedState = {
-      messages: optimisticMessages,
-      input: '',
-      attachments: [],
-      queuedTurns: state?.queuedTurns ?? queuedTurns,
-      executionTarget: state?.executionTarget ?? executionTarget,
-      provider: activeProvider,
-      model: activeModel,
-      mcpEnabled: activeMcpEnabled,
-      mode: activeMode,
-      thinking: activeThinking,
-      agentMode: state?.agentMode ?? effectiveAgentMode,
-      autoAgentMode: state?.autoAgentMode ?? autoAgentMode,
-      preserveSessionSummary: linkedSessionEntryId ? true : false,
-      linkedSessionEntryId,
-      linkedSessionHint,
-      hasEarlierMessages,
-      sessionId: activeSessionId,
-      jobId: null,
-      jobSequence: 0,
-      cloudHostId: nextCloudHostId,
-      isStreaming: true,
-    }
-
-    setPreserveSessionSummary(linkedSessionEntryId ? true : false)
-    setMessagesSafe(optimisticMessages)
-    setIsStreaming(true)
-    setJobId(null)
-    setJobSequence(0)
-    lastJobSequenceRef.current = 0
-    resumedJobKeyRef.current = null
-    stickToBottomRef.current = true
-    focusComposer()
-    latestStateRef.current = optimisticState
-    persistLatestState(optimisticState)
-
-    window.electron?.bus?.publish(`tile:${tileId}`, 'activity', `chat:${tileId}`, {
-      message: `User: ${userMsg.content.slice(0, 100)}`, role: 'user',
-    })
-
-    try {
-      const recentEditContext = await buildRecentEditContext(activeMessages, _workspaceDir, userBodyText)
-      const blockNotesContext = buildBlockNotesContext(activeMessages)
-      const requestMessages = [...activeMessages, userMsg].map((message, index, allMessages) => {
-        const isNewestUserMessage = index === allMessages.length - 1 && message.id === userMsg.id
-        if (!isNewestUserMessage || (!recentEditContext && !blockNotesContext)) {
-          return { role: message.role, content: message.content }
-        }
-        // Both context blocks are appended to the newest user turn so they
-        // travel with the request the model is actually responding to, not
-        // as floating system noise earlier in the transcript.
-        const parts = [message.content]
-        if (recentEditContext) parts.push(`---\nRecent edit context:\n${recentEditContext}`)
-        if (blockNotesContext) parts.push(`---\n${blockNotesContext}`)
-        return {
-          role: message.role,
-          content: parts.join('\n\n').trim(),
-        }
-      })
-
-      const peers = activeMcpEnabled ? connectedPeers.map(p => ({
-        peerId: p.peerId,
-        peerType: p.peerType,
-        tools: p.capabilities.filter(c => c.startsWith('tool:')).map(c => stripCapabilityPrefix(c)),
-        actions: p.actions,
-        context: peerContextRef.current.get(p.peerId),
-      })) : []
-
-      const result = await window.electron?.chat?.send({
-        cardId: tileId,
-        workspaceId,
-        provider: activeProvider,
-        model: activeModel,
-        providerTransport: activeProviderEntry?.transport ?? null,
-        mode: activeMode,
-        thinking: activeThinking,
-        workspaceDir: _workspaceDir,
-        mcpEnabled: activeMcpEnabled,
-        executionTarget,
-        cloudHostId: nextCloudHostId,
-        executionPreference: settings?.execution ?? null,
-        messages: requestMessages,
-        negotiatedTools: activeMcpEnabled ? peerToolNames : undefined,
-        peers: peers.length > 0 ? peers : undefined,
-        sessionId: activeSessionId,
-      })
-      if (result && typeof result === 'object' && 'jobId' in result && typeof (result as { jobId?: unknown }).jobId === 'string') {
-        const nextJobId = (result as { jobId: string }).jobId
-        setJobId(nextJobId)
-        setJobSequence(0)
-        lastJobSequenceRef.current = 0
-        const nextState = {
-          ...optimisticState,
-          jobId: nextJobId,
-          jobSequence: 0,
-        }
-        latestStateRef.current = nextState
-        persistLatestState(nextState)
-      } else {
-        setJobId(null)
-        setJobSequence(0)
-        lastJobSequenceRef.current = 0
-        latestStateRef.current = optimisticState
-        persistLatestState(optimisticState)
-      }
-      return true
-    } catch (err) {
-      setMessagesSafe(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: `Error: ${err}`, isStreaming: false } : m
-      ))
-      setIsStreaming(false)
-      focusComposer()
-      return false
-    }
-  }, [provider, model, mode, thinking, sessionId, mcpEnabled, messages, providerEntryById, currentProviderEntry, tileId, connectedPeers, _workspaceDir, executionTarget, cloudHostId, activeCloudHost, settings?.execution, settings?.chatProviderModes, peerToolNames, focusComposer, setMessagesSafe, queuedTurns, effectiveAgentMode, autoAgentMode, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, persistLatestState])
-
-  const logQueueEvent = useCallback((
-    type: 'enqueue' | 'dispatch' | 'delete' | 'complete' | 'clear' | 'reorder',
-    details?: { queueId?: string; content?: string; preview?: string; attachmentCount?: number; createdAt?: number; draggedId?: string; targetId?: string; mode?: string; newParentId?: string | null },
-  ) => {
-    try {
-      // Best-effort append to the queued-message event log. Tolerate two
-      // failure modes that shouldn't surface as uncaught rejections:
-      //   1) IPC API missing entirely (preload hasn't injected yet)
-      //   2) Handler not yet registered on the main process (early-boot race)
-      // The optional-chain handles (1); the .catch handles (2) and any
-      // transient IPC failure. These events are advisory — losing one is
-      // acceptable and must never bubble up as a promise rejection.
-      const result = (window.electron as any)?.canvas?.queuedMessages?.append?.({
-        type,
-        at: Date.now(),
-        workspaceId,
-        tileId,
-        ...(details ?? {}),
-      })
-      if (result && typeof result.catch === 'function') {
-        result.catch(() => { /* best-effort; swallow */ })
-      }
-    } catch { /* best effort */ }
-  }, [workspaceId, tileId])
-
-  const flushQueueStateNow = useCallback((nextQueue: QueuedChatTurn[]) => {
-    // Bypass the debounced persistLatestState so the tile-state JSON on disk
-    // has the very latest queue before any possible crash or restart.
-    const base = latestStateRef.current
-    if (!base) return
-    persistLatestState({ ...base, queuedTurns: nextQueue })
-  }, [persistLatestState])
-
-  // Reorder / re-parent a queued turn in response to a drag-drop gesture.
-  // Supports three drop modes relative to the target row:
-  //   'before' → sibling of target, inserted at the target's slot
-  //   'after'  → sibling of target, inserted just after target (+ its kids)
-  //   'into'   → nested under target as a child (flattened to one level)
-  // Children of the dragged item are orphaned to the top level when the
-  // dragged row moves — we intentionally keep the tree shallow (one level
-  // of nesting) so the queue stays legible at a glance.
-  const reorderQueuedTurn = useCallback((
-    draggedId: string,
-    targetId: string,
-    mode: 'before' | 'after' | 'into',
-  ) => {
-    if (draggedId === targetId) return
-    const prev = queuedTurns
-    const draggedIdx = prev.findIndex(t => t.id === draggedId)
-    const targetIdx = prev.findIndex(t => t.id === targetId)
-    if (draggedIdx < 0 || targetIdx < 0) return
-    const dragged = prev[draggedIdx]
-
-    // Orphan any children of dragged (they become top-level), and remove
-    // dragged itself so we can re-insert it at the new location.
-    const orphaned = prev.map(t =>
-      t.parentId === draggedId ? { ...t, parentId: null } : t
-    )
-    const without = orphaned.filter(t => t.id !== draggedId)
-    const newTargetIdx = without.findIndex(t => t.id === targetId)
-    if (newTargetIdx < 0) return
-    const target = without[newTargetIdx]
-
-    let newParentId: string | null = null
-    let insertIdx = newTargetIdx
-
-    if (mode === 'into') {
-      // Only nest one level deep. If the target is already a child, treat
-      // the drop as a sibling 'after' target.
-      if (target.parentId) {
-        newParentId = target.parentId
-        insertIdx = newTargetIdx + 1
-      } else {
-        newParentId = target.id
-        const childCount = without.filter(t => t.parentId === target.id).length
-        insertIdx = newTargetIdx + 1 + childCount
-      }
-    } else if (mode === 'before') {
-      newParentId = target.parentId ?? null
-      insertIdx = newTargetIdx
-    } else {
-      // 'after'
-      newParentId = target.parentId ?? null
-      if (!target.parentId) {
-        // Insert after target AND its existing children so we don't split
-        // the visual group.
-        const childCount = without.filter(t => t.parentId === target.id).length
-        insertIdx = newTargetIdx + 1 + childCount
-      } else {
-        insertIdx = newTargetIdx + 1
-      }
-    }
-
-    const nextDragged: QueuedChatTurn = { ...dragged, parentId: newParentId }
-    const result = [
-      ...without.slice(0, insertIdx),
-      nextDragged,
-      ...without.slice(insertIdx),
-    ]
-    setQueuedTurns(result)
-    flushQueueStateNow(result)
-    logQueueEvent('reorder', { draggedId, targetId, mode, newParentId })
-  }, [queuedTurns, flushQueueStateNow, logQueueEvent])
-
-  const queueCurrentDraft = useCallback(() => {
-    const draftAttachments = mergeAttachments(attachments, implicitPeerImageAttachments)
-    const messageContent = buildOutgoingMessageContent(input, draftAttachments)
-    if (!messageContent) return false
-
-    const queuedTurn: QueuedChatTurn = {
-      id: `queued-${Date.now()}`,
-      content: messageContent,
-      preview: buildQueuedTurnPreview(messageContent, draftAttachments.length),
-      attachmentCount: draftAttachments.length,
-      createdAt: Date.now(),
-    }
-
-    setPreserveSessionSummary(linkedSessionEntryId ? true : false)
-    const nextQueue = [...queuedTurns, queuedTurn]
-    setQueuedTurns(nextQueue)
-    flushQueueStateNow(nextQueue)
-    logQueueEvent('enqueue', {
-      queueId: queuedTurn.id,
-      content: queuedTurn.content,
-      preview: queuedTurn.preview,
-      attachmentCount: queuedTurn.attachmentCount,
-      createdAt: queuedTurn.createdAt,
-    })
-    setInput('')
-    setAttachments([])
-    setAcType(null)
-    setAcQuery('')
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    focusComposer()
-    return true
-  }, [input, attachments, implicitPeerImageAttachments, focusComposer, queuedTurns, linkedSessionEntryId, flushQueueStateNow, logQueueEvent])
-
-  const sendMessage = useCallback(async () => {
-    if (isStreaming) {
-      queueCurrentDraft()
-      return
-    }
-
-    // Flush the active chat-surface (Sketch / Builder) to a temp attachment
-    // before composing the outgoing message. When Builder is active we persist
-    // its HTML payload as a temporary .html file so the normal attachment path
-    // can carry it into the turn just like files dropped from Finder.
-    let flushedAttachments = mergeAttachments(attachments, implicitPeerImageAttachments)
-    const surface = activeChatSurfaceRef.current
-    if (surface) {
-      try {
-        await new Promise<void>((resolve) => {
-          let done = false
-          const ack = () => {
-            if (done) return
-            done = true
-            window.removeEventListener('message', onceAck)
-            clearTimeout(timeout)
-            resolve()
-          }
-          const timeout = setTimeout(ack, 1200)
-          const onceAck = (e: MessageEvent) => {
-            if (getChatSurfaceIframe(surface.instanceId)?.contentWindow !== e.source) return
-            const msg = e.data
-            if (!msg || typeof msg !== 'object') return
-            if (msg.type === 'contex-rpc' && msg.method === 'surface.setPayload' && msg.tileId === surface.instanceId) {
-              ack()
-            }
-          }
-          window.addEventListener('message', onceAck)
-          postToChatSurface(surface.instanceId, { type: 'contex-event', event: 'surface.requestFlush', data: {} })
-        })
-      } catch { /* best-effort */ }
-
-      const latest = activeChatSurfaceRef.current
-      const payload = latest?.payload
-      if (payload?.data) {
-        try {
-          const chatApi = (window.electron as unknown as { chat?: { writeTempAttachment?: (p: { data: string; mime?: string; ext?: string; filenameHint?: string }) => Promise<{ ok: true; path: string } | { ok: false; error: string }> } }).chat
-          if (chatApi?.writeTempAttachment) {
-            const attachmentData = payload.kind === 'text' ? encodeUtf8Base64(payload.data) : payload.data
-            const attachmentKind: PendingAttachment['kind'] = payload.kind === 'text' ? 'file' : 'image'
-            const r = await chatApi.writeTempAttachment({
-              data: attachmentData,
-              mime: payload.kind === 'text' ? (payload.mime ?? 'text/html') : payload.mime,
-              ext: payload.kind === 'text' ? (payload.ext ?? 'html') : payload.ext,
-              filenameHint: surface.label.toLowerCase().replace(/\s+/g, '-'),
-            })
-            if (r.ok) {
-              flushedAttachments = mergeAttachments(flushedAttachments, [{ path: r.path, kind: attachmentKind }])
-            }
-          }
-        } catch { /* best-effort */ }
-      }
-    }
-
-    const messageContent = buildOutgoingMessageContent(input, flushedAttachments)
-    if (!messageContent) return
-
-    // Local-only slash commands — handled client-side, never dispatched to
-    // the model. `/export-notes` copies every attached BlockNote (message,
-    // tool, thinking) into the clipboard as a Markdown report.
-    if (messageContent.trim() === '/export-notes') {
-      setInput('')
-      setAcType(null)
-      setAcQuery('')
-      if (textareaRef.current) textareaRef.current.style.height = 'auto'
-      await exportNotesToClipboard()
-      return
-    }
-
-    // Plugin slash commands (point 3) — run the contributed command locally
-    // instead of dispatching the text to the model. Match the first token only,
-    // so `/studio` runs even when the user typed a trailing description.
-    const slashToken = messageContent.trim().match(/^\/(\S+)/)?.[1]?.toLowerCase()
-    if (slashToken) {
-      const hit = pluginCommands.find(
-        c => typeof c.slash === 'string' && c.slash.replace(/^\/+/, '').toLowerCase() === slashToken,
-      )
-      if (hit) {
-        setInput('')
-        setAcType(null)
-        setAcQuery('')
-        if (textareaRef.current) textareaRef.current.style.height = 'auto'
-        await executeCommand(hit)
-        return
-      }
-    }
-
-    // Signal the sidebar that the user just submitted a message in this thread
-    // so it can promote the session to the top. This is the ONLY path that
-    // should move a thread in the sidebar — opening, streaming-resume, or tool
-    // continuation must not trigger it.
-    recordChatMessageSent({ tileId, sessionId, entryId: linkedSessionEntryId })
-
-    setInput('')
-    setAcType(null)
-    setAcQuery('')
-    setAttachments([])
-
-    // Clear every open surface for the next turn, then reset the tab strip.
-    for (const openSurface of openChatSurfacesRef.current) {
-      postToChatSurface(openSurface.instanceId, { type: 'contex-event', event: 'surface.clear', data: {} })
-    }
-    setOpenChatSurfaces([])
-    setActiveChatSurfaceId(null)
-
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    await dispatchMessageContent(messageContent)
-  }, [isStreaming, input, attachments, implicitPeerImageAttachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, getChatSurfaceIframe, postToChatSurface, pluginCommands])
-
-  const insertSteerMessageIntoStream = useCallback((content: string) => {
-    const trimmed = content.trim()
-    if (!trimmed) return
-    const userMsg: ChatMessage = {
-      id: `msg-steer-${Date.now()}`,
-      role: 'user',
-      content: trimmed,
-      timestamp: Date.now(),
-    }
-    setMessagesSafe(prev => {
-      const streamingAssistantIndex = prev.findLastIndex(message => message.role === 'assistant' && message.isStreaming)
-      if (streamingAssistantIndex < 0) return [...prev, userMsg]
-      return [
-        ...prev.slice(0, streamingAssistantIndex),
-        userMsg,
-        ...prev.slice(streamingAssistantIndex),
-      ]
-    })
-    stickToBottomRef.current = true
-    window.electron?.bus?.publish(`tile:${tileId}`, 'activity', `chat:${tileId}`, {
-      message: `User steered: ${trimmed.slice(0, 100)}`,
-      role: 'user',
-    })
-  }, [setMessagesSafe, tileId])
-
-  const stopStreaming = useCallback(() => {
-    window.electron?.chat?.stop?.(tileId)
-    setIsStreaming(false)
-    setJobId(null)
-    setMessagesSafe(prev => prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m))
-    focusComposer()
-  }, [tileId, focusComposer])
-
   // Drop any previously-loaded older pages whenever the backing linked
   // session changes so the next thread starts from a clean tail view.
   useEffect(() => {
@@ -3148,61 +2527,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setEarlierLoadError(null)
     pendingHistoryPrependRef.current = null
   }, [sessionId, linkedSessionEntryId])
-
-  useEffect(() => {
-    if (isStreaming || queuedTurns.length === 0 || isFlushingQueuedTurnRef.current) return
-
-    const nextTurn = queuedTurns[0]
-    isFlushingQueuedTurnRef.current = true
-
-    void (async () => {
-      const sent = await dispatchMessageContent(nextTurn.content)
-      const remaining = queuedTurns.filter(turn => turn.id !== nextTurn.id)
-      setQueuedTurns(remaining)
-      flushQueueStateNow(remaining)
-      logQueueEvent('dispatch', { queueId: nextTurn.id })
-      if (!sent) {
-        setInput(current => current.trim() ? current : nextTurn.content)
-      }
-    })().finally(() => {
-      isFlushingQueuedTurnRef.current = false
-    })
-  }, [isStreaming, queuedTurns, dispatchMessageContent, flushQueueStateNow, logQueueEvent])
-
-  const handleQueuedTurnSteer = useCallback(async (turn: QueuedChatTurn) => {
-    const content = turn.content.trim()
-    if (!content) return
-
-    if (isStreaming) {
-      const result = await window.electron?.chat?.steer?.({ cardId: tileId, message: content })
-      if (!result?.ok) {
-        setMessagesSafe(prev => [...prev, {
-          id: `msg-steer-error-${Date.now()}`,
-          role: 'assistant',
-          content: `Steer failed: ${result?.error ?? 'No active steerable stream'}`,
-          timestamp: Date.now(),
-          isStreaming: false,
-        }])
-        return
-      }
-
-      const remaining = queuedTurns.filter(item => item.id !== turn.id)
-      setQueuedTurns(remaining)
-      flushQueueStateNow(remaining)
-      logQueueEvent('dispatch', { queueId: turn.id, content: turn.content, preview: turn.preview, attachmentCount: turn.attachmentCount })
-      insertSteerMessageIntoStream(content)
-      return
-    }
-
-    const remaining = queuedTurns.filter(item => item.id !== turn.id)
-    setQueuedTurns(remaining)
-    flushQueueStateNow(remaining)
-    logQueueEvent('dispatch', { queueId: turn.id, content: turn.content, preview: turn.preview, attachmentCount: turn.attachmentCount })
-    const sent = await dispatchMessageContent(content)
-    if (!sent) {
-      setInput(current => current.trim() ? current : content)
-    }
-  }, [isStreaming, tileId, queuedTurns, flushQueueStateNow, logQueueEvent, insertSteerMessageIntoStream, dispatchMessageContent, setMessagesSafe])
 
   const selectAcItem = useCallback((item: AutocompleteItem) => {
     const ta = textareaRef.current

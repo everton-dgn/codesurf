@@ -308,6 +308,70 @@ export function buildSnippetFromRanges(fileContent: string, ranges: Array<{ star
   return parts.join('\n').trim()
 }
 
+const RECENT_EDIT_CONTEXT_FILE_LIMIT = 3
+const RECENT_EDIT_CONTEXT_MAX_CHARS = 5000
+
+export async function buildRecentEditContext(
+  messages: ChatMessage[],
+  workspaceDir: string,
+  userText: string,
+): Promise<string | null> {
+  if (!shouldAttachRecentEditContext(userText) || !workspaceDir.trim() || !window.electron?.fs?.readFile) return null
+
+  const seenPaths = new Set<string>()
+  const recentChanges: Array<{ displayPath: string; resolvedPath: string; diff: string; changeType: string }> = []
+
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex]
+    if (message.role !== 'assistant') continue
+    const toolBlocks = message.toolBlocks ?? []
+    for (let blockIndex = toolBlocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = toolBlocks[blockIndex]
+      for (const change of [...(block.fileChanges ?? [])].reverse()) {
+        const resolvedPath = resolveEditedFilePath(change.path, workspaceDir)
+        if (!resolvedPath || seenPaths.has(resolvedPath)) continue
+        seenPaths.add(resolvedPath)
+        recentChanges.push({
+          displayPath: change.path,
+          resolvedPath,
+          diff: change.diff,
+          changeType: change.changeType,
+        })
+        if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
+      }
+      if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
+    }
+    if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
+  }
+
+  if (recentChanges.length === 0) return null
+
+  const sections: string[] = []
+  for (const change of recentChanges) {
+    try {
+      const fileContent = await window.electron.fs.readFile(change.resolvedPath)
+      const snippet = buildSnippetFromRanges(fileContent, extractChangedLineRangesFromDiff(change.diff))
+      if (!snippet) continue
+      sections.push(
+        `File: ${change.displayPath}\n`
+        + `Recent change type: ${change.changeType}\n`
+        + `Current nearby code:\n${snippet}`,
+      )
+    } catch {
+      // If the file no longer exists or can't be read, skip it quietly.
+    }
+  }
+
+  if (sections.length === 0) return null
+
+  const combined =
+    'Recent edit context from the immediately previous implementation pass. Use this only as fast-follow context if the user is referring to the same change area.\n\n'
+    + sections.join('\n\n---\n\n')
+
+  if (combined.length <= RECENT_EDIT_CONTEXT_MAX_CHARS) return combined
+  return `${combined.slice(0, RECENT_EDIT_CONTEXT_MAX_CHARS - 1).trimEnd()}…`
+}
+
 /** Per-turn annotations ("block notes") the user has stuck onto earlier
  *  messages, tool calls, or thinking blocks are pure UI state by default —
  *  they never reach the model. This helper serialises them into a compact
