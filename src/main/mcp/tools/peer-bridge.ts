@@ -1,0 +1,192 @@
+import { promises as fs } from 'fs'
+import { join } from 'path'
+import { CONTEX_HOME } from '../../paths'
+import { canvasStatePath, ensureWorkspaceStorageMigrated } from '../../storage/workspaceArtifacts'
+import { getNodeToolSchemaByName, getPeerBridgeNodeTools } from '../../../shared/nodeTools'
+import type { TileState } from '../../../shared/types'
+import { asString, type McpToolContext } from '../types'
+
+function asBoolean(value: unknown): boolean {
+  return value === true
+}
+import { executeImageEditTool, publishPeerCommand } from './generation'
+
+type UserConfigWorkspaceRef = {
+  id: string
+  path: string
+}
+
+async function readWorkspaceRefsFromUserConfig(): Promise<UserConfigWorkspaceRef[]> {
+  try {
+    const userConfigPath = join(CONTEX_HOME, 'config.json')
+    const raw = await fs.readFile(userConfigPath, 'utf8')
+    const parsed = JSON.parse(raw) as {
+      projects?: Array<{ id?: string; path?: string }>
+      workspaces?: Array<{ id?: string; path?: string; projectIds?: string[]; primaryProjectId?: string | null }>
+    }
+
+    if (Array.isArray(parsed.projects) && Array.isArray(parsed.workspaces)) {
+      const projectsById = new Map(
+        parsed.projects
+          .filter(project => typeof project?.id === 'string' && typeof project?.path === 'string' && project.path.trim())
+          .map(project => [String(project.id), String(project.path).trim()] as const),
+      )
+
+      return parsed.workspaces.flatMap(workspace => {
+        const workspaceId = typeof workspace?.id === 'string' ? workspace.id : ''
+        if (!workspaceId) return []
+
+        const directPath = typeof workspace?.path === 'string' ? workspace.path.trim() : ''
+        if (directPath) return [{ id: workspaceId, path: directPath }]
+
+        const primaryProjectId = typeof workspace?.primaryProjectId === 'string' ? workspace.primaryProjectId : null
+        const projectIds = Array.isArray(workspace?.projectIds) ? workspace.projectIds : []
+        const projectPath = (primaryProjectId && projectsById.get(primaryProjectId))
+          || projectIds.map(projectId => projectsById.get(String(projectId))).find(Boolean)
+          || ''
+        return projectPath ? [{ id: workspaceId, path: projectPath }] : []
+      })
+    }
+
+    if (Array.isArray(parsed.workspaces)) {
+      return parsed.workspaces.flatMap(workspace => {
+        const workspaceId = typeof workspace?.id === 'string' ? workspace.id : ''
+        const workspacePath = typeof workspace?.path === 'string' ? workspace.path.trim() : ''
+        return workspaceId && workspacePath ? [{ id: workspaceId, path: workspacePath }] : []
+      })
+    }
+  } catch {
+    // ignore missing or invalid config
+  }
+
+  return []
+}
+
+async function readCanvasStateTiles(workspaceId: string): Promise<TileState[]> {
+  const storageIds = await ensureWorkspaceStorageMigrated(workspaceId)
+  for (const storageId of storageIds) {
+    try {
+      const raw = await fs.readFile(canvasStatePath(storageId), 'utf8')
+      const parsed = JSON.parse(raw) as { tiles?: TileState[] }
+      if (Array.isArray(parsed.tiles)) return parsed.tiles
+    } catch {
+      // try next alias
+    }
+  }
+  return []
+}
+
+async function findNoteTileBackingFile(tileId: string): Promise<string | null> {
+  const workspaces = await readWorkspaceRefsFromUserConfig()
+  for (const ws of workspaces) {
+    try {
+      const notePath = join(ws.path, '.contex', tileId, 'context', 'note.txt')
+      const stat = await fs.stat(notePath).catch(() => null)
+      if (stat?.isFile()) return notePath
+    } catch {
+      // ignore
+    }
+
+    try {
+      const tiles = await readCanvasStateTiles(ws.id)
+      const tile = tiles.find(entry => entry?.id === tileId && entry?.type === 'note')
+      const filePath = typeof tile?.filePath === 'string' ? tile.filePath.trim() : ''
+      if (filePath) return filePath
+    } catch {
+      // ignore
+    }
+  }
+  return null
+}
+
+export async function handlePeerBridgeTool(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: McpToolContext,
+): Promise<string | null> {
+  const toolSchema = getNodeToolSchemaByName(name)
+  const nodeToolNames = new Set(getPeerBridgeNodeTools().map(tool => tool.name))
+  if (!toolSchema || !nodeToolNames.has(name)) return null
+
+  const tileId = asString(args.tile_id)
+  if (!tileId) return 'Missing tile_id'
+
+  if (name.startsWith('browser_') || name === 'browser_set_mode') {
+    const mode = asString(args.mode)
+    const url = asString(args.url)
+    if (name === 'browser_navigate' && !url) return 'Missing url'
+    if (name === 'browser_set_mode' && (mode !== 'desktop' && mode !== 'mobile')) return 'Invalid mode'
+    return publishPeerCommand(tileId, name, { url: url ?? '', mode: mode }, ctx)
+  }
+
+  if (name === 'terminal_send_input') {
+    const input = asString(args.input)
+    if (!input) return 'Missing input'
+    return publishPeerCommand(tileId, name, { input, enter: asBoolean(args.enter) }, ctx)
+  }
+
+  if (name === 'chat_send_message' || name === 'chat_acknowledge') {
+    const message = asString(args.message) ?? asString(args.note)
+    if (!message) return 'Missing message'
+    return publishPeerCommand(tileId, name, { message }, ctx)
+  }
+
+  if (name === 'code_open_file') {
+    const filePath = asString(args.file_path)
+    if (!filePath) return 'Missing file_path'
+    return publishPeerCommand(tileId, name, { filePath }, ctx)
+  }
+
+  if (name === 'note_read_content') {
+    try {
+      const notePath = await findNoteTileBackingFile(tileId)
+      if (notePath) return await fs.readFile(notePath, 'utf8')
+    } catch { /**/ }
+    return `Note block ${tileId} is empty or not found`
+  }
+
+  if (name === 'note_write_content') {
+    const content = asString(args.content)
+    if (content === undefined) return 'Missing content'
+    try {
+      const notePath = await findNoteTileBackingFile(tileId)
+      if (notePath) await fs.writeFile(notePath, content, 'utf8')
+    } catch { /**/ }
+    return publishPeerCommand(tileId, name, { content }, ctx)
+  }
+
+  if (name === 'note_append_context' || name === 'file_open_context' || name === 'image_annotate' || name === 'kanban_set_status') {
+    const content = asString((name === 'kanban_set_status' ? args.message : args.snippet ?? args.context ?? args.note ?? args.message))
+    if (!content) return 'Missing message'
+    if (name === 'note_append_context') {
+      try {
+        const notePath = await findNoteTileBackingFile(tileId)
+        if (notePath) {
+          const previous = await fs.readFile(notePath, 'utf8').catch(() => '')
+          const next = previous ? `${previous}\n${content}` : content
+          await fs.writeFile(notePath, next, 'utf8')
+        }
+      } catch { /**/ }
+    }
+    return publishPeerCommand(tileId, name, { content }, ctx)
+  }
+
+  if (name === 'image_edit_request' || name === 'image_generate_variation') {
+    return executeImageEditTool(tileId, name, args, ctx)
+  }
+
+  if (name === 'image_replace_source') {
+    const filePath = asString(args.file_path)
+    if (!filePath) return 'Missing file_path'
+    return publishPeerCommand(tileId, name, {
+      filePath,
+      note: asString(args.note) ?? '',
+    }, ctx)
+  }
+
+  if (name === 'kanban_create_card' || name === 'kanban_update_card' || name === 'kanban_move_card' || name === 'kanban_pause_card' || name === 'kanban_delete_card' || name === 'kanban_create_column' || name === 'kanban_rename_column' || name === 'kanban_delete_column') {
+    return publishPeerCommand(tileId, name, { ...args }, ctx)
+  }
+
+  return publishPeerCommand(tileId, name, {}, ctx)
+}
