@@ -1,0 +1,241 @@
+/**
+ * OpenClaw provider — runs `openclaw agent --json` subprocess.
+ */
+
+import { spawn, execFileSync } from 'child_process'
+import { getAgentPath, getShellEnvPath } from '../../agent-paths'
+import { buildCodeSurfOutputConvention } from '../prompt-conventions'
+import type { ChatRequest } from '../types'
+import {
+  log,
+  sendStream,
+  getPreparedMessages,
+  activeProcesses,
+} from '../runtime'
+
+// Store openclaw session IDs (keyed by cardId) for multi-turn resume
+const openclawSessionIds = new Map<string, string>()
+
+function resolveOpenClawBinary(): string | null {
+  const detected = getAgentPath('openclaw')
+  if (detected) return detected
+  try {
+    const shellPath = getShellEnvPath()
+    return execFileSync('which', ['openclaw'], {
+      encoding: 'utf-8',
+      env: { ...process.env, ...(shellPath && { PATH: shellPath }) },
+    }).trim() || null
+  } catch {
+    return null
+  }
+}
+
+function normalizeModelRef(model?: string | null): string {
+  return (model ?? '').trim().toLowerCase()
+}
+
+function parseOpenClawAgents(openclawBin: string, shellPath?: string | null): Array<{ id: string; name?: string; model?: string; isDefault?: boolean }> {
+  try {
+    const raw = execFileSync(openclawBin, ['agents', 'list', '--json'], {
+      encoding: 'utf-8',
+      env: { ...process.env, ...(shellPath && { PATH: shellPath }) },
+    }).trim()
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function selectOpenClawAgentId(openclawBin: string, shellPath?: string | null, preferredModel?: string | null): string | null {
+  const agents = parseOpenClawAgents(openclawBin, shellPath)
+  if (agents.length === 0) return 'main'
+
+  const requested = normalizeModelRef(preferredModel)
+  const isStable = (id: string): boolean => !id.startsWith('mc-gateway-') && !/^lead-[0-9a-f-]+$/i.test(id)
+
+  if (requested) {
+    const directStable = agents.find(agent => isStable(agent.id) && normalizeModelRef(agent.id) === requested)
+    if (directStable) return directStable.id
+
+    const directAny = agents.find(agent => normalizeModelRef(agent.id) === requested)
+    if (directAny) return directAny.id
+
+    const exactStable = agents.find(agent => isStable(agent.id) && normalizeModelRef(agent.model) === requested)
+    if (exactStable) return exactStable.id
+
+    const exactAny = agents.find(agent => normalizeModelRef(agent.model) === requested)
+    if (exactAny) return exactAny.id
+
+    return null
+  }
+
+  return agents.find(agent => agent.isDefault)?.id ?? agents[0]?.id ?? 'main'
+}
+
+function extractOpenClawTextPayload(payload: any): string {
+  if (!payload || typeof payload !== 'object') return ''
+  if (typeof payload.text === 'string') return payload.text
+  if (typeof payload.content === 'string') return payload.content
+  if (typeof payload.message === 'string') return payload.message
+  if (typeof payload.summary === 'string') return payload.summary
+  if (Array.isArray(payload.parts)) {
+    return payload.parts
+      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+      .filter(Boolean)
+      .join('')
+  }
+  return ''
+}
+
+export function clearOpenclawSession(cardId: string): void {
+  openclawSessionIds.delete(cardId)
+}
+
+export function listOpenclawAgents(): { agents: Array<{ id: string; label: string; description: string }> } {
+  const openclawBin = resolveOpenClawBinary()
+  if (!openclawBin) {
+    return { agents: [] }
+  }
+
+  const shellPath = getShellEnvPath()
+  const agents = parseOpenClawAgents(openclawBin, shellPath).map(agent => ({
+    id: agent.id,
+    label: agent.name ? `${agent.name}${agent.isDefault ? ' (default)' : ''}` : `${agent.id}${agent.isDefault ? ' (default)' : ''}`,
+    description: agent.model ?? agent.id,
+  }))
+
+  return { agents }
+}
+
+export function chatOpenclaw(req: ChatRequest): void {
+  const lastUserMsg = [...getPreparedMessages(req)].reverse().find(m => m.role === 'user')
+  if (!lastUserMsg) {
+    sendStream(req.cardId, { type: 'error', error: 'No user message' })
+    return
+  }
+
+  const openclawBin = resolveOpenClawBinary()
+  if (!openclawBin) {
+    sendStream(req.cardId, { type: 'error', error: 'OpenClaw CLI not found. Install: npm install -g openclaw' })
+    return
+  }
+
+  const shellPath = getShellEnvPath()
+  if (req.sessionId && !openclawSessionIds.has(req.cardId)) {
+    openclawSessionIds.set(req.cardId, req.sessionId)
+  }
+  const existingSessionId = openclawSessionIds.get(req.cardId)
+  const selectedAgentId = existingSessionId ? null : selectOpenClawAgentId(openclawBin, shellPath, req.model)
+
+  if (!existingSessionId && req.model && !selectedAgentId) {
+    const agents = parseOpenClawAgents(openclawBin, shellPath)
+    const available = agents
+      .map(agent => agent.model || agent.id)
+      .filter((value, index, all): value is string => typeof value === 'string' && value.trim().length > 0 && all.indexOf(value) === index)
+    const details = available.length > 0 ? ` Available: ${available.join(', ')}` : ''
+    sendStream(req.cardId, { type: 'error', error: `OpenClaw model must match exactly: ${req.model}.${details}` })
+    sendStream(req.cardId, { type: 'done' })
+    return
+  }
+
+  log('chatOpenclaw starting', {
+    model: req.model,
+    prompt: lastUserMsg.content.slice(0, 100),
+    resuming: !!existingSessionId,
+    agentId: selectedAgentId,
+  })
+
+  const args = ['agent', '--json']
+  if (existingSessionId) {
+    args.push('--session-id', existingSessionId)
+  } else {
+    args.push('--agent', selectedAgentId ?? 'main')
+  }
+
+  const thinkingMap: Record<string, string> = {
+    none: 'off',
+    low: 'minimal',
+    medium: 'medium',
+    high: 'high',
+    max: 'xhigh',
+    adaptive: 'medium',
+  }
+  const thinking = thinkingMap[req.thinking ?? '']
+  if (thinking) {
+    args.push('--thinking', thinking)
+  }
+
+  // First-turn injection: OpenClaw has no system-prompt channel on the CLI,
+  // so the CodeSurf output convention rides along with the first user message.
+  // Session history carries it forward on subsequent turns.
+  const openClawIsFirstTurn = !existingSessionId
+  const openClawMessage = openClawIsFirstTurn
+    ? `${buildCodeSurfOutputConvention()}\n\n---\n\n${lastUserMsg.content}`
+    : lastUserMsg.content
+  args.push('--message', openClawMessage)
+
+  const proc = spawn(openclawBin, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...(shellPath && { PATH: shellPath }) },
+    ...(req.workspaceDir && { cwd: req.workspaceDir }),
+  })
+
+  activeProcesses.set(req.cardId, proc)
+
+  let stdoutBuf = ''
+  proc.stdout?.on('data', (chunk: Buffer) => { stdoutBuf += chunk.toString() })
+
+  let stderrBuf = ''
+  proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString() })
+
+  proc.on('close', (code) => {
+    activeProcesses.delete(req.cardId)
+    if (code !== 0) {
+      sendStream(req.cardId, { type: 'error', error: stderrBuf.trim() || stdoutBuf.trim() || `OpenClaw exited with ${code}` })
+      sendStream(req.cardId, { type: 'done' })
+      return
+    }
+
+    let sessionId: string | undefined
+    let resultText = stdoutBuf.trim()
+    try {
+      const parsed = JSON.parse(stdoutBuf)
+      const meta = parsed?.meta ?? parsed?.result?.meta
+      const payloads = Array.isArray(parsed?.payloads)
+        ? parsed.payloads
+        : Array.isArray(parsed?.result?.payloads)
+          ? parsed.result.payloads
+          : []
+      sessionId = meta?.sessionId ?? meta?.session_id ?? parsed?.sessionId ?? parsed?.session_id
+      resultText = payloads
+        .map((payload: any) => extractOpenClawTextPayload(payload))
+        .filter(Boolean)
+        .join('\n\n')
+        || parsed?.summary
+        || parsed?.result?.summary
+        || resultText
+    } catch {
+      // Fall back to plain stdout
+    }
+
+    if (sessionId) {
+      openclawSessionIds.set(req.cardId, sessionId)
+      sendStream(req.cardId, { type: 'session', sessionId })
+    }
+    if (resultText) {
+      sendStream(req.cardId, { type: 'text', text: resultText })
+    }
+    sendStream(req.cardId, { type: 'done', sessionId })
+  })
+
+  proc.on('error', (err) => {
+    activeProcesses.delete(req.cardId)
+    sendStream(req.cardId, {
+      type: 'error',
+      error: err.message.includes('ENOENT')
+        ? 'OpenClaw CLI not found. Install: npm install -g openclaw'
+        : err.message,
+    })
+  })
+}

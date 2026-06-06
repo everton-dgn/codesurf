@@ -17,11 +17,16 @@ import {
  *
  * The conventions themselves now live in the pure `prompt-conventions` module,
  * so we import and assert on the real values. The provider *wiring* still lives
- * in `chat.ts` (which pulls in Electron main APIs and can't be imported), so
- * those checks remain source-text assertions against chat.ts.
+ * in `chat.ts` / provider modules (which pull in Electron main APIs and can't
+ * be imported), so those checks remain source-text assertions.
  */
 
 const CHAT_SOURCE = readFileSync(resolve(process.cwd(), 'src/main/ipc/chat.ts'), 'utf8')
+const CLAUDE_SOURCE = readFileSync(resolve(process.cwd(), 'src/main/chat/providers/claude.ts'), 'utf8')
+const CODEX_SOURCE = readFileSync(resolve(process.cwd(), 'src/main/chat/providers/codex.ts'), 'utf8')
+const HERMES_SOURCE = readFileSync(resolve(process.cwd(), 'src/main/chat/providers/hermes.ts'), 'utf8')
+const OPENCLAW_SOURCE = readFileSync(resolve(process.cwd(), 'src/main/chat/providers/openclaw.ts'), 'utf8')
+const OPENCODE_SOURCE = readFileSync(resolve(process.cwd(), 'src/main/chat/providers/opencode.ts'), 'utf8')
 
 describe('CodeSurf prompt conventions — values', () => {
   test('CODESURF_OUTPUT_CONVENTION contains all three required sections', () => {
@@ -53,22 +58,22 @@ describe('CodeSurf prompt conventions — values', () => {
 })
 
 describe('CodeSurf prompt conventions — provider wiring', () => {
-  function extractFunction(name: string): string {
+  function extractFunction(source: string, sourceLabel: string, name: string): string {
     const re = new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}`)
-    const match = CHAT_SOURCE.match(re)
-    assert.ok(match, `expected to find function ${name}(...) in chat.ts`)
+    const match = source.match(re)
+    assert.ok(match, `expected to find function ${name}(...) in ${sourceLabel}`)
     return match![0]
   }
 
   test('Claude prompt builder injects output convention but not automatic insights', () => {
-    const block = extractFunction('buildClaudeAgentPrompt')
+    const block = extractFunction(CLAUDE_SOURCE, 'claude.ts', 'buildClaudeAgentPrompt')
     expect(block).toContain('buildCodeSurfOutputConvention')
     expect(block).not.toContain('buildCodeSurfInsightConvention')
     expect(block).toContain('joinPromptSections')
   })
 
   test('Codex prompt builder injects output convention but not automatic insights', () => {
-    const block = extractFunction('buildCodexPrompt')
+    const block = extractFunction(CODEX_SOURCE, 'codex.ts', 'buildCodexPrompt')
     expect(block).toContain('buildCodeSurfOutputConvention')
     expect(block).not.toContain('buildCodeSurfInsightConvention')
     expect(block).toContain('joinPromptSections')
@@ -76,32 +81,35 @@ describe('CodeSurf prompt conventions — provider wiring', () => {
 
   test('OpenCode prepends only the output convention on the first turn of a fresh session', () => {
     assert.match(
-      CHAT_SOURCE,
+      OPENCODE_SOURCE,
       /const isFirstTurn = !existingSessionId[\s\S]{0,400}buildCodeSurfOutputConvention\(\)[\s\S]{0,80}---/,
     )
   })
 
   test('OpenClaw prepends only the output convention on the first turn', () => {
     assert.match(
-      CHAT_SOURCE,
+      OPENCLAW_SOURCE,
       /openClawIsFirstTurn[\s\S]{0,400}buildCodeSurfOutputConvention\(\)[\s\S]{0,80}---/,
     )
   })
 
   test('Hermes prepends only the output convention on the first turn', () => {
     assert.match(
-      CHAT_SOURCE,
+      HERMES_SOURCE,
       /hermesIsFirstTurn[\s\S]{0,400}buildCodeSurfOutputConvention\(\)[\s\S]{0,80}---/,
     )
   })
 
   test('normal provider prompt wiring never calls the insight convention helper', () => {
     const normalPromptPath = [
-      extractFunction('buildClaudeAgentPrompt'),
-      extractFunction('buildCodexPrompt'),
+      extractFunction(CLAUDE_SOURCE, 'claude.ts', 'buildClaudeAgentPrompt'),
+      extractFunction(CODEX_SOURCE, 'codex.ts', 'buildCodexPrompt'),
     ].join('\n')
     expect(normalPromptPath).not.toContain('buildCodeSurfInsightConvention')
-    assert.doesNotMatch(CHAT_SOURCE, /buildCodeSurfOutputConvention\(\)[\s\S]{0,200}buildCodeSurfInsightConvention\(\)/)
+    assert.doesNotMatch(
+      [CHAT_SOURCE, OPENCODE_SOURCE].join('\n'),
+      /buildCodeSurfOutputConvention\(\)[\s\S]{0,200}buildCodeSurfInsightConvention\(\)/,
+    )
   })
 })
 

@@ -1,13 +1,40 @@
 # Contex — Full Code Review Report
 
-**Date:** 2026-03-21  
-**Codebase:** ~18.8K LOC across 52 files  
+**Date:** 2026-03-21 (original) · **Updated:** 2026-06-06  
+**Codebase:** ~92K LOC (June 2026)  
 **Reviewers:** 4 specialized agents (correctness, security, performance, maintainability)  
 **Findings:** 7 Critical, 9 High, 19 Medium, 14 Low
 
 ---
 
-## 🔴 Top 5 Priority Fixes
+## ✅ Post-hardening status (2026-06-06, branch `feature/hardening-wave-1`)
+
+| Original ID | Status | Notes |
+|-------------|--------|-------|
+| SEC-01 MCP zero auth | **FIXED** | Bearer enforced on `/mcp`, `/push`, `/inject`, SSE |
+| SEC-02 `/inject` | **FIXED** | Same auth gate |
+| SEC-03 FS unrestricted | **Partial** | Sensitive dirs blocked; workspace scoping still open |
+| SEC-04 Terminal spawn | **FIXED** | Shell + agent CLI allowlists |
+| SEC-05 Git exec | **FIXED** | `execFile`, branch validation |
+| SEC-06 sandbox:false | **OPEN** | Mitigated by `contextIsolation` |
+| SEC-07 Stream SSRF | **FIXED** | `assertSafeStreamUrl` blocks private IPs |
+| SEC-08 MCP body limit | **FIXED** | 1MB cap |
+| SEC-09 CORS wildcard | **FIXED** | Origin reflection on MCP |
+| BUG-01 Undo broken | **FIXED** | Pre-change snapshots |
+| BUG-02 removeAllListeners | **FIXED** | Per-handler `removeListener` |
+| BUG-03 Stale viewport undo | **FIXED** | Uses refs |
+| BUG-04 addTile race | **FIXED** | Functional `setTiles` |
+| BUG-05 closeTile race | **FIXED** | Functional updater |
+| BUG-07 setTiles read abuse | **FIXED** | Uses refs |
+| PERF TileChrome re-render | **IMPROVED** | `React.memo` + snap RAF throttle |
+| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` extracted (−801 LOC) |
+| ARCH mcp-server.ts | **IMPROVED** | Tool modules + registry (2237 → 791 LOC) |
+
+**Tests:** 331/331 pass · **Typecheck:** clean · **Build:** pass
+
+---
+
+## 🔴 Top 5 Priority Fixes (original — March 2026)
 
 1. **Add auth to MCP server** (SEC-01 + SEC-02 + SEC-09) — Bearer token + restricted CORS
 2. **Fix removeAllListeners in preload** (BUG-02) — Use removeListener(channel, handler)

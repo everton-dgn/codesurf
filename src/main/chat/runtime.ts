@@ -1,0 +1,107 @@
+import { BrowserWindow } from 'electron'
+import type { Query } from '@anthropic-ai/claude-agent-sdk'
+import type { ChildProcess } from 'child_process'
+import * as http from 'http'
+import { promises as fs, readFileSync } from 'fs'
+import { dirname, join } from 'path'
+import { CONTEX_HOME } from '../paths'
+import { daemonClient } from '../daemon/client'
+import type { ChatMessage, ChatRequest, RuntimeChatSessionState } from './types'
+
+export type { RuntimeChatSessionState } from './types'
+
+export function log(...args: unknown[]): void {
+  if (process.env.CODESURF_CHAT_DEBUG !== '1') return
+  console.log('[Chat]', ...args)
+}
+
+export function sendStream(cardId: string, event: Record<string, unknown>): void {
+  log('sendStream', event.type, event.text ? `"${String(event.text).slice(0, 50)}"` : '', event.error ?? '')
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.webContents.isDestroyed()) {
+      win.webContents.send('agent:stream', { cardId, ...event })
+    }
+  })
+}
+
+export function cloneChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map(message => ({
+    role: message.role,
+    content: String(message.content ?? ''),
+  }))
+}
+
+export function getPreparedMessages(req: ChatRequest): ChatMessage[] {
+  return Array.isArray(req.expandedMessages) && req.expandedMessages.length > 0
+    ? req.expandedMessages
+    : req.messages
+}
+
+export async function upsertRuntimeSessionState(req: ChatRequest, state: RuntimeChatSessionState): Promise<void> {
+  if (!req.workspaceId) return
+  try {
+    await daemonClient.upsertRuntimeSession(req.workspaceId, req.cardId, state)
+  } catch (error) {
+    log('upsertRuntimeSession error', req.cardId, error)
+  }
+}
+
+// Active Claude SDK queries
+export const activeQueries = new Map<string, Query>()
+
+// Active CLI subprocesses (codex, openclaw, hermes, etc.)
+export const activeProcesses = new Map<string, ChildProcess>()
+
+// Active HTTP requests (proxy-backed providers)
+export const activeHttpRequests = new Map<string, http.ClientRequest>()
+
+// Stored session IDs for multi-turn conversations
+export const sessionIds = new Map<string, string>()
+
+// Persist session IDs to disk so they survive main-process restarts.
+export const SESSION_IDS_PATH = join(CONTEX_HOME, 'session-ids.json')
+let sessionIdsPersistTimer: ReturnType<typeof setTimeout> | null = null
+
+export function persistSessionIds(): void {
+  if (sessionIdsPersistTimer) return
+  sessionIdsPersistTimer = setTimeout(async () => {
+    sessionIdsPersistTimer = null
+    try {
+      const data: Record<string, string> = {}
+      for (const [key, value] of sessionIds) data[key] = value
+      await fs.mkdir(dirname(SESSION_IDS_PATH), { recursive: true })
+      await fs.writeFile(SESSION_IDS_PATH, JSON.stringify(data), 'utf8')
+    } catch {
+      // Best-effort — swallow errors.
+    }
+  }, 1000)
+}
+
+function loadPersistedSessionIds(): void {
+  try {
+    const raw = readFileSync(SESSION_IDS_PATH, 'utf8')
+    const data = JSON.parse(raw)
+    if (data && typeof data === 'object') {
+      for (const [key, value] of Object.entries(data)) {
+        if (typeof value === 'string' && value && !sessionIds.has(key)) {
+          sessionIds.set(key, value)
+        }
+      }
+    }
+  } catch {
+    // File doesn't exist yet or is malformed — that's fine.
+  }
+}
+
+// Load persisted session IDs on module init.
+loadPersistedSessionIds()
+
+export function isActiveQuery(cardId: string, query: Query): boolean {
+  return activeQueries.get(cardId) === query
+}
+
+export function clearActiveQuery(cardId: string, query: Query): void {
+  if (isActiveQuery(cardId, query)) {
+    activeQueries.delete(cardId)
+  }
+}

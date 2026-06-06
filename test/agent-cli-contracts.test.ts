@@ -282,17 +282,17 @@ describe('agent CLI contract builders', () => {
   })
 
   test('Claude bypass mode passes the SDK dangerous-skip confirmation flag', () => {
-    const ipcSource = readFileSync(`${process.cwd()}/src/main/ipc/chat.ts`, 'utf8')
+    const claudeSource = readFileSync(`${process.cwd()}/src/main/chat/providers/claude.ts`, 'utf8')
     const daemonSource = readFileSync(`${process.cwd()}/packages/codesurf-daemon/bin/chat-jobs.mjs`, 'utf8')
     const relaySource = readFileSync(`${process.cwd()}/src/main/relay/provider-executor.ts`, 'utf8')
 
-    expect(ipcSource).toContain("...(permMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {})")
+    expect(claudeSource).toContain("...(permMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {})")
     expect(daemonSource).toContain("...(permMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {})")
     expect(relaySource).toContain("...(claudePermissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {})")
   })
 
   test('main-process Hermes chat uses shared model/provider contract helpers', () => {
-    const source = readFileSync(`${process.cwd()}/src/main/ipc/chat.ts`, 'utf8')
+    const source = readFileSync(`${process.cwd()}/src/main/chat/providers/hermes.ts`, 'utf8')
 
     expect(source).toContain('buildHermesChatArgs({')
     expect(source).toContain('sanitizeAgentCliDiagnostic(stderrBuf.trim())')
