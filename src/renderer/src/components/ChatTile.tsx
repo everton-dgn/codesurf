@@ -1,17 +1,16 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
 import type {
   AppSettings,
-  ExtensionChatTransportConfig,
   SkillDefinition,
 } from '../../../shared/types'
 import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
-import { dispatchOpenLink } from '../utils/links'
+
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
 import {
   ChevronDown, AlertTriangle,
-  Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
+  ArrowUp, ArrowDown, Square, MessageSquare, Bot,
   Brain, ChevronRight, CornerDownRight,
-  FileText, GripVertical, Maximize2, Mic, Plus, Trash2
+  GripVertical, Maximize2, Mic, Plus, Trash2
 } from 'lucide-react'
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useMCPServers } from '../hooks/useMCPServers'
@@ -20,16 +19,16 @@ import { ttsPlayer, type TtsPlayerState } from '../utils/ttsPlayer'
 import { useChatDictation } from '../hooks/useChatDictation'
 import { useChatExecutionHosts } from '../hooks/useChatExecutionHosts'
 import { useChatTileCoreState } from '../hooks/useChatTileCoreState'
+import { useChatTileProviders } from '../hooks/useChatTileProviders'
 import type { ChatTilePersistedState, QueuedChatTurn } from './chat/chatTileTypes'
-import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { WorkingDots } from './shared/streamdown-utils'
 import { DiffView } from './chat/DiffView'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
 import {
-  type BuiltinProvider, type ModelOption, type ModeOption,
-  DEFAULT_MODELS, DEFAULT_PROVIDER_ID, PROVIDER_MODES, EXTENSION_PROVIDER_MODE,
-  THINKING_OPTIONS, PROVIDER_LABELS, getApproxContextWindowTokens,
+  type BuiltinProvider,
+  DEFAULT_PROVIDER_ID, PROVIDER_MODES, EXTENSION_PROVIDER_MODE,
+  getApproxContextWindowTokens,
   getApproxSystemOverheadTokens, resolveProviderModeId,
 } from '../config/providers'
 import { stripCapabilityPrefix, getAllNodeTools } from '../../../shared/nodeTools'
@@ -45,7 +44,7 @@ import { setTileTodos, clearTileTodos, useTileTodos, type TileTodoItem } from '.
 import { CUSTOMISATION_LOCATIONS_CHANGED_EVENT, type CustomisationLocationsChangedDetail } from './CustomisationTile'
 import { PlanPane } from './chat/PlanPane'
 import { PlanChip } from './chat/PlanChip'
-import { splitInsightSegments } from './chat/insightSegments'
+
 import { ToolPermissionProvider } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { isCheckpointToolBlock } from './chat/checkpointToolActions'
@@ -77,10 +76,10 @@ import {
   ThinkingIcon,
   renderChatSurfaceIcon,
   normalizeChatSurfaceMenuEntry,
-  getExtensionProviderIcon,
   ensureChatMdStyle,
-  GuardedChatMarkdown,
+  ChatMessageContent,
 } from './chat/ChatTileViews'
+import { CHAT_CHIP_ROW_STYLE } from './chat/chatTileLayout'
 import {
   CHAT_DEFAULT_SKILL_LOCATIONS,
   resolveChatSkillLocations,
@@ -101,13 +100,10 @@ import {
   collectModelReadPaths,
   canUsePagedLinkedHistory,
   mergeHistoricalMessages,
-  withAlpha,
   hasVisibleFileChangeStats,
   hasRenderableFileChangeDiff,
-  splitExternalAgentMarkup,
   getExternalAgentToolBlocks,
   isExternalAgentToolOnlyText,
-  normalizeExtensionProviders,
   relativeTime,
   type PendingAttachment,
   type ActiveChatSurface,
@@ -119,9 +115,6 @@ export {
   hasRenderableFileChangeDiff,
   getToolDisplayName,
 } from './chat/chatTileUtils'
-
-// Provider brand icons are shared with the sidebar via ./icons/providerIcons.
-import { ClaudeIcon, CodexIcon, HermesIcon, OpenClawIcon, PiIcon } from './icons/providerIcons'
 
 // --- Types -----------------------------------------------------------------------
 
@@ -167,19 +160,6 @@ const FONT_MONO = '"JetBrains Mono", "Menlo", "Monaco", "SF Mono", "Fira Code", 
 const FONT_SIZE_DEFAULT = 13
 const MONO_SIZE_DEFAULT = 13
 const CHAT_MESSAGE_MAX_WIDTH = 'var(--cs-thread-content-max-width)'
-const CHAT_CHIP_ROW_STYLE: React.CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  columnGap: 6,
-  rowGap: 4,
-  alignItems: 'flex-start',
-  alignContent: 'flex-start',
-  width: '100%',
-  minWidth: 0,
-  maxWidth: '100%',
-  overflow: 'visible',
-  paddingTop: 1,
-}
 const CHAT_OFFSCREEN_MESSAGE_STYLE: React.CSSProperties = {
   contentVisibility: 'auto',
   containIntrinsicSize: '0 160px',
@@ -277,270 +257,6 @@ async function buildRecentEditContext(messages: ChatMessage[], workspaceDir: str
 
   if (combined.length <= RECENT_EDIT_CONTEXT_MAX_CHARS) return combined
   return `${combined.slice(0, RECENT_EDIT_CONTEXT_MAX_CHARS - 1).trimEnd()}…`
-}
-
-interface InsightBlockProps {
-  text: string
-  closed: boolean
-  isStreaming?: boolean
-  accent: string
-  textColor: string
-}
-
-const InsightBlock = React.memo(({ text, closed, isStreaming, accent, textColor }: InsightBlockProps): JSX.Element => {
-  void closed
-  // Pre-existing hole: InsightBlock referenced `theme` (boxShadow below) without
-  // ever resolving it, unlike its 6 sibling components — a ReferenceError the
-  // moment an insight rendered. Resolve it via the same hook the siblings use.
-  const theme = useTheme()
-  return (
-    <div
-      className="chat-insight"
-      style={{
-        // ── Glass panel in the active accent color ──────────────────────
-        // Layered for the "tinted glass" effect:
-        //   1. accent-tinted fill at ~14% so the color reads even against
-        //      opaque backgrounds (chat surface is theme.surface.panel)
-        //   2. backdrop-filter blur softens whatever sits behind
-        //   3. hairline accent border at ~30% alpha gives the edge definition
-        //      that the removed left rule used to provide
-        background: withAlpha(accent, '24'),                          // ~14% tint
-        backdropFilter: 'blur(14px) saturate(160%)',
-        WebkitBackdropFilter: 'blur(14px) saturate(160%)',
-        border: `1px solid ${withAlpha(accent, '4d')}`,               // ~30% accent edge
-        borderRadius: 12,                                              // matches code-block radius cohesion
-        padding: '12px 16px',
-        margin: '10px 0',
-        color: textColor,
-        // Subtle inner highlight on the top edge — a small touch that
-        // sells the "glass" reading without being explicit about it.
-        // Drop shadow anchored on #000 in dark mode (text.primary would lift
-        // toward white at high contrast and turn the shadow into a glow);
-        // light mode keeps text.primary so the shadow is genuinely dark
-        // against paper.
-        boxShadow: `0 1px 0 0 ${withAlpha(accent, '14')} inset, 0 1px 2px ${theme.mode === 'light' ? `color-mix(in srgb, ${theme.text.primary} 4%, transparent)` : `rgba(0,0,0,0.18)`}`,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color: accent,
-          marginBottom: 6,
-          textTransform: 'uppercase',
-          letterSpacing: 0.6,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        <span style={{ fontSize: 13, lineHeight: 1 }}>★</span>
-        <span>Insight</span>
-      </div>
-      <GuardedChatMarkdown text={text} isStreaming={isStreaming} />
-    </div>
-  )
-})
-
-const ChatMessageContent = React.memo(({
-  text,
-  isStreaming,
-  isUser,
-  className,
-  readAttachmentPaths,
-}: {
-  text: string
-  isStreaming?: boolean
-  isUser?: boolean
-  className?: string
-  /** Paths that the model has demonstrably loaded via Read-style tools.
-   *  Used to render a confirmation tick on attachment chips — must only be
-   *  set when the attachment was actually consumed by the model. */
-  readAttachmentPaths?: Set<string>
-}) => {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const { bodyText, attachmentPaths } = useMemo(() => splitMessageAttachmentPaths(text), [text])
-  // Chip colors must stay legible regardless of whether the parent message
-  // bubble is dark (dark theme user bubble) or light (light theme user
-  // bubble). In light mode we pick an explicitly-white chip surface with a
-  // strong border and a forced-dark text colour so we don't blend into the
-  // pale user bubble — previously `theme.surface.panelElevated` was nearly
-  // identical to the bubble and child text colours were inheriting light
-  // values from elsewhere, producing a "ghost chip" effect.
-  void isUser
-  const isLight = theme.mode === 'light'
-  // Chip surfaces follow theme: in light mode the canvas-anchored chip should
-  // read as paper, so use surface.app rather than panelElevated (which is the
-  // chat shell background and would blend in). Borders come from the theme's
-  // own gradient so contrast tracks.
-  const chipBackground = isLight ? theme.surface.app : theme.surface.panelElevated
-  const chipBorder = isLight ? theme.border.default : theme.border.default
-  const chipText = theme.text.primary
-  const chipMeta = theme.text.secondary
-
-  const attachments = attachmentPaths.length > 0 ? (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: bodyText ? 8 : 0, minWidth: 0 }}>
-      {bodyText && (
-        <div
-          style={{
-            fontSize: Math.max(10, fonts.secondarySize - 1),
-            color: chipMeta,
-            fontWeight: 600,
-            letterSpacing: 0.2,
-          }}
-        >
-          Attached file paths
-        </div>
-      )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
-        {attachmentPaths.map(path => {
-          const wasRead = readAttachmentPaths?.has(path) === true
-          const isImage = isImagePath(path)
-          return (
-            <button
-              key={path}
-              type="button"
-              title={wasRead ? `${path} — read by the model` : path}
-              onClick={() => { void dispatchOpenLink(path) }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                minWidth: 0,
-                maxWidth: '100%',
-                borderRadius: 6,
-                border: `1px solid ${chipBorder}`,
-                background: chipBackground,
-                color: chipText,
-                padding: isImage ? 3 : '3px 7px',
-                cursor: 'pointer',
-              }}
-            >
-              {isImage ? (
-                <img
-                  src={`contex-file://${encodeURI(path).replace(/#/g, '%23')}`}
-                  alt={basename(path)}
-                  style={{
-                    width: 28,
-                    height: 28,
-                    objectFit: 'cover',
-                    borderRadius: 4,
-                    flexShrink: 0,
-                    display: 'block',
-                    background: theme.surface.panelMuted,
-                  }}
-                />
-              ) : (
-                <FileText size={10} color={chipText} style={{ flexShrink: 0, opacity: 0.85 }} />
-              )}
-              <span
-                style={{
-                  minWidth: 0,
-                  maxWidth: 320,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: Math.max(10, fonts.size - 2),
-                  lineHeight: 1.2,
-                  color: chipText,
-                  paddingRight: isImage ? 6 : 0,
-                }}
-              >
-                {basename(path)}
-              </span>
-              {wasRead && (
-                <Check
-                  size={10}
-                  color={theme.status.success}
-                  style={{ flexShrink: 0, marginRight: isImage ? 4 : 0 }}
-                  aria-label="Read by the model"
-                />
-              )}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  ) : null
-
-  if (!bodyText) return attachments ?? null
-
-  // Split body into markdown / insight segments. Insights become styled
-  // blocks rendered with the active accent color; everything else flows
-  // through the normal markdown pipeline.
-  const accent = theme.accent.base
-  const textColor = theme.text.primary
-  const externalAgentSegments = useMemo(() => splitExternalAgentMarkup(bodyText), [bodyText])
-  const hasExternalAgentMarkup = externalAgentSegments.some(seg => seg.kind === 'tool')
-  const segments = useMemo(() => splitInsightSegments(bodyText), [bodyText])
-  const renderedBody = hasExternalAgentMarkup
-    ? (
-      <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-        {(() => {
-          const elements: JSX.Element[] = []
-          let chipRow: JSX.Element[] = []
-          let chipRowStart = 0
-          const flushChipRow = () => {
-            if (chipRow.length === 0) return
-            elements.push(
-              <div key={`external-tool-row-${chipRowStart}`} style={CHAT_CHIP_ROW_STYLE}>
-                {chipRow}
-              </div>
-            )
-            chipRow = []
-          }
-          externalAgentSegments.forEach((seg, i) => {
-            if (seg.kind === 'tool') {
-              if (chipRow.length === 0) chipRowStart = i
-              chipRow.push(<ToolBlockView key={seg.block.id} block={seg.block} />)
-              return
-            }
-            if (!seg.text.trim()) return
-            flushChipRow()
-            elements.push(<GuardedChatMarkdown key={`external-md-${i}`} text={seg.text} isStreaming={isStreaming} />)
-          })
-          flushChipRow()
-          return elements
-        })()}
-      </div>
-    )
-    : segments.length === 1 && segments[0].kind === 'md'
-      ? <GuardedChatMarkdown text={segments[0].text} isStreaming={isStreaming} className={className} />
-      : (
-        <div className={className}>
-          {segments.map((seg, i) => seg.kind === 'insight'
-            ? <InsightBlock key={i} text={seg.text} closed={seg.closed} isStreaming={isStreaming} accent={accent} textColor={textColor} />
-            : <GuardedChatMarkdown key={i} text={seg.text} isStreaming={isStreaming} />
-          )}
-        </div>
-      )
-
-  if (!attachments) return renderedBody
-  return <>{renderedBody}{attachments}</>
-})
-
-// --- Provider / Model config -----------------------------------------------------
-
-interface ProviderEntry {
-  id: string
-  label: string
-  description?: string
-  noun: 'model' | 'agent'
-  icon: React.ReactNode
-  models: ModelOption[]
-  kind: 'builtin' | 'extension'
-  transport?: ExtensionChatTransportConfig | null
-}
-
-
-const PROVIDER_ICON: Record<BuiltinProvider, React.ReactNode> = {
-  claude: <ClaudeIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-  codex: <CodexIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-  opencode: <Bot size={TOOLBAR_PILL_ICON_SIZE} />,
-  openclaw: <OpenClawIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-  hermes: <HermesIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-  csagent: <PiIcon size={TOOLBAR_PILL_ICON_SIZE} />,
 }
 
 // --- Component -------------------------------------------------------------------
@@ -821,6 +537,31 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [showLocationMenu, setShowLocationMenu] = useState(false)
   const [showBranchMenu, setShowBranchMenu] = useState(false)
   const [showContextMenu, setShowContextMenu] = useState(false)
+  const {
+    providerEntries,
+    providerEntryById,
+    currentProviderEntry,
+    modeOptions,
+    currentMode,
+    optionNoun,
+    currentModel,
+    thinkingOptions,
+    handleProviderChange,
+  } = useChatTileProviders({
+    provider,
+    setProvider,
+    model,
+    setModel,
+    mode,
+    setMode,
+    thinking,
+    setThinking,
+    settings,
+    connectedPeers,
+    peerContextRef,
+    peerContextVersion,
+    onProviderChanged: () => setShowProviderMenu(false),
+  })
   const pagedLinkedHistoryEnabled = canUsePagedLinkedHistory(linkedSessionEntryId, linkedSessionHint, sessionId)
 
   // Publish this tile's streaming state so the sidebar can swap the row icon
@@ -843,9 +584,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     executionTarget,
     cloudHostId,
   })
-  const [opencodeModels, setOpencodeModels] = useState<ModelOption[]>(DEFAULT_MODELS.opencode)
-  const [openclawAgents, setOpenclawAgents] = useState<ModelOption[]>(DEFAULT_MODELS.openclaw)
-  const [csagentModels, setCsagentModels] = useState<ModelOption[]>(DEFAULT_MODELS.csagent)
   const [modelFilter, setModelFilter] = useState('')
   const hasSendableDraft = input.trim().length > 0 || attachments.length > 0 || implicitPeerImageAttachments.length > 0
   // Chat-surface extensions (e.g. Sketch, Builder) mounted above the composer.
@@ -974,7 +712,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   }, [jobId])
   const latestStateRef = useRef<ChatTilePersistedState | null>(null)
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const requestedProviderOptionsRef = useRef<{ opencode: boolean; openclaw: boolean; csagent: boolean }>({ opencode: false, openclaw: false, csagent: false })
   const isFlushingQueuedTurnRef = useRef(false)
 
   // ─── TTS auto-speak (last-message-only, sentence-streamed) ──────────
@@ -1593,47 +1330,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [tileId, provider, model, availableSkillInventory])
 
-  // Only tiles actively using OpenCode should subscribe to the model list, otherwise
-  // every chat tile holds the same large provider payload in memory.
-  useEffect(() => {
-    if (provider !== 'opencode') return
 
-    const unsubscribeOpencode = window.electron?.chat?.onOpencodeModelsUpdated?.((payload: any) => {
-      if (payload?.models?.length) setOpencodeModels(payload.models)
-    })
-
-    return () => { unsubscribeOpencode?.() }
-  }, [provider])
-
-  useEffect(() => {
-    if (provider === 'opencode' && !requestedProviderOptionsRef.current.opencode) {
-      requestedProviderOptionsRef.current.opencode = true
-      window.electron?.chat?.opencodeModels?.().then((result: any) => {
-        if (result?.models?.length) setOpencodeModels(result.models)
-      }).catch(() => {
-        requestedProviderOptionsRef.current.opencode = false
-      })
-    }
-
-    if (provider === 'openclaw' && !requestedProviderOptionsRef.current.openclaw) {
-      requestedProviderOptionsRef.current.openclaw = true
-      window.electron?.chat?.openclawAgents?.().then((result: any) => {
-        if (result?.agents?.length) setOpenclawAgents(result.agents)
-      }).catch(() => {
-        requestedProviderOptionsRef.current.openclaw = false
-      })
-    }
-
-    // Pi (csagent): pull real auth-configured models from the user's installed pi.
-    if (provider === 'csagent' && !requestedProviderOptionsRef.current.csagent) {
-      requestedProviderOptionsRef.current.csagent = true
-      window.electron?.chat?.csagentModels?.().then((result: any) => {
-        if (result?.models?.length) setCsagentModels(result.models)
-      }).catch(() => {
-        requestedProviderOptionsRef.current.csagent = false
-      })
-    }
-  }, [provider])
 
 
 
@@ -2056,112 +1753,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [tileId, provider, model, _workspaceDir, executionTarget, cloudHostId, settings?.execution, jobId, jobSequence])
 
-  const builtinProviderEntries = useMemo<Record<BuiltinProvider, ProviderEntry>>(() => ({
-    claude: {
-      id: 'claude',
-      label: PROVIDER_LABELS.claude,
-      noun: 'model',
-      icon: PROVIDER_ICON.claude,
-      models: DEFAULT_MODELS.claude,
-      kind: 'builtin',
-    },
-    codex: {
-      id: 'codex',
-      label: PROVIDER_LABELS.codex,
-      noun: 'model',
-      icon: PROVIDER_ICON.codex,
-      models: DEFAULT_MODELS.codex,
-      kind: 'builtin',
-    },
-    opencode: {
-      id: 'opencode',
-      label: PROVIDER_LABELS.opencode,
-      noun: 'model',
-      icon: PROVIDER_ICON.opencode,
-      models: opencodeModels,
-      kind: 'builtin',
-    },
-    openclaw: {
-      id: 'openclaw',
-      label: PROVIDER_LABELS.openclaw,
-      noun: 'agent',
-      icon: PROVIDER_ICON.openclaw,
-      models: openclawAgents,
-      kind: 'builtin',
-    },
-    hermes: {
-      id: 'hermes',
-      label: PROVIDER_LABELS.hermes,
-      noun: 'model',
-      icon: PROVIDER_ICON.hermes,
-      models: DEFAULT_MODELS.hermes,
-      kind: 'builtin',
-    },
-    csagent: {
-      id: 'csagent',
-      label: PROVIDER_LABELS.csagent,
-      noun: 'model',
-      icon: PROVIDER_ICON.csagent,
-      models: csagentModels,
-      kind: 'builtin',
-    },
-  }), [opencodeModels, openclawAgents, csagentModels])
-
-  const extensionProviderEntries = useMemo<ProviderEntry[]>(() => {
-    void peerContextVersion
-    const entries = new Map<string, ProviderEntry>()
-
-    for (const peer of connectedPeers) {
-      const peerContext = peerContextRef.current.get(peer.peerId) ?? {}
-      const providers = normalizeExtensionProviders(peerContext['ctx:chat:providers'])
-      for (const providerConfig of providers) {
-        entries.set(providerConfig.id, {
-          id: providerConfig.id,
-          label: providerConfig.label,
-          description: providerConfig.description,
-          noun: providerConfig.noun ?? 'model',
-          icon: getExtensionProviderIcon(providerConfig.icon),
-          models: providerConfig.models.map(modelOption => ({
-            id: modelOption.id,
-            label: modelOption.label,
-            description: modelOption.description,
-          })),
-          kind: 'extension',
-          transport: providerConfig.transport,
-        })
-      }
-    }
-
-    return Array.from(entries.values()).sort((a, b) => a.label.localeCompare(b.label))
-  }, [connectedPeers, peerContextVersion])
-
-  const providerEntries = useMemo<ProviderEntry[]>(() => [
-    builtinProviderEntries.claude,
-    builtinProviderEntries.codex,
-    builtinProviderEntries.opencode,
-    builtinProviderEntries.openclaw,
-    builtinProviderEntries.hermes,
-    builtinProviderEntries.csagent,
-    ...extensionProviderEntries,
-  ], [builtinProviderEntries, extensionProviderEntries])
-
-  const providerEntryById = useMemo(() => {
-    const next = new Map<string, ProviderEntry>()
-    for (const entry of providerEntries) next.set(entry.id, entry)
-    return next
-  }, [providerEntries])
-
-  const currentProviderEntry = providerEntryById.get(provider)
-    ?? providerEntryById.get(DEFAULT_PROVIDER_ID)
-    ?? providerEntries[0]
-
-  const modeOptions = useMemo<ModeOption[]>(() => {
-    if (!currentProviderEntry) return [EXTENSION_PROVIDER_MODE]
-    return currentProviderEntry.kind === 'builtin'
-      ? PROVIDER_MODES[currentProviderEntry.id as BuiltinProvider]
-      : [EXTENSION_PROVIDER_MODE]
-  }, [currentProviderEntry])
-
   // Close dropdowns on outside click or Escape
   const anyMenuOpen = showModelMenu || showProviderMenu || showInsertMenu || showModeMenu || showThinkingMenu || showLocationMenu || showBranchMenu || showContextMenu
   const menuRefs = [modelMenuRef, providerMenuRef, insertMenuRef, modeMenuRef, thinkingMenuRef, locationMenuRef, branchMenuRef, contextMenuRef]
@@ -2210,11 +1801,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     }
   }, [anyMenuOpen])
 
-  const optionNoun = currentProviderEntry?.noun ?? 'model'
-  const currentModel = currentProviderEntry?.models.find(m => m.id === model)
-    ?? currentProviderEntry?.models[0]
-    ?? { id: '', label: optionNoun === 'agent' ? 'No agent' : 'No model' }
-  const currentMode = modeOptions.find(item => item.id === mode) ?? modeOptions[0] ?? EXTENSION_PROVIDER_MODE
   const contextWindowLimit = useMemo(() => getApproxContextWindowTokens(provider, model), [provider, model])
   const systemOverheadTokens = useMemo(
     () => getApproxSystemOverheadTokens(provider, model),
@@ -2332,38 +1918,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       void refreshGitState()
     }
   }, [branchFilter, _workspaceDir, refreshGitState])
-
-  useEffect(() => {
-    if (!currentProviderEntry) return
-    if (currentProviderEntry.id !== provider) {
-      setProvider(currentProviderEntry.id)
-      setModel(currentProviderEntry.models[0]?.id ?? '')
-      setMode(resolveProviderModeId(currentProviderEntry.id, settings?.chatProviderModes?.[currentProviderEntry.id]))
-      return
-    }
-
-    const options = currentProviderEntry.models
-    if (options.length === 0) return
-    if (!options.some(option => option.id === model)) {
-      setModel(options[0].id)
-    }
-  }, [currentProviderEntry, provider, settings?.chatProviderModes, model])
-
-  useEffect(() => {
-    if (!modeOptions.some(option => option.id === mode)) {
-      setMode(resolveProviderModeId(provider, settings?.chatProviderModes?.[provider]))
-    }
-  }, [modeOptions, mode, provider, settings?.chatProviderModes])
-
-  const handleProviderChange = useCallback((providerId: string) => {
-    const nextProvider = providerEntryById.get(providerId)
-    if (!nextProvider) return
-    setProvider(nextProvider.id)
-    setModel(nextProvider.models[0]?.id ?? '')
-    setMode(resolveProviderModeId(nextProvider.id, settings?.chatProviderModes?.[nextProvider.id]))
-    // Preserve thinking preference across providers
-    setShowProviderMenu(false)
-  }, [providerEntryById, settings?.chatProviderModes])
 
   const toggleMenu = useCallback((which: 'model' | 'provider' | 'insert' | 'mode' | 'thinking' | 'location' | 'branch' | 'context') => {
     setShowModelMenu(prev => { const next = which === 'model' ? !prev : false; if (!next) setModelFilter(''); return next })
@@ -5150,14 +4704,14 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           <div ref={thinkingMenuRef} style={{ position: 'relative' }}>
             <ToolbarBtn
               icon={<ThinkingIcon level={thinking} />}
-              tooltip={`Thinking: ${THINKING_OPTIONS.find(t => t.id === thinking)?.label ?? 'Adaptive'}`}
+              tooltip={`Thinking: ${thinkingOptions.find(t => t.id === thinking)?.label ?? 'Adaptive'}`}
               color={thinking === 'none' ? theme.chat.muted : theme.chat.textSecondary}
               onClick={() => toggleMenu('thinking')}
             />
             {showThinkingMenu && (
               <MenuPortal anchorRef={thinkingMenuRef}>
                 <Dropdown>
-                  {THINKING_OPTIONS.map(t => (
+                  {thinkingOptions.map(t => (
                     <DropdownItem
                       key={t.id}
                       icon={<Brain size={11} />}

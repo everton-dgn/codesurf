@@ -1,9 +1,11 @@
 import React, { useState, useMemo } from 'react'
 import type { ExtensionChatProviderConfig } from '../../../../shared/types'
 import {
-  Brain, Bug, ChevronRight, ClipboardCheck, Cog, Copy, FileText,
+  Brain, Bug, Check, ChevronRight, ClipboardCheck, Cog, Copy, FileText,
   Pencil, ShieldCheck, Sparkles, Wrench, Bot,
 } from 'lucide-react'
+import { basename, isImagePath } from '../../utils/dnd'
+import { dispatchOpenLink } from '../../utils/links'
 import { useAppFonts } from '../../FontContext'
 import { useTheme } from '../../ThemeContext'
 import { ensureShimmerStyles, ChatMarkdown } from '../shared/streamdown-utils'
@@ -13,6 +15,14 @@ import {
   isLargeArtifact, isLargeMessage, measureText, previewText, splitRawDiffText, type RawDiffFile,
 } from './largeContent'
 import type { ChatSurfaceMenuEntry } from './ChatComposerMenus'
+import { splitInsightSegments } from './insightSegments'
+import { ToolBlockView } from './ToolBlockView'
+import {
+  splitMessageAttachmentPaths,
+  withAlpha,
+  splitExternalAgentMarkup,
+} from './chatTileUtils'
+import { CHAT_CHIP_ROW_STYLE } from './chatTileLayout'
 
 const THINKING_LEVELS: Record<string, number> = { none: 0, low: 1, medium: 2, adaptive: 3, high: 4, max: 5 }
 
@@ -372,3 +382,244 @@ export function ensureChatMdStyle(): void {
   }
   style.textContent = CHAT_TILE_STYLES
 }
+
+interface InsightBlockProps {
+  text: string
+  closed: boolean
+  isStreaming?: boolean
+  accent: string
+  textColor: string
+}
+
+const InsightBlock = React.memo(({ text, closed, isStreaming, accent, textColor }: InsightBlockProps): JSX.Element => {
+  void closed
+  // Pre-existing hole: InsightBlock referenced `theme` (boxShadow below) without
+  // ever resolving it, unlike its 6 sibling components — a ReferenceError the
+  // moment an insight rendered. Resolve it via the same hook the siblings use.
+  const theme = useTheme()
+  return (
+    <div
+      className="chat-insight"
+      style={{
+        // ── Glass panel in the active accent color ──────────────────────
+        // Layered for the "tinted glass" effect:
+        //   1. accent-tinted fill at ~14% so the color reads even against
+        //      opaque backgrounds (chat surface is theme.surface.panel)
+        //   2. backdrop-filter blur softens whatever sits behind
+        //   3. hairline accent border at ~30% alpha gives the edge definition
+        //      that the removed left rule used to provide
+        background: withAlpha(accent, '24'),                          // ~14% tint
+        backdropFilter: 'blur(14px) saturate(160%)',
+        WebkitBackdropFilter: 'blur(14px) saturate(160%)',
+        border: `1px solid ${withAlpha(accent, '4d')}`,               // ~30% accent edge
+        borderRadius: 12,                                              // matches code-block radius cohesion
+        padding: '12px 16px',
+        margin: '10px 0',
+        color: textColor,
+        // Subtle inner highlight on the top edge — a small touch that
+        // sells the "glass" reading without being explicit about it.
+        // Drop shadow anchored on #000 in dark mode (text.primary would lift
+        // toward white at high contrast and turn the shadow into a glow);
+        // light mode keeps text.primary so the shadow is genuinely dark
+        // against paper.
+        boxShadow: `0 1px 0 0 ${withAlpha(accent, '14')} inset, 0 1px 2px ${theme.mode === 'light' ? `color-mix(in srgb, ${theme.text.primary} 4%, transparent)` : `rgba(0,0,0,0.18)`}`,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: accent,
+          marginBottom: 6,
+          textTransform: 'uppercase',
+          letterSpacing: 0.6,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        <span style={{ fontSize: 13, lineHeight: 1 }}>★</span>
+        <span>Insight</span>
+      </div>
+      <GuardedChatMarkdown text={text} isStreaming={isStreaming} />
+    </div>
+  )
+})
+
+export const ChatMessageContent = React.memo(({
+  text,
+  isStreaming,
+  isUser,
+  className,
+  readAttachmentPaths,
+}: {
+  text: string
+  isStreaming?: boolean
+  isUser?: boolean
+  className?: string
+  /** Paths that the model has demonstrably loaded via Read-style tools.
+   *  Used to render a confirmation tick on attachment chips — must only be
+   *  set when the attachment was actually consumed by the model. */
+  readAttachmentPaths?: Set<string>
+}) => {
+  const theme = useTheme()
+  const fonts = useAppFonts()
+  const { bodyText, attachmentPaths } = useMemo(() => splitMessageAttachmentPaths(text), [text])
+  // Chip colors must stay legible regardless of whether the parent message
+  // bubble is dark (dark theme user bubble) or light (light theme user
+  // bubble). In light mode we pick an explicitly-white chip surface with a
+  // strong border and a forced-dark text colour so we don't blend into the
+  // pale user bubble — previously `theme.surface.panelElevated` was nearly
+  // identical to the bubble and child text colours were inheriting light
+  // values from elsewhere, producing a "ghost chip" effect.
+  void isUser
+  const isLight = theme.mode === 'light'
+  // Chip surfaces follow theme: in light mode the canvas-anchored chip should
+  // read as paper, so use surface.app rather than panelElevated (which is the
+  // chat shell background and would blend in). Borders come from the theme's
+  // own gradient so contrast tracks.
+  const chipBackground = isLight ? theme.surface.app : theme.surface.panelElevated
+  const chipBorder = isLight ? theme.border.default : theme.border.default
+  const chipText = theme.text.primary
+  const chipMeta = theme.text.secondary
+
+  const attachments = attachmentPaths.length > 0 ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: bodyText ? 8 : 0, minWidth: 0 }}>
+      {bodyText && (
+        <div
+          style={{
+            fontSize: Math.max(10, fonts.secondarySize - 1),
+            color: chipMeta,
+            fontWeight: 600,
+            letterSpacing: 0.2,
+          }}
+        >
+          Attached file paths
+        </div>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
+        {attachmentPaths.map(path => {
+          const wasRead = readAttachmentPaths?.has(path) === true
+          const isImage = isImagePath(path)
+          return (
+            <button
+              key={path}
+              type="button"
+              title={wasRead ? `${path} — read by the model` : path}
+              onClick={() => { void dispatchOpenLink(path) }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                minWidth: 0,
+                maxWidth: '100%',
+                borderRadius: 6,
+                border: `1px solid ${chipBorder}`,
+                background: chipBackground,
+                color: chipText,
+                padding: isImage ? 3 : '3px 7px',
+                cursor: 'pointer',
+              }}
+            >
+              {isImage ? (
+                <img
+                  src={`contex-file://${encodeURI(path).replace(/#/g, '%23')}`}
+                  alt={basename(path)}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    objectFit: 'cover',
+                    borderRadius: 4,
+                    flexShrink: 0,
+                    display: 'block',
+                    background: theme.surface.panelMuted,
+                  }}
+                />
+              ) : (
+                <FileText size={10} color={chipText} style={{ flexShrink: 0, opacity: 0.85 }} />
+              )}
+              <span
+                style={{
+                  minWidth: 0,
+                  maxWidth: 320,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: Math.max(10, fonts.size - 2),
+                  lineHeight: 1.2,
+                  color: chipText,
+                  paddingRight: isImage ? 6 : 0,
+                }}
+              >
+                {basename(path)}
+              </span>
+              {wasRead && (
+                <Check
+                  size={10}
+                  color={theme.status.success}
+                  style={{ flexShrink: 0, marginRight: isImage ? 4 : 0 }}
+                  aria-label="Read by the model"
+                />
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  ) : null
+
+  if (!bodyText) return attachments ?? null
+
+  // Split body into markdown / insight segments. Insights become styled
+  // blocks rendered with the active accent color; everything else flows
+  // through the normal markdown pipeline.
+  const accent = theme.accent.base
+  const textColor = theme.text.primary
+  const externalAgentSegments = useMemo(() => splitExternalAgentMarkup(bodyText), [bodyText])
+  const hasExternalAgentMarkup = externalAgentSegments.some(seg => seg.kind === 'tool')
+  const segments = useMemo(() => splitInsightSegments(bodyText), [bodyText])
+  const renderedBody = hasExternalAgentMarkup
+    ? (
+      <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+        {(() => {
+          const elements: JSX.Element[] = []
+          let chipRow: JSX.Element[] = []
+          let chipRowStart = 0
+          const flushChipRow = () => {
+            if (chipRow.length === 0) return
+            elements.push(
+              <div key={`external-tool-row-${chipRowStart}`} style={CHAT_CHIP_ROW_STYLE}>
+                {chipRow}
+              </div>
+            )
+            chipRow = []
+          }
+          externalAgentSegments.forEach((seg, i) => {
+            if (seg.kind === 'tool') {
+              if (chipRow.length === 0) chipRowStart = i
+              chipRow.push(<ToolBlockView key={seg.block.id} block={seg.block} />)
+              return
+            }
+            if (!seg.text.trim()) return
+            flushChipRow()
+            elements.push(<GuardedChatMarkdown key={`external-md-${i}`} text={seg.text} isStreaming={isStreaming} />)
+          })
+          flushChipRow()
+          return elements
+        })()}
+      </div>
+    )
+    : segments.length === 1 && segments[0].kind === 'md'
+      ? <GuardedChatMarkdown text={segments[0].text} isStreaming={isStreaming} className={className} />
+      : (
+        <div className={className}>
+          {segments.map((seg, i) => seg.kind === 'insight'
+            ? <InsightBlock key={i} text={seg.text} closed={seg.closed} isStreaming={isStreaming} accent={accent} textColor={textColor} />
+            : <GuardedChatMarkdown key={i} text={seg.text} isStreaming={isStreaming} />
+          )}
+        </div>
+      )
+
+  if (!attachments) return renderedBody
+  return <>{renderedBody}{attachments}</>
+})
