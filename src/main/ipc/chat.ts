@@ -9,12 +9,10 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 
 import { execFileSync, execFile } from 'child_process'
-import * as http from 'http'
 import { promises as fs } from 'fs'
 import { basename, join } from 'path'
 import { promisify } from 'util'
 import {
-  runCodesurfAgent,
   stopCsagent,
   steerCsagent,
   disposeCsagent,
@@ -24,8 +22,7 @@ import {
 import { getShellEnvPath } from '../agent-paths'
 import { updateLinks } from '../peer-state'
 import { CONTEX_HOME } from '../paths'
-import { parseClaudeStream } from '../agent-stream'
-import { ensureLocalProxyRunning } from './localProxy'
+
 import {
   applyProjectContextPolicy,
   buildProviderContextPolicy,
@@ -58,6 +55,8 @@ import {
   resolvePendingAskUserQuestion,
 } from '../chat/providers/claude'
 import { chatCodex } from '../chat/providers/codex'
+import { chatCsagent } from '../chat/providers/csagent'
+import { chatLocalProxy } from '../chat/providers/local-proxy'
 import type {
   ChatRequest,
   ChatImageAttachment,
@@ -326,15 +325,6 @@ function cancelPendingToolPermissionsForCard(cardId: string, reason: string = 'C
       try { pending.reject(new Error(reason)) } catch { /* noop */ }
     }
   }
-}
-
-function bufferHttpResponse(res: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    res.on('data', (chunk: Buffer) => chunks.push(chunk))
-    res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
-    res.on('error', reject)
-  })
 }
 
 function stopDaemonStream(cardId: string): void {
@@ -836,130 +826,6 @@ async function cancelChatDaemonJob(cardId: string): Promise<void> {
     stopDaemonStream(cardId)
   }
 }
-
-// CodeSurf Agent (csagent) — the in-process coding-agent runtime, bridged to the
-// normalized agent:stream schema via src/main/chat/pi-runtime.ts.
-async function chatCsagent(req: ChatRequest): Promise<void> {
-  const prepared = getPreparedMessages(req)
-  const lastUser = [...prepared].reverse().find(m => m.role === 'user')
-  if (!lastUser) {
-    sendStream(req.cardId, { type: 'error', error: 'No user message to send.' })
-    sendStream(req.cardId, { type: 'done' })
-    return
-  }
-  await runCodesurfAgent(
-    {
-      cardId: req.cardId,
-      model: req.model,
-      workspaceDir: req.workspaceDir,
-      sessionId: req.sessionId ?? null,
-      thinking: req.thinking,
-      prompt: String(lastUser.content ?? ''),
-      imageAttachments: req.imageAttachments?.map(a => ({ path: a.path, mediaType: a.mediaType })),
-    },
-    (event) => sendStream(req.cardId, event),
-  )
-}
-
-function chatLocalProxy(req: ChatRequest): void {
-  const transport = req.providerTransport
-  if (!transport || transport.type !== 'local-proxy') {
-    sendStream(req.cardId, { type: 'error', error: `Unsupported provider: ${req.provider}` })
-    sendStream(req.cardId, { type: 'done' })
-    return
-  }
-
-  void (async () => {
-    if (transport.autoStart !== false) {
-      const configuredPort = (() => {
-        try {
-          const url = new URL(transport.baseUrl)
-          return url.port ? Number(url.port) : 80
-        } catch {
-          return undefined
-        }
-      })()
-      const started = await ensureLocalProxyRunning(configuredPort)
-      if (!started.ok) {
-        throw new Error(started.message || 'Failed to start the local proxy')
-      }
-    }
-
-    const baseUrl = transport.baseUrl.replace(/\/+$/, '')
-    const targetUrl = new URL(`${baseUrl}/messages`)
-    const body = JSON.stringify({
-      model: req.model,
-      stream: true,
-      max_tokens: 4096,
-      messages: getPreparedMessages(req).map(message => ({
-        role: message.role,
-        content: message.content,
-      })),
-    })
-
-    const request = http.request({
-      hostname: targetUrl.hostname,
-      port: targetUrl.port ? Number(targetUrl.port) : 80,
-      path: `${targetUrl.pathname}${targetUrl.search}`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-        'anthropic-version': '2023-06-01',
-        ...(transport.apiKey ? {
-          'x-api-key': transport.apiKey,
-          Authorization: `Bearer ${transport.apiKey}`,
-        } : {}),
-      },
-      timeout: 120_000,
-    }, (res) => {
-      if ((res.statusCode ?? 500) >= 400) {
-        void bufferHttpResponse(res).then((raw) => {
-          activeHttpRequests.delete(req.cardId)
-          let errorMessage = `Proxy request failed (${res.statusCode ?? 500})`
-          try {
-            const parsed = JSON.parse(raw)
-            errorMessage = parsed?.error?.message ?? errorMessage
-          } catch {
-            if (raw.trim()) errorMessage = raw.trim()
-          }
-          sendStream(req.cardId, { type: 'error', error: errorMessage })
-          sendStream(req.cardId, { type: 'done' })
-        }).catch((err: Error) => {
-          activeHttpRequests.delete(req.cardId)
-          sendStream(req.cardId, { type: 'error', error: err.message })
-          sendStream(req.cardId, { type: 'done' })
-        })
-        return
-      }
-
-      res.on('close', () => {
-        activeHttpRequests.delete(req.cardId)
-      })
-      parseClaudeStream(req.cardId, res)
-    })
-
-    request.on('timeout', () => {
-      request.destroy(new Error('Proxy request timed out'))
-    })
-
-    request.on('error', (err) => {
-      if (!activeHttpRequests.has(req.cardId)) return
-      activeHttpRequests.delete(req.cardId)
-      sendStream(req.cardId, { type: 'error', error: err.message })
-      sendStream(req.cardId, { type: 'done' })
-    })
-
-    activeHttpRequests.set(req.cardId, request)
-    request.write(body)
-    request.end()
-  })().catch((err: Error) => {
-    activeHttpRequests.delete(req.cardId)
-    sendStream(req.cardId, { type: 'error', error: err.message })
-    sendStream(req.cardId, { type: 'done' })
-  })
-}
-
 
 export function registerChatIPC(): void {
   log('registerChatIPC: handlers registered')

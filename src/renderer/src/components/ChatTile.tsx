@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
 import type {
   AppSettings,
-  ExtensionChatModel,
-  ExtensionChatProviderConfig,
   ExtensionChatTransportConfig,
   SkillDefinition,
 } from '../../../shared/types'
@@ -10,10 +8,10 @@ import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
 import { dispatchOpenLink } from '../utils/links'
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
 import {
-  ShieldCheck, ChevronDown, AlertTriangle,
+  ChevronDown, AlertTriangle,
   Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
-  Brain, Bug, ChevronRight, ClipboardCheck, Cog, Copy, CornerDownRight,
-  FileText, GripVertical, Maximize2, Mic, Pencil, Plus, Sparkles, Trash2, Wrench
+  Brain, ChevronRight, CornerDownRight,
+  FileText, GripVertical, Maximize2, Mic, Plus, Trash2
 } from 'lucide-react'
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useMCPServers } from '../hooks/useMCPServers'
@@ -23,10 +21,9 @@ import { useChatDictation } from '../hooks/useChatDictation'
 import { useChatExecutionHosts } from '../hooks/useChatExecutionHosts'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
-import { ensureShimmerStyles, WorkingDots, ChatMarkdown } from './shared/streamdown-utils'
+import { WorkingDots } from './shared/streamdown-utils'
 import { DiffView } from './chat/DiffView'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
-import { CHAT_TILE_STYLES } from './chat/chatStyles'
 import {
   type BuiltinProvider, type ModelOption, type ModeOption,
   DEFAULT_MODELS, DEFAULT_PROVIDER_ID, PROVIDER_MODES, EXTENSION_PROVIDER_MODE,
@@ -52,10 +49,10 @@ import {
   type ToolPermissionDecision,
   type ToolPermissionRequest,
 } from './ai-elements/ToolPermission'
-import { handleBasicChatSurfaceRpc, normalizeChatSurfacePayload, type ChatSurfacePayload } from './chatSurfaceHostRpc'
+import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { isCheckpointToolBlock } from './chat/checkpointToolActions'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
-import { CHAT_STREAM_FLUSH_INTERVAL_MS, isLargeArtifact, isLargeMessage, measureText, previewText, splitRawDiffText, type RawDiffFile } from './chat/largeContent'
+import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
 import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
 import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
 import { useContributions } from '../hooks/useContributions'
@@ -78,156 +75,57 @@ import {
   parsePlanToolTodos,
 } from './chat/ToolBlockView'
 import { collateClusterChips, type ClusterChip } from './chat/toolChipCollation'
+import {
+  ThinkingIcon,
+  renderChatSurfaceIcon,
+  normalizeChatSurfaceMenuEntry,
+  getExtensionProviderIcon,
+  ensureChatMdStyle,
+  GuardedChatMarkdown,
+} from './chat/ChatTileViews'
+import {
+  CHAT_DEFAULT_SKILL_LOCATIONS,
+  resolveChatSkillLocations,
+  shouldRenderToolBlock,
+  isUrgentQueuedContent,
+  mergeAttachments,
+  getImplicitPeerImageAttachments,
+  normalizePersistedChatSurfaces,
+  buildOutgoingMessageContent,
+  encodeUtf8Base64,
+  buildQueuedTurnPreview,
+  shouldAttachRecentEditContext,
+  resolveEditedFilePath,
+  extractChangedLineRangesFromDiff,
+  buildSnippetFromRanges,
+  buildBlockNotesContext,
+  splitMessageAttachmentPaths,
+  collectModelReadPaths,
+  canUsePagedLinkedHistory,
+  mergeHistoricalMessages,
+  withAlpha,
+  hasVisibleFileChangeStats,
+  hasRenderableFileChangeDiff,
+  splitExternalAgentMarkup,
+  getExternalAgentToolBlocks,
+  isExternalAgentToolOnlyText,
+  normalizeExtensionProviders,
+  relativeTime,
+  type PendingAttachment,
+  type ActiveChatSurface,
+  type DiscoveryPeer,
+} from './chat/chatTileUtils'
 
-
-
-const CHAT_DEFAULT_SKILL_LOCATIONS = [
-  '$HOME/.claude/commands',
-  '$WORKSPACE/.claude/commands',
-  '$HOME/.claude/skills',
-  '$WORKSPACE/.claude/skills',
-  '$HOME/.config/opencode/skills',
-  '$WORKSPACE/.opencode/skills',
-  '$WORKSPACE/.cursor/rules',
-  '$WORKSPACE/.continue/prompts',
-].join('\n')
-
-function resolveChatSkillLocations(raw: string, homePath: string, workspacePath: string | null): string[] {
-  return raw
-    .split('\n')
-    .map(line => {
-      // Strip optional surrounding quotes and convert shell-style escapes
-      // (e.g. `Application\ Support`) into literal characters. Without this
-      // a pasted shell path silently fails the `readDir` lookup.
-      let l = line.trim()
-      if (!l) return ''
-      if ((l.startsWith('"') && l.endsWith('"')) || (l.startsWith("'") && l.endsWith("'"))) l = l.slice(1, -1)
-      return l.replace(/\\([ \t()'"\\])/g, '$1')
-    })
-    .filter(Boolean)
-    .filter(line => workspacePath || !line.startsWith('$WORKSPACE'))
-    .map(line => line.replace(/^\$HOME/, homePath).replace(/^\$WORKSPACE/, workspacePath ?? ''))
-}
+export {
+  hasVisibleFileChangeStats,
+  hasRenderableFileChangeDiff,
+  getToolDisplayName,
+} from './chat/chatTileUtils'
 
 // Provider brand icons are shared with the sidebar via ./icons/providerIcons.
 import { ClaudeIcon, CodexIcon, HermesIcon, OpenClawIcon, PiIcon } from './icons/providerIcons'
 
-// --- Thinking strength icon (brain + signal bars) --------------------------------
-
-const THINKING_LEVELS: Record<string, number> = { none: 0, low: 1, medium: 2, adaptive: 3, high: 4, max: 5 }
-
-function ThinkingIcon({ level }: { level: string }): JSX.Element {
-  const bars = THINKING_LEVELS[level] ?? 3
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      <Brain size={14} />
-      <svg width="12" height="14" viewBox="0 0 10 12">
-        {[0, 1, 2, 3, 4].map(i => (
-          <rect
-            key={i}
-            x={i * 2}
-            y={12 - (i + 1) * 2.2}
-            width="1.4"
-            height={(i + 1) * 2.2}
-            rx="0.4"
-            fill="currentColor"
-            opacity={i < bars ? 1 : 0.2}
-          />
-        ))}
-      </svg>
-    </div>
-  )
-}
-
 // --- Types -----------------------------------------------------------------------
-
-
-function shouldRenderToolBlock(block: ToolBlock): boolean {
-  return block.status === 'running'
-    || (block.fileChanges?.length ?? 0) > 0
-    || (block.commandEntries?.length ?? 0) > 0
-    || Boolean(block.summary?.trim())
-    || Boolean(block.input?.trim())
-}
-
-/**
- * Heuristic: does a queued-message body look like pasted error output?
- *
- * Triggered when the user pastes a stack trace / console log into the
- * composer so the queue bar can flag it visually (red tint, alert icon).
- * Matches on common logger prefixes, error keywords, and file:line:col
- * patterns; requires the text to be either reasonably long OR to contain
- * an unambiguous signal like "Uncaught" so a plain message like
- * "fix the error in foo.ts" doesn't light up red.
- */
-function isUrgentQueuedContent(text: string): boolean {
-  if (!text) return false
-  const body = text.trim()
-  if (body.length < 20) return false
-  // Unambiguous error/panic markers — any one of these is enough.
-  const strongPatterns = [
-    /\buncaught\b/i,
-    /\bunhandled (?:promise )?rejection\b/i,
-    /\bstack trace\b/i,
-    /\btraceback\b/i,
-    /\bsegmentation fault\b/i,
-    /\bfatal\b/i,
-    /\bpanic:/i,
-    /\bexception\b.*\bat\b/is,
-    /^\s*at\s+\S+\s*\(.+:\d+:\d+\)/m,                  // JS stack frame
-    /\bERR_[A-Z_]+\b/,                                  // Node error codes
-    /\b(?:TypeError|ReferenceError|SyntaxError|RangeError|Error):/,
-  ]
-  for (const re of strongPatterns) {
-    if (re.test(body)) return true
-  }
-  // Weaker signals: need multiple matches or bulk size to count.
-  const weakPatterns = [
-    /\berror\b/i,
-    /\bwarning\b/i,
-    /\bfailed\b/i,
-    /\bcannot\s+(?:read|find|resolve|access)\b/i,
-    /\[Violation\]/,
-  ]
-  let weakHits = 0
-  for (const re of weakPatterns) {
-    if (re.test(body)) weakHits += 1
-    if (weakHits >= 2) return true
-  }
-  // A single weak hit plus a long body (≥300 chars) likely indicates a
-  // pasted log excerpt rather than a short imperative like "fix the error".
-  return weakHits >= 1 && body.length >= 300
-}
-
-interface PendingAttachment {
-  path: string
-  kind: 'image' | 'file'
-}
-
-/**
- * Chat-surface extension mounted above the composer (e.g. Sketch/Builder).
- * Multiple surfaces can stay resident as tabs; the host caches the latest
- * payload via RPC and flushes the active/dirty payloads to temp files on send.
- */
-interface ActiveChatSurface {
-  extId: string
-  surfaceId: string
-  label: string
-  icon?: string
-  instanceId: string
-  entryUrl: string
-  emits: 'image' | 'text'
-  height: number
-  minHeight: number
-  /** Last payload pushed up from the iframe via surface.setPayload */
-  payload: ChatSurfacePayload | null
-  /** Per-surface state exposed through window.contex.tile.getState/setState. */
-  tileState: Record<string, unknown>
-  /** Lightweight local context store for chat-surface peer coordination. */
-  context: Record<string, unknown>
-  /** Actions registered by the surface via window.contex.actions.register(). */
-  registeredActions: Array<{ name: string; description: string }>
-}
 
 interface QueuedChatTurn {
   id: string
@@ -250,14 +148,6 @@ type LatestChangeDrawerState = {
   additions: number
   deletions: number
   changeBlockCount: number
-}
-
-export function hasVisibleFileChangeStats(change: Pick<FileChange, 'additions' | 'deletions'>): boolean {
-  return change.additions > 0 || change.deletions > 0
-}
-
-export function hasRenderableFileChangeDiff(change: Pick<FileChange, 'diff'>): boolean {
-  return change.diff.trim().length > 0
 }
 
 interface ChatTilePersistedState {
@@ -286,77 +176,6 @@ interface ChatTilePersistedState {
   executionTarget?: 'local' | 'cloud'
 }
 
-
-interface DiscoveryPeer {
-  peerId: string
-  peerType: string
-  capabilities: string[]
-  distance: number
-  lastSeen: number
-  actions?: Array<{ name: string; description: string }>
-  filePath?: string
-  label?: string
-}
-
-function mergeAttachments(...groups: PendingAttachment[][]): PendingAttachment[] {
-  const seen = new Set<string>()
-  const merged: PendingAttachment[] = []
-  for (const group of groups) {
-    for (const item of group) {
-      const path = item.path.trim()
-      if (!path || seen.has(path)) continue
-      seen.add(path)
-      merged.push({ ...item, path })
-    }
-  }
-  return merged
-}
-
-function getImplicitPeerImageAttachments(peers: DiscoveryPeer[]): PendingAttachment[] {
-  return peers
-    .filter(peer => peer.peerType === 'image' && typeof peer.filePath === 'string' && isImagePath(peer.filePath))
-    .map(peer => ({ path: peer.filePath!.trim(), kind: 'image' as const }))
-    .filter(item => item.path.length > 0)
-}
-
-function normalizePersistedChatSurfaces(value: unknown): ActiveChatSurface[] {
-  if (!Array.isArray(value)) return []
-  return value.map((item): ActiveChatSurface | null => {
-    if (!item || typeof item !== 'object') return null
-    const surface = item as Partial<ActiveChatSurface> & Record<string, unknown>
-    const extId = typeof surface.extId === 'string' ? surface.extId : ''
-    const surfaceId = typeof surface.surfaceId === 'string' ? surface.surfaceId : ''
-    const instanceId = typeof surface.instanceId === 'string' ? surface.instanceId : ''
-    const entryUrl = typeof surface.entryUrl === 'string' ? surface.entryUrl : ''
-    if (!extId || !surfaceId || !instanceId || !entryUrl) return null
-    const tileState = surface.tileState && typeof surface.tileState === 'object' && !Array.isArray(surface.tileState)
-      ? { ...(surface.tileState as Record<string, unknown>) }
-      : {}
-    const context = surface.context && typeof surface.context === 'object' && !Array.isArray(surface.context)
-      ? { ...(surface.context as Record<string, unknown>) }
-      : {}
-    const registeredActions = Array.isArray(surface.registeredActions)
-      ? surface.registeredActions
-        .filter((action: any) => action && typeof action.name === 'string')
-        .map((action: any) => ({ name: String(action.name), description: typeof action.description === 'string' ? action.description : '' }))
-      : []
-    return {
-      extId,
-      surfaceId,
-      label: typeof surface.label === 'string' && surface.label ? surface.label : surfaceId,
-      icon: typeof surface.icon === 'string' ? surface.icon : undefined,
-      instanceId,
-      entryUrl,
-      emits: surface.emits === 'text' ? 'text' : 'image',
-      height: typeof surface.height === 'number' && Number.isFinite(surface.height) ? surface.height : 260,
-      minHeight: typeof surface.minHeight === 'number' && Number.isFinite(surface.minHeight) ? surface.minHeight : 160,
-      payload: normalizeChatSurfacePayload(surface.payload ?? null),
-      tileState,
-      context,
-      registeredActions,
-    }
-  }).filter((surface): surface is ActiveChatSurface => !!surface)
-}
 
 interface Props {
   tileId: string
@@ -425,9 +244,6 @@ const TOOLBAR_ICON_SIZE = 16
 const TOOLBAR_PILL_ICON_SIZE = 14
 export const TOOL_BLOCK_MAX_WIDTH = 420
 
-export function getToolDisplayName(name: string): string {
-  return name === 'exec_command' ? 'bash' : name
-}
 const LIVE_TOOL_COLLAPSE_GRACE_MS = 5000
 export const NON_SELECTABLE_UI_STYLE = {
   userSelect: 'none' as const,
@@ -444,132 +260,8 @@ type ChatDispatchValue = {
 }
 const ChatDispatchCtx = React.createContext<ChatDispatchValue | null>(null)
 
-function buildOutgoingMessageContent(draftInput: string, draftAttachments: PendingAttachment[]): string {
-  const trimmedInput = draftInput.trim()
-  const attachmentBlock = draftAttachments.length > 0
-    ? `Attached file paths:\n${draftAttachments.map(item => item.path).join('\n')}`
-    : ''
-  return [trimmedInput, attachmentBlock].filter(Boolean).join('\n\n').trim()
-}
-
-function renderChatSurfaceIcon(icon: string | undefined, size = 14): JSX.Element {
-  const name = String(icon ?? '').toLowerCase()
-  if (name === 'sparkles' || name === 'builder') return <Sparkles size={size} />
-  if (name === 'pencil' || name === 'sketch') return <Pencil size={size} />
-  if (name === 'settings' || name === 'cog') return <Cog size={size} />
-  if (name === 'clipboard-check' || name === 'qa-report') return <ClipboardCheck size={size} />
-  if (name === 'bug' || name === 'qa-workbench') return <Bug size={size} />
-  return <Wrench size={size} />
-}
-
-function normalizeChatSurfaceMenuEntry(entry: any): ChatSurfaceMenuEntry {
-  return {
-    extId: String(entry.extId),
-    surfaceId: String(entry.id ?? entry.surfaceId),
-    label: String(entry.label ?? entry.id ?? entry.surfaceId),
-    description: entry.description ? String(entry.description) : undefined,
-    icon: entry.icon ? String(entry.icon) : undefined,
-    emits: entry.emits === 'text' ? 'text' : 'image',
-    defaultHeight: Number.isFinite(entry.defaultHeight) ? Number(entry.defaultHeight) : 260,
-    minHeight: Number.isFinite(entry.minHeight) ? Number(entry.minHeight) : 160,
-  }
-}
-
-function encodeUtf8Base64(text: string): string {
-  const bytes = new TextEncoder().encode(text)
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
-  }
-  return btoa(binary)
-}
-
-function buildQueuedTurnPreview(content: string, attachmentCount: number): string {
-  const trimmed = content.trim()
-  const attachmentMarkerIndex = trimmed.indexOf('Attached file paths:')
-  const visibleText = attachmentMarkerIndex >= 0 ? trimmed.slice(0, attachmentMarkerIndex).trim() : trimmed
-  const firstLine = visibleText.split(/\r?\n/, 1)[0]?.trim() ?? ''
-  const truncated = firstLine.length > 140 ? `${firstLine.slice(0, 139)}…` : firstLine
-  if (truncated) return truncated
-  if (attachmentCount > 0) return `Queued attachment${attachmentCount === 1 ? '' : 's'}`
-  return 'Queued follow-up'
-}
-
 const RECENT_EDIT_CONTEXT_FILE_LIMIT = 3
-const RECENT_EDIT_CONTEXT_SNIPPET_LINE_LIMIT = 24
-const RECENT_EDIT_CONTEXT_SURROUNDING_LINES = 4
 const RECENT_EDIT_CONTEXT_MAX_CHARS = 5000
-
-function shouldAttachRecentEditContext(userText: string): boolean {
-  const normalized = userText.trim()
-  if (!normalized) return false
-  if (normalized.length > 320) return false
-
-  const hasEditIntent = /\b(edit|change|adjust|tweak|move|nudge|shift|raise|lower|increase|decrease|reduce|make|set|resize|align|position|offset|widen|narrow|shorten|lengthen|bigger|smaller|higher|lower)\b/i.test(normalized)
-    || /\b\d+(?:px|rem|em|%)\b/i.test(normalized)
-  const refersToExistingThing = /\b(it|that|those|them|this|same|again|more|further|another|still|also|back|left|right|up|down|higher|lower|bigger|smaller)\b/i.test(normalized)
-  return hasEditIntent && refersToExistingThing
-}
-
-function resolveEditedFilePath(filePath: string, workspaceDir: string): string {
-  const trimmed = String(filePath ?? '').trim()
-  if (!trimmed) return trimmed
-  if (trimmed.startsWith('/')) return trimmed
-  return `${workspaceDir.replace(/\/+$/, '')}/${trimmed.replace(/^\/+/, '')}`
-}
-
-function extractChangedLineRangesFromDiff(diff: string): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = []
-  for (const line of String(diff ?? '').split('\n')) {
-    const match = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
-    if (!match) continue
-    const start = Number(match[1] ?? '0')
-    const count = Number(match[2] ?? '1')
-    if (!Number.isFinite(start) || start <= 0) continue
-    const safeCount = Number.isFinite(count) && count > 0 ? count : 1
-    ranges.push({ start, end: start + safeCount - 1 })
-  }
-  return ranges
-}
-
-function buildSnippetFromRanges(fileContent: string, ranges: Array<{ start: number; end: number }>): string {
-  const lines = String(fileContent ?? '').split(/\r?\n/)
-  if (lines.length === 0) return ''
-  const windows = ranges.length > 0
-    ? ranges.slice(0, 3)
-    : [{ start: 1, end: Math.min(lines.length, 8) }]
-
-  const merged: Array<{ start: number; end: number }> = []
-  for (const range of windows) {
-    const next = {
-      start: Math.max(1, range.start - RECENT_EDIT_CONTEXT_SURROUNDING_LINES),
-      end: Math.min(lines.length, range.end + RECENT_EDIT_CONTEXT_SURROUNDING_LINES),
-    }
-    const previous = merged[merged.length - 1]
-    if (previous && next.start <= previous.end + 2) {
-      previous.end = Math.max(previous.end, next.end)
-    } else {
-      merged.push(next)
-    }
-  }
-
-  let emittedLines = 0
-  const parts: string[] = []
-  for (const range of merged) {
-    if (emittedLines >= RECENT_EDIT_CONTEXT_SNIPPET_LINE_LIMIT) break
-    if (parts.length > 0) parts.push('...')
-    for (let lineNumber = range.start; lineNumber <= range.end; lineNumber += 1) {
-      if (emittedLines >= RECENT_EDIT_CONTEXT_SNIPPET_LINE_LIMIT) {
-        parts.push('...')
-        break
-      }
-      parts.push(`${lineNumber}: ${lines[lineNumber - 1] ?? ''}`)
-      emittedLines += 1
-    }
-  }
-  return parts.join('\n').trim()
-}
 
 async function buildRecentEditContext(messages: ChatMessage[], workspaceDir: string, userText: string): Promise<string | null> {
   if (!shouldAttachRecentEditContext(userText) || !workspaceDir.trim() || !window.electron?.fs?.readFile) return null
@@ -626,145 +318,6 @@ async function buildRecentEditContext(messages: ChatMessage[], workspaceDir: str
 
   if (combined.length <= RECENT_EDIT_CONTEXT_MAX_CHARS) return combined
   return `${combined.slice(0, RECENT_EDIT_CONTEXT_MAX_CHARS - 1).trimEnd()}…`
-}
-
-/** Per-turn annotations ("block notes") the user has stuck onto earlier
- *  messages, tool calls, or thinking blocks are pure UI state by default —
- *  they never reach the model. This helper serialises them into a compact
- *  markdown block that we append to the newest outgoing user message so the
- *  agent can read them as guidance. Capped in size to avoid ballooning the
- *  request, and silently returns null when there's nothing to send. */
-const BLOCK_NOTES_CONTEXT_MAX_CHARS = 4000
-function buildBlockNotesContext(messages: ChatMessage[]): string | null {
-  const lines: string[] = []
-  for (let turnIdx = 0; turnIdx < messages.length; turnIdx += 1) {
-    const msg = messages[turnIdx]
-    if (msg.note?.text) {
-      const snippet = (msg.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
-      lines.push(`- [${msg.role} turn ${turnIdx + 1}${snippet ? `: "${snippet}${snippet.length >= 80 ? '…' : ''}"` : ''}] ${msg.note.text}`)
-    }
-    for (const tb of msg.toolBlocks ?? []) {
-      if (tb.note?.text) {
-        lines.push(`- [tool \`${tb.name}\`] ${tb.note.text}`)
-      }
-    }
-    for (const tk of msg.thinkingBlocks ?? []) {
-      if (tk.note?.text) {
-        const snippet = (tk.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
-        lines.push(`- [thinking${snippet ? `: "${snippet}${snippet.length >= 80 ? '…' : ''}"` : ''}] ${tk.note.text}`)
-      }
-    }
-  }
-  if (lines.length === 0) return null
-  const body = 'User annotations on earlier turns (treat as durable guidance, not fresh requests):\n' + lines.join('\n')
-  if (body.length <= BLOCK_NOTES_CONTEXT_MAX_CHARS) return body
-  return `${body.slice(0, BLOCK_NOTES_CONTEXT_MAX_CHARS - 1).trimEnd()}…`
-}
-
-function splitMessageAttachmentPaths(text: string): {
-  bodyText: string
-  attachmentPaths: string[]
-} {
-  const marker = 'Attached file paths:'
-  const normalized = String(text ?? '')
-  const attachmentMarkerIndex = normalized.indexOf(marker)
-  if (attachmentMarkerIndex < 0) {
-    return {
-      bodyText: normalized,
-      attachmentPaths: [],
-    }
-  }
-
-  const bodyText = normalized.slice(0, attachmentMarkerIndex).trim()
-  const attachmentText = normalized.slice(attachmentMarkerIndex + marker.length).trim()
-  const attachmentPaths = attachmentText
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean)
-
-  if (attachmentPaths.length === 0) {
-    return {
-      bodyText: normalized,
-      attachmentPaths: [],
-    }
-  }
-
-  return {
-    bodyText,
-    attachmentPaths,
-  }
-}
-
-/**
- * Extracts the set of absolute file paths that the model demonstrably "read"
- * across a conversation. We only consider tools that actually load file
- * bytes into the model's context:
- *   - `Read` — canonical file read (images returned as image blocks by the harness)
- *   - `NotebookEdit` / `NotebookRead` — ditto for notebooks
- *
- * Paths referenced by write/edit tools are excluded: writing to a path does
- * not guarantee the model loaded the file contents first. The output is only
- * used to drive the "image was read" tick on attachment chips, so being
- * conservative here is important — the tick must never lie.
- */
-function collectModelReadPaths(messages: ChatMessage[]): Set<string> {
-  const paths = new Set<string>()
-  for (const msg of messages) {
-    const blocks = msg.toolBlocks
-    if (!blocks || blocks.length === 0) continue
-    for (const block of blocks) {
-      if (block.name !== 'Read' && block.name !== 'NotebookRead') continue
-      // Only count a read as successful if the tool finished without error —
-      // a failed Read (e.g. file missing) did not actually load anything into
-      // context, so the tick would be misleading.
-      if (block.status !== 'done') continue
-      if (!block.input) continue
-      try {
-        const parsed = JSON.parse(block.input) as Record<string, unknown>
-        const filePath = typeof parsed.file_path === 'string' ? parsed.file_path : null
-        if (filePath) paths.add(filePath)
-      } catch {
-        // Non-JSON input — skip rather than guess.
-      }
-    }
-  }
-  return paths
-}
-
-function canUsePagedLinkedHistory(
-  linkedSessionEntryId: string | null | undefined,
-  linkedSessionHint: SessionEntryHint | null | undefined,
-  sessionId: string | null | undefined,
-): boolean {
-  if (!linkedSessionEntryId || !linkedSessionHint || !sessionId) return false
-  return linkedSessionHint.source !== 'codesurf'
-}
-
-function mergeHistoricalMessages(
-  previous: ChatMessage[],
-  incoming: ChatMessage[],
-): ChatMessage[] {
-  if (incoming.length === 0) return previous
-  const seen = new Set<string>()
-  const out: ChatMessage[] = []
-  for (const message of [...previous, ...incoming]) {
-    const key = buildChatMessageHistoryFingerprint(message)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(message)
-  }
-  out.sort((a, b) => a.timestamp - b.timestamp)
-  return out
-}
-
-
-// Hex color helper: append an alpha component (00..ff) to a #rrggbb color.
-// Used to derive a subtle accent-tinted background from theme.accent.base.
-// TODO(design): the styling in InsightBlock below is a sensible default —
-// tweak the four marked knobs to match your sketch.
-function withAlpha(hex: string, alphaHex: string): string {
-  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex
-  return hex + alphaHex
 }
 
 interface InsightBlockProps {
@@ -829,336 +382,6 @@ const InsightBlock = React.memo(({ text, closed, isStreaming, accent, textColor 
     </div>
   )
 })
-
-function LargeTextBlock({ text, isStreaming, className }: {
-  text: string
-  isStreaming?: boolean
-  className?: string
-}): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const [expanded, setExpanded] = useState(false)
-  const measure = useMemo(() => measureText(text), [text])
-  const preview = useMemo(() => previewText(text), [text])
-
-  if (expanded) {
-    return (
-      <div className={className}>
-        <button
-          type="button"
-          onClick={() => setExpanded(false)}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            marginBottom: 8,
-            border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-            borderRadius: 8,
-            background: theme.chat.assistantBubble,
-            color: theme.chat.textSecondary,
-            padding: '5px 9px',
-            fontSize: fonts.secondarySize,
-            cursor: 'pointer',
-          }}
-        >
-          <ChevronRight size={12} style={{ transform: 'rotate(90deg)' }} />
-          Collapse large message
-        </button>
-        <ChatMarkdown text={text} isStreaming={isStreaming} />
-      </div>
-    )
-  }
-
-  return (
-    <div
-      className={className}
-      style={{
-        border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-        borderRadius: 10,
-        background: theme.chat.assistantBubble,
-        overflow: 'hidden',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: `1px solid ${theme.chat.assistantBubbleBorder}` }}>
-        <FileText size={13} color={theme.chat.textSecondary} style={{ flexShrink: 0 }} />
-        <div style={{ minWidth: 0, flex: 1, color: theme.chat.textSecondary, fontSize: fonts.secondarySize, fontWeight: 600 }}>
-          Large message - {measure.lines.toLocaleString()} lines - {measure.chars.toLocaleString()} chars
-        </div>
-        <button
-          type="button"
-          onClick={() => { void navigator.clipboard.writeText(text).catch(() => {}) }}
-          title="Copy full message"
-          style={{ border: 'none', background: 'transparent', color: theme.chat.muted, cursor: 'pointer', padding: 4, display: 'inline-flex' }}
-        >
-          <Copy size={13} />
-        </button>
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          style={{
-            border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-            borderRadius: 7,
-            background: theme.surface.panelMuted,
-            color: theme.chat.textSecondary,
-            padding: '4px 8px',
-            fontSize: fonts.secondarySize,
-            cursor: 'pointer',
-          }}
-        >
-          Expand
-        </button>
-      </div>
-      <pre
-        className="allow-text-selection"
-        style={{
-          margin: 0,
-          maxHeight: 320,
-          overflow: 'auto',
-          padding: 10,
-          color: theme.chat.text,
-          background: theme.surface.panelMuted,
-          fontFamily: fonts.mono,
-          fontSize: Math.max(10, fonts.size - 2),
-          lineHeight: 1.45,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}
-      >
-        {preview}
-      </pre>
-    </div>
-  )
-}
-
-function RawDiffFileBlock({ file }: { file: RawDiffFile }): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const [expanded, setExpanded] = useState(false)
-  const [renderFull, setRenderFull] = useState(false)
-  const large = useMemo(() => isLargeArtifact(file.diff), [file.diff])
-  const preview = useMemo(() => previewText(file.diff), [file.diff])
-
-  return (
-    <div style={{ borderTop: `1px solid ${theme.chat.assistantBubbleBorder}` }}>
-      <button
-        type="button"
-        onClick={() => setExpanded(value => !value)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          width: '100%',
-          border: 'none',
-          background: 'transparent',
-          color: theme.chat.textSecondary,
-          padding: '7px 10px',
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-      >
-        <ChevronRight size={13} style={{ transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: fonts.mono, fontSize: Math.max(10, fonts.size - 2) }}>
-          {file.path}
-        </span>
-        <span style={{ color: theme.status.success, fontFamily: fonts.mono, fontSize: 11 }}>+{file.additions}</span>
-        <span style={{ color: theme.status.danger, fontFamily: fonts.mono, fontSize: 11 }}>-{file.deletions}</span>
-      </button>
-      {expanded && (
-        <div style={{ padding: '0 10px 10px' }}>
-          {large && !renderFull ? (
-            <>
-              <pre
-                className="allow-text-selection"
-                style={{
-                  margin: 0,
-                  maxHeight: 280,
-                  overflow: 'auto',
-                  borderRadius: 8,
-                  background: theme.surface.panelMuted,
-                  color: theme.chat.text,
-                  padding: 10,
-                  fontFamily: fonts.mono,
-                  fontSize: Math.max(10, fonts.size - 2),
-                  lineHeight: 1.45,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {preview}
-              </pre>
-              <button
-                type="button"
-                onClick={() => setRenderFull(true)}
-                style={{
-                  marginTop: 8,
-                  border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-                  borderRadius: 7,
-                  background: theme.surface.panelMuted,
-                  color: theme.chat.textSecondary,
-                  padding: '4px 8px',
-                  fontSize: fonts.secondarySize,
-                  cursor: 'pointer',
-                }}
-              >
-                Render full diff
-              </button>
-            </>
-          ) : (
-            <DiffView diff={file.diff} />
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function RawDiffBlock({ files }: { files: RawDiffFile[] }): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const totals = useMemo(() => files.reduce((acc, file) => ({
-    additions: acc.additions + file.additions,
-    deletions: acc.deletions + file.deletions,
-  }), { additions: 0, deletions: 0 }), [files])
-  const raw = useMemo(() => files.map(file => file.diff).join('\n\n'), [files])
-
-  return (
-    <div
-      style={{
-        border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-        borderRadius: 12,
-        background: theme.chat.assistantBubble,
-        overflow: 'hidden',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
-        <FileText size={13} color={theme.chat.textSecondary} style={{ flexShrink: 0 }} />
-        <div style={{ minWidth: 0, flex: 1, color: theme.chat.textSecondary, fontSize: fonts.secondarySize, fontWeight: 600 }}>
-          Diff - {files.length} file{files.length === 1 ? '' : 's'}
-        </div>
-        <span style={{ color: theme.status.success, fontFamily: fonts.mono, fontSize: 11 }}>+{totals.additions}</span>
-        <span style={{ color: theme.status.danger, fontFamily: fonts.mono, fontSize: 11 }}>-{totals.deletions}</span>
-        <button
-          type="button"
-          onClick={() => { void navigator.clipboard.writeText(raw).catch(() => {}) }}
-          title="Copy raw diff"
-          style={{ border: 'none', background: 'transparent', color: theme.chat.muted, cursor: 'pointer', padding: 4, display: 'inline-flex' }}
-        >
-          <Copy size={13} />
-        </button>
-      </div>
-      {files.map((file, index) => <RawDiffFileBlock key={`${file.path}:${index}`} file={file} />)}
-    </div>
-  )
-}
-
-function looksLikeUnfencedDiff(text: string): boolean {
-  const lines = text.split('\n')
-  const hasHunk = lines.some(line => /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(line.trim()))
-  const hasReviewDiffHeader = lines.some(line => /^review diff\s+a\/.+\s+(?:→|->)\s+b\/.+@@/.test(line.trim()))
-  const markdownTrapLines = lines.filter(line => /^[+-]\s{2,}\S/.test(line)).length
-  return (hasHunk || hasReviewDiffHeader) && markdownTrapLines >= 2
-}
-
-function GuardedChatMarkdown({ text, isStreaming, className }: {
-  text: string
-  isStreaming?: boolean
-  className?: string
-}): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const diff = useMemo(() => isStreaming ? null : splitRawDiffText(text), [isStreaming, text])
-
-  if (!isStreaming && !diff && looksLikeUnfencedDiff(text)) {
-    return (
-      <div className={className} style={{ minWidth: 0 }}>
-        <pre
-          className="allow-text-selection"
-          style={{
-            margin: 0,
-            maxWidth: '100%',
-            overflow: 'auto',
-            borderRadius: 8,
-            background: theme.surface.panelMuted,
-            color: theme.chat.text,
-            padding: 10,
-            fontFamily: fonts.mono,
-            fontSize: Math.max(10, fonts.size - 2),
-            lineHeight: 1.45,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}
-        >
-          {text}
-        </pre>
-      </div>
-    )
-  }
-
-  if (diff) {
-    return (
-      <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
-        {diff.prefix && (
-          isLargeMessage(diff.prefix)
-            ? <LargeTextBlock text={diff.prefix} isStreaming={isStreaming} />
-            : <ChatMarkdown text={diff.prefix} isStreaming={isStreaming} />
-        )}
-        <RawDiffBlock files={diff.files} />
-      </div>
-    )
-  }
-
-  if (isLargeMessage(text)) {
-    return <LargeTextBlock text={text} isStreaming={isStreaming} className={className} />
-  }
-
-  return <ChatMarkdown text={text} isStreaming={isStreaming} className={className} />
-}
-
-type ExternalAgentMarkupSegment =
-  | { kind: 'md'; text: string }
-  | { kind: 'tool'; block: ToolBlock }
-
-function splitExternalAgentMarkup(text: string): ExternalAgentMarkupSegment[] {
-  const pattern = /\[external_agent_tool_call:\s*([^\]]+)\]([\s\S]*?)\[\/external_agent_tool_call\]|\[external_agent_tool_result(?::\s*([^\]]+))?\]([\s\S]*?)\[\/external_agent_tool_result\]/g
-  const segments: ExternalAgentMarkupSegment[] = []
-  let lastIndex = 0
-  let index = 0
-  for (const match of text.matchAll(pattern)) {
-    if (match.index == null) continue
-    const before = text.slice(lastIndex, match.index)
-    if (before) segments.push({ kind: 'md', text: before })
-    const callName = (match[1] ?? '').trim()
-    const resultLabel = (match[3] ?? '').trim()
-    const body = (match[2] ?? match[4] ?? '').trim()
-    const isResult = !callName
-    const isError = isResult && resultLabel.toLowerCase() === 'error'
-    segments.push({
-      kind: 'tool',
-      block: {
-        id: `external-agent-${match.index}-${index++}`,
-        name: callName || resultLabel || 'result',
-        input: body,
-        status: isError ? 'error' : 'done',
-      },
-    })
-    lastIndex = match.index + match[0].length
-  }
-  const tail = text.slice(lastIndex)
-  if (tail) segments.push({ kind: 'md', text: tail })
-  return segments.length > 0 ? segments : [{ kind: 'md', text }]
-}
-
-function getExternalAgentToolBlocks(text: string): ToolBlock[] {
-  return splitExternalAgentMarkup(text)
-    .filter((segment): segment is Extract<ExternalAgentMarkupSegment, { kind: 'tool' }> => segment.kind === 'tool')
-    .map(segment => segment.block)
-}
-
-function isExternalAgentToolOnlyText(text: string): boolean {
-  const segments = splitExternalAgentMarkup(text)
-  return segments.some(segment => segment.kind === 'tool')
-    && segments.every(segment => segment.kind === 'tool' || segment.text.trim().length === 0)
-}
 
 const ChatMessageContent = React.memo(({
   text,
@@ -1360,99 +583,6 @@ const PROVIDER_ICON: Record<BuiltinProvider, React.ReactNode> = {
   hermes: <HermesIcon size={TOOLBAR_PILL_ICON_SIZE} />,
   csagent: <PiIcon size={TOOLBAR_PILL_ICON_SIZE} />,
 }
-
-
-function getExtensionProviderIcon(icon: ExtensionChatProviderConfig['icon'] | undefined): React.ReactNode {
-  switch (icon) {
-    case 'server':
-      return <ShieldCheck size={TOOLBAR_PILL_ICON_SIZE} />
-    case 'plug':
-      return <Wrench size={TOOLBAR_PILL_ICON_SIZE} />
-    case 'bot':
-    default:
-      return <Bot size={TOOLBAR_PILL_ICON_SIZE} />
-  }
-}
-
-function normalizeExtensionModels(value: unknown): ExtensionChatModel[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item): ExtensionChatModel[] => {
-    if (!item || typeof item !== 'object') return []
-    const model = item as Record<string, unknown>
-    const id = typeof model.id === 'string' ? model.id.trim() : ''
-    const label = typeof model.label === 'string' ? model.label.trim() : id
-    if (!id || !label) return []
-    return [{
-      id,
-      label,
-      description: typeof model.description === 'string' ? model.description : undefined,
-    }]
-  })
-}
-
-function normalizeExtensionProviders(value: unknown): ExtensionChatProviderConfig[] {
-  const rawProviders = Array.isArray(value) ? value : [value]
-  return rawProviders.flatMap((item): ExtensionChatProviderConfig[] => {
-    if (!item || typeof item !== 'object') return []
-    const provider = item as Record<string, unknown>
-    const id = typeof provider.id === 'string' ? provider.id.trim() : ''
-    const label = typeof provider.label === 'string' ? provider.label.trim() : ''
-    const transport = provider.transport
-    if (!id || !label || !transport || typeof transport !== 'object') return []
-
-    const transportConfig = transport as Record<string, unknown>
-    if (transportConfig.type !== 'local-proxy') return []
-    const baseUrl = typeof transportConfig.baseUrl === 'string' ? transportConfig.baseUrl.trim() : ''
-    if (!baseUrl) return []
-
-    const models = normalizeExtensionModels(provider.models)
-    if (models.length === 0) return []
-
-    return [{
-      id,
-      label,
-      description: typeof provider.description === 'string' ? provider.description : undefined,
-      noun: provider.noun === 'agent' ? 'agent' : 'model',
-      icon: provider.icon === 'server' || provider.icon === 'plug' || provider.icon === 'bot'
-        ? provider.icon
-        : undefined,
-      models,
-      transport: {
-        type: 'local-proxy',
-        baseUrl,
-        apiKey: typeof transportConfig.apiKey === 'string' ? transportConfig.apiKey : undefined,
-        autoStart: transportConfig.autoStart === false ? false : true,
-      },
-    }]
-  })
-}
-
-// --- Shimmer keyframes (injected once, lifted from Paseo) ------------------------
-
-const SHIMMER_ID = 'chat-tile-shimmer'
-function relativeTime(ts: number): string {
-  const diff = Math.max(0, Math.floor((Date.now() - ts) / 1000))
-  if (diff < 5) return 'just now'
-  if (diff < 60) return `${diff}s ago`
-  const mins = Math.floor(diff / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  return `${days}d ago`
-}
-
-function ensureChatMdStyle(): void {
-  ensureShimmerStyles()
-  let style = document.getElementById(SHIMMER_ID) as HTMLStyleElement | null
-  if (!style) {
-    style = document.createElement('style')
-    style.id = SHIMMER_ID
-    document.head.appendChild(style)
-  }
-  style.textContent = CHAT_TILE_STYLES
-}
-
 
 // --- Component -------------------------------------------------------------------
 
