@@ -7,10 +7,8 @@ import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
 
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
 import {
-  ChevronDown, AlertTriangle,
-  ArrowUp, ArrowDown, Square, MessageSquare, Bot,
-  Brain, ChevronRight, CornerDownRight,
-  GripVertical, Maximize2, Mic, Plus, Trash2
+  ArrowUp, ArrowDown, Square, Bot,
+  Brain, Maximize2, Mic, Plus
 } from 'lucide-react'
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useMCPServers } from '../hooks/useMCPServers'
@@ -27,7 +25,8 @@ import { useChatTileBlockNotes } from '../hooks/useChatTileBlockNotes'
 
 import { useTheme } from '../ThemeContext'
 
-import { DiffView } from './chat/DiffView'
+import { ChatTileLatestChangeDrawer, type LatestChangeDrawerState } from './chat/ChatTileLatestChangeDrawer'
+import { ChatTileQueuedTurnsDrawer } from './chat/ChatTileQueuedTurnsDrawer'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
 import {
   getApproxContextWindowTokens,
@@ -49,7 +48,7 @@ import { ToolPermissionProvider } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME } from './chat/dreamToolActions'
 import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
-import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
+import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
 import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
 import { useContributions } from '../hooks/useContributions'
 import { type PaletteCommand } from '../lib/commandRegistry'
@@ -91,12 +90,10 @@ import { FontCtx } from './chat/chatTileContexts'
 import {
   CHAT_DEFAULT_SKILL_LOCATIONS,
   resolveChatSkillLocations,
-  isUrgentQueuedContent,
   getImplicitPeerImageAttachments,
   collectModelReadPaths,
   canUsePagedLinkedHistory,
   hasVisibleFileChangeStats,
-  hasRenderableFileChangeDiff,
   type ActiveChatSurface,
   type DiscoveryPeer,
 } from './chat/chatTileUtils'
@@ -108,17 +105,6 @@ export {
 } from './chat/chatTileUtils'
 
 // --- Types -----------------------------------------------------------------------
-
-type LatestChangeDrawerState = {
-  key: string
-  messageId: string
-  toolBlockId: string
-  fileChanges: FileChange[]
-  fileCount: number
-  additions: number
-  deletions: number
-  changeBlockCount: number
-}
 
 interface Props {
   tileId: string
@@ -2503,538 +2489,43 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         {liveComposerActivityChip}
 
         {latestChangeDrawer && (
-          <ChatComposerDrawerFrame style={{
-            // Match the queued-messages drawer's indent + bottom-tuck so the
-            // changes drawer reads as pulled out from behind the composer
-            // rather than sitting on top of it.
-            width: `calc(${CHAT_COMPOSER_WIDTH} - 24px)`,
-            minWidth: `calc(${CHAT_COMPOSER_MIN_WIDTH_STYLE} - 24px)`,
-            margin: '0 auto 0 auto',
-          }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-                padding: '10px 14px',
-                ...NON_SELECTABLE_UI_STYLE,
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setLatestChangeDrawerExpanded(v => !v)}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                  border: 'none',
-                  background: 'transparent',
-                  padding: 0,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  color: theme.chat.textSecondary,
-                  fontFamily: fontSans,
-                  ...NON_SELECTABLE_UI_STYLE,
-                }}
-              >
-                <span style={{ fontSize: 12, fontWeight: 600, color: theme.chat.text }}>
-                  {latestChangeDrawer.fileCount} file{latestChangeDrawer.fileCount === 1 ? '' : 's'} changed
-                </span>
-                {latestChangeDrawerHasStats && (
-                  <>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.success }}>
-                      +{latestChangeDrawer.additions}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.danger }}>
-                      -{latestChangeDrawer.deletions}
-                    </span>
-                  </>
-                )}
-              </button>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                {latestCheckpointId && (
-                  <button
-                    type="button"
-                    onClick={event => {
-                      event.stopPropagation()
-                      void restoreLatestCheckpoint()
-                    }}
-                    disabled={isRestoringLatestCheckpoint}
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: isRestoringLatestCheckpoint ? theme.chat.muted : theme.chat.text,
-                      fontSize: 12,
-                      fontFamily: fontSans,
-                      fontWeight: 500,
-                      cursor: isRestoringLatestCheckpoint ? 'default' : 'pointer',
-                      padding: 0,
-                      opacity: isRestoringLatestCheckpoint ? 0.6 : 1,
-                      ...NON_SELECTABLE_UI_STYLE,
-                    }}
-                  >
-                    {isRestoringLatestCheckpoint ? 'Undoing…' : 'Undo'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={event => {
-                    event.stopPropagation()
-                    setLatestChangeDrawerExpanded(v => !v)
-                  }}
-                  title={latestChangeDrawerExpanded ? 'Collapse changes' : 'Expand changes'}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 22,
-                    height: 22,
-                    border: 'none',
-                    background: 'transparent',
-                    color: theme.chat.textSecondary,
-                    cursor: 'pointer',
-                    padding: 0,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                >
-                  <ChevronRight size={14} style={{
-                    transform: latestChangeDrawerExpanded ? 'rotate(90deg)' : 'none',
-                    transition: 'transform 0.15s',
-                    opacity: 0.55,
-                  }} />
-                </button>
-              </div>
-            </div>
-            {latestChangeDrawerExpanded && (
-              <div style={{
-                borderTop: `1px solid ${theme.chat.divider}`,
-                display: 'flex',
-                flexDirection: 'column',
-              }}>
-                {latestChangeDrawer.fileChanges.map((change, index) => {
-                  const fileKey = `${latestChangeDrawer.key}:${change.path}:${index}`
-                  const fileHasDiff = hasRenderableFileChangeDiff(change)
-                  const isExpanded = latestChangeDrawerExpandedFiles[fileKey] ?? false
-                  const fileHasStats = hasVisibleFileChangeStats(change)
-                  return (
-                    <div
-                      key={fileKey}
-                      style={{
-                        borderTop: index > 0 ? `1px solid ${theme.chat.divider}` : 'none',
-                        background: theme.surface.panelMuted,
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (fileHasDiff) toggleLatestChangeDrawerFile(fileKey)
-                        }}
-                        style={{
-                          width: '100%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                          padding: '12px 14px',
-                          border: 'none',
-                          background: 'transparent',
-                          cursor: fileHasDiff ? 'pointer' : 'default',
-                          textAlign: 'left',
-                          color: theme.chat.text,
-                          fontFamily: fontSans,
-                          fontSize: 12,
-                          ...NON_SELECTABLE_UI_STYLE,
-                        }}
-                      >
-                        <span style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {change.path}
-                        </span>
-                        {fileHasStats && (
-                          <>
-                            <span style={{ color: theme.status.success, fontWeight: 600, flexShrink: 0 }}>
-                              +{change.additions}
-                            </span>
-                            <span style={{ color: theme.status.danger, fontWeight: 600, flexShrink: 0 }}>
-                              -{change.deletions}
-                            </span>
-                          </>
-                        )}
-                        <ChevronRight size={14} style={{
-                          transform: isExpanded ? 'rotate(90deg)' : 'none',
-                          transition: 'transform 0.15s',
-                          opacity: fileHasDiff ? 0.55 : 0,
-                          flexShrink: 0,
-                        }} />
-                      </button>
-                      {isExpanded && fileHasDiff && (
-                        <div style={{ borderTop: `1px solid ${theme.chat.divider}` }}>
-                          <DiffView
-                            diff={change.diff}
-                            path={change.path}
-                            fontSize={Math.max(10, monoSize - 2)}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  padding: '10px 14px 12px',
-                  borderTop: `1px solid ${theme.chat.divider}`,
-                  background: theme.surface.panelMuted,
-                }}>
-                  <button
-                    type="button"
-                    onClick={reviewLatestChanges}
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: theme.chat.textSecondary,
-                      fontSize: 11,
-                      fontFamily: fontSans,
-                      fontWeight: 500,
-                      cursor: 'pointer',
-                      padding: 0,
-                      ...NON_SELECTABLE_UI_STYLE,
-                    }}
-                  >
-                    Jump to message
-                  </button>
-                </div>
-              </div>
-            )}
-          </ChatComposerDrawerFrame>
+          <ChatTileLatestChangeDrawer
+            drawer={latestChangeDrawer}
+            hasStats={latestChangeDrawerHasStats}
+            expanded={latestChangeDrawerExpanded}
+            expandedFiles={latestChangeDrawerExpandedFiles}
+            latestCheckpointId={latestCheckpointId}
+            isRestoringLatestCheckpoint={isRestoringLatestCheckpoint}
+            fontSans={fontSans}
+            monoSize={monoSize}
+            onToggleExpanded={() => setLatestChangeDrawerExpanded(v => !v)}
+            onToggleFile={toggleLatestChangeDrawerFile}
+            onRestoreLatestCheckpoint={() => { void restoreLatestCheckpoint() }}
+            onReviewLatestChanges={reviewLatestChanges}
+          />
         )}
 
-        {queuedTurns.length > 0 && (() => {
-          // Count crash/error-looking items once per render so the summary
-          // row can call them out in red — urgent rows are rendered with a
-          // red left-bar when expanded, but when collapsed the only tell
-          // is the "N errors" suffix in the summary row.
-          const urgentCount = queuedTurns.filter(t => isUrgentQueuedContent(t.content)).length
-          const showCollapsed = queueCollapsed && queuedTurns.length >= 3
-          return (
-          <ChatComposerDrawerFrame
-            joinedToPrevious={Boolean(latestChangeDrawer)}
-            collapsed={showCollapsed}
-            style={{
-              // Match the "changes" drawer's indent + tucks the bottom edge under
-              // the composer so it reads as a drawer pulled out from behind it.
-              width: `calc(${CHAT_COMPOSER_WIDTH} - 24px)`,
-              minWidth: `calc(${CHAT_COMPOSER_MIN_WIDTH_STYLE} - 24px)`,
-              margin: '0 auto 0 auto',
-            }}
-          >
-            {/* Header / summary row. When collapsed it's the ONLY visible
-                row and clicking anywhere on it expands. When expanded it
-                becomes a compact toggle at the top so the user can tuck the
-                queue back away. */}
-            {queuedTurns.length >= 3 && (
-              <button
-                type="button"
-                onClick={() => setQueueCollapsed(v => !v)}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: showCollapsed ? '6px 14px' : '6px 14px',
-                  border: 'none',
-                  borderBottom: showCollapsed ? 'none' : `1px solid ${theme.chat.divider}`,
-                  background: 'transparent',
-                  color: theme.chat.textSecondary,
-                  cursor: 'pointer',
-                  fontFamily: fontSans,
-                  // Pin text to 11px regardless of the user's chat font —
-                  // this is UI chrome, not conversation content, so it should
-                  // match the composer toolbar pills rather than message body.
-                  fontSize: 11,
-                  // Tight line-height so the text's visual centre lines up
-                  // with the 14px icons on the same row (avoids the baseline
-                  // hang we had at 1.35).
-                  lineHeight: 1,
-                  textAlign: 'left',
-                  ...NON_SELECTABLE_UI_STYLE,
-                }}
-                title={showCollapsed ? 'Expand queued messages' : 'Collapse queued messages'}
-              >
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 14,
-                  height: 14,
-                  color: theme.chat.muted,
-                  flexShrink: 0,
-                }}>
-                  {showCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                </span>
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 14,
-                  height: 14,
-                  color: urgentCount > 0 ? theme.status.danger : theme.chat.muted,
-                  flexShrink: 0,
-                }}>
-                  {urgentCount > 0 ? <AlertTriangle size={12} /> : <MessageSquare size={12} />}
-                </span>
-                <span style={{
-                  flex: 1, minWidth: 0,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  lineHeight: 1,
-                }}>
-                  <span style={{ fontWeight: 600 }}>
-                    {queuedTurns.length} queued {queuedTurns.length === 1 ? 'message' : 'messages'}
-                  </span>
-                  {urgentCount > 0 && (
-                    <>
-                      <span style={{ color: theme.chat.muted }}>, </span>
-                      <span style={{ color: theme.status.danger, fontWeight: 600 }}>
-                        {urgentCount} {urgentCount === 1 ? 'error' : 'errors'}
-                      </span>
-                    </>
-                  )}
-                </span>
-              </button>
-            )}
-            {!showCollapsed && queuedTurns.map((turn, index) => {
-              const depth = turn.parentId ? 1 : 0
-              const isDraggingThis = draggingTurnId === turn.id
-              const dropHere = dragOverTurn?.id === turn.id ? dragOverTurn.mode : null
-              // Flag pasted error/warning/stack-trace dumps so the row can
-              // render with a red tint — makes it obvious at a glance that
-              // this queued turn is a crash report rather than a normal prompt.
-              const isUrgent = isUrgentQueuedContent(turn.content)
-              return (
-              <div
-                key={turn.id}
-                onDragOver={(ev) => {
-                  // Only accept our own internal queue-turn drags. The
-                  // custom mime type is set in onDragStart below.
-                  if (!ev.dataTransfer.types.includes('application/x-codesurf-queued-turn')) return
-                  if (draggingTurnId === turn.id) return
-                  ev.preventDefault()
-                  ev.stopPropagation()
-                  ev.dataTransfer.dropEffect = 'move'
-                  const rect = ev.currentTarget.getBoundingClientRect()
-                  const y = ev.clientY - rect.top
-                  const h = rect.height
-                  // Zone thresholds: top quarter → before, middle half → into,
-                  // bottom quarter → after. Child rows can't be nested further,
-                  // so dropping onto a child collapses to sibling mode.
-                  let mode: 'before' | 'after' | 'into'
-                  if (y < h * 0.25) mode = 'before'
-                  else if (y > h * 0.75) mode = 'after'
-                  else mode = turn.parentId ? 'after' : 'into'
-                  if (dragOverTurn?.id !== turn.id || dragOverTurn.mode !== mode) {
-                    setDragOverTurn({ id: turn.id, mode })
-                  }
-                }}
-                onDragLeave={(ev) => {
-                  // Only clear if the pointer actually left this row (not
-                  // just moved to a child element).
-                  const related = ev.relatedTarget as Node | null
-                  if (related && ev.currentTarget.contains(related)) return
-                  if (dragOverTurn?.id === turn.id) setDragOverTurn(null)
-                }}
-                onDrop={(ev) => {
-                  // Source-of-truth is the dataTransfer payload plus the
-                  // row's own id (from closure) and the cursor position —
-                  // NOT React state. Some browsers fire a dragleave between
-                  // the last dragover and drop, which would clear the
-                  // dragOverTurn state and leave us unable to reorder. The
-                  // data-transfer + geometry approach is immune to that.
-                  const draggedId = ev.dataTransfer.getData('application/x-codesurf-queued-turn')
-                    || ev.dataTransfer.getData('text/plain')
-                  if (!draggedId || draggedId === turn.id) return
-                  ev.preventDefault()
-                  ev.stopPropagation()
-                  const rect = ev.currentTarget.getBoundingClientRect()
-                  const y = ev.clientY - rect.top
-                  const h = rect.height
-                  let mode: 'before' | 'after' | 'into'
-                  if (y < h * 0.25) mode = 'before'
-                  else if (y > h * 0.75) mode = 'after'
-                  else mode = turn.parentId ? 'after' : 'into'
-                  reorderQueuedTurn(draggedId, turn.id, mode)
-                  setDragOverTurn(null)
-                  setDraggingTurnId(null)
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '6px 14px',
-                  paddingLeft: 14 + depth * 22,
-                  borderTop: index > 0 ? `1px solid ${theme.chat.divider}` : undefined,
-                  background: dropHere === 'into'
-                    ? theme.surface.hover
-                    : (isDraggingThis
-                      ? theme.surface.selection
-                      // Urgent rows get a soft red tint so a pasted crash/error
-                      // log stands out without drowning the rest of the queue.
-                      : (isUrgent ? `color-mix(in srgb, ${theme.status.danger} 18%, transparent)` : 'transparent')),
-                  // Top/bottom indicator lines for before/after drop zones.
-                  // Urgent rows additionally get a left accent bar in danger
-                  // color; if a drop indicator is active, it takes precedence.
-                  boxShadow: dropHere === 'before'
-                    ? `inset 0 2px 0 0 ${theme.accent.base}`
-                    : dropHere === 'after'
-                      ? `inset 0 -2px 0 0 ${theme.accent.base}`
-                      : (isUrgent ? `inset 3px 0 0 0 ${theme.status.danger}` : undefined),
-                  opacity: isDraggingThis ? 0.5 : 1,
-                  transition: 'background 0.12s, opacity 0.12s',
-                  position: 'relative',
-                }}
-              >
-                {/* Drag handle — native HTML5 DnD is initiated here; setting
-                    draggable on the row itself would steal text selection.
-                    Hit area is deliberately generous (24×24) with the grip
-                    icon visually centered, so users don't have to aim at
-                    the 14px glyph precisely. */}
-                <div
-                  draggable
-                  onDragStart={(ev) => {
-                    ev.stopPropagation()
-                    ev.dataTransfer.effectAllowed = 'move'
-                    // Custom mime type marks this as an internal queue-turn
-                    // drag so tile-level file-drop handlers can ignore it.
-                    // Keep text/plain for backwards compat and because some
-                    // drop targets only read text/plain.
-                    try {
-                      ev.dataTransfer.setData('application/x-codesurf-queued-turn', turn.id)
-                    } catch { /* older browsers reject custom types silently */ }
-                    ev.dataTransfer.setData('text/plain', turn.id)
-                    setDraggingTurnId(turn.id)
-                  }}
-                  onDragEnd={() => {
-                    setDraggingTurnId(null)
-                    setDragOverTurn(null)
-                  }}
-                  title="Drag to reorder — drop on a row to nest as a sub-item"
-                  style={{
-                    width: 24,
-                    height: 24,
-                    marginLeft: -4,
-                    marginRight: -4,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: theme.chat.muted,
-                    cursor: 'grab',
-                    flexShrink: 0,
-                    opacity: 0.6,
-                    borderRadius: 4,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                  onMouseEnter={(ev) => {
-                    ev.currentTarget.style.opacity = '1'
-                    ev.currentTarget.style.background = theme.surface.hover
-                  }}
-                  onMouseLeave={(ev) => {
-                    ev.currentTarget.style.opacity = '0.6'
-                    ev.currentTarget.style.background = 'transparent'
-                  }}
-                >
-                  <GripVertical size={14} />
-                </div>
-                <div style={{
-                  width: 18,
-                  height: 18,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: isUrgent ? theme.status.danger : theme.chat.muted,
-                  flexShrink: 0,
-                  ...NON_SELECTABLE_UI_STYLE,
-                }}>
-                  {isUrgent ? <AlertTriangle size={14} /> : <MessageSquare size={14} />}
-                </div>
-                <div
-                  title={isUrgent ? 'This queued message looks like a pasted error/crash log' : undefined}
-                  style={{
-                    minWidth: 0, flex: 1,
-                    color: isUrgent ? theme.status.danger : theme.chat.textSecondary,
-                    fontWeight: isUrgent ? 600 : undefined,
-                    fontSize: Math.max(12, fontSize),
-                    fontFamily: fontSans,
-                    lineHeight: 1.35,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {turn.preview}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleQueuedTurnSteer(turn)
-                  }}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: theme.chat.textSecondary,
-                    fontSize: 12,
-                    fontFamily: fontSans,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: 0,
-                    opacity: 1,
-                    flexShrink: 0,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                  title={isStreaming ? 'Send this message into the running stream' : 'Send this queued message now'}
-                >
-                  <CornerDownRight size={14} />
-                  <span>Steer</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const remaining = queuedTurns.filter(item => item.id !== turn.id)
-                    setQueuedTurns(remaining)
-                    flushQueueStateNow(remaining)
-                    logQueueEvent('delete', { queueId: turn.id })
-                  }}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: theme.chat.muted,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                    flexShrink: 0,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                  title="Remove queued message"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              )
-            })}
-          </ChatComposerDrawerFrame>
-          )
-        })()}
+        <ChatTileQueuedTurnsDrawer
+          queuedTurns={queuedTurns}
+          queueCollapsed={queueCollapsed}
+          draggingTurnId={draggingTurnId}
+          dragOverTurn={dragOverTurn}
+          joinedToPrevious={Boolean(latestChangeDrawer)}
+          isStreaming={isStreaming}
+          fontSans={fontSans}
+          fontSize={fontSize}
+          onToggleCollapsed={() => setQueueCollapsed(v => !v)}
+          onSetDraggingTurnId={setDraggingTurnId}
+          onSetDragOverTurn={setDragOverTurn}
+          onReorderQueuedTurn={reorderQueuedTurn}
+          onSteerTurn={handleQueuedTurnSteer}
+          onDeleteTurn={(turnId) => {
+            const remaining = queuedTurns.filter(item => item.id !== turnId)
+            setQueuedTurns(remaining)
+            flushQueueStateNow(remaining)
+            logQueueEvent('delete', { queueId: turnId })
+          }}
+        />
 
         {/* Input bar */}
         <ChatComposerWrap style={{

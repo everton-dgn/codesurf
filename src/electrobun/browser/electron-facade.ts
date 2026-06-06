@@ -209,12 +209,12 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       createDir: makeInvoker(invoke, 'fs:createDir'),
       deleteFile: makeInvoker(invoke, 'fs:deleteFile'),
       renameFile: makeInvoker(invoke, 'fs:renameFile'),
-      watch: (dirPath: string, callback: () => void) => {
-        void invoke('fs:watchStart', [dirPath])
+      watch: (dirPath: string, callback: () => void, workspaceId?: string) => {
+        void invoke('fs:watchStart', [dirPath, workspaceId])
         const off = eventHub.on(`fs:watch:${dirPath}`, () => callback())
         return () => {
           off()
-          void invoke('fs:watchStop', [dirPath])
+          void invoke('fs:watchStop', [dirPath, workspaceId])
         }
       },
       revealInFinder: makeInvoker(invoke, 'fs:revealInFinder'),
