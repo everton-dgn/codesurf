@@ -41,28 +41,28 @@ contextBridge.exposeInMainWorld('electron', {
 
   // File system operations
   fs: {
-    readDir: (path: string) => ipcRenderer.invoke('fs:readDir', path),
-    readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
-    writeFile: (path: string, content: string) => ipcRenderer.invoke('fs:writeFile', path, content),
-    createFile: (path: string) => ipcRenderer.invoke('fs:createFile', path),
-    createDir: (path: string) => ipcRenderer.invoke('fs:createDir', path),
-    deleteFile: (path: string) => ipcRenderer.invoke('fs:deleteFile', path),
-    renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:renameFile', oldPath, newPath),
-    watch: (dirPath: string, callback: () => void) => {
+    readDir: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:readDir', path, workspaceId),
+    readFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:readFile', path, workspaceId),
+    writeFile: (path: string, content: string, workspaceId?: string) => ipcRenderer.invoke('fs:writeFile', path, content, workspaceId),
+    createFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:createFile', path, workspaceId),
+    createDir: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:createDir', path, workspaceId),
+    deleteFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:deleteFile', path, workspaceId),
+    renameFile: (oldPath: string, newPath: string, workspaceId?: string) => ipcRenderer.invoke('fs:renameFile', oldPath, newPath, workspaceId),
+    watch: (dirPath: string, callback: () => void, workspaceId?: string) => {
       const channel = `fs:watch:${dirPath}`
       const handler = () => callback()
       ipcRenderer.on(channel, handler)
-      ipcRenderer.invoke('fs:watchStart', dirPath)
+      ipcRenderer.invoke('fs:watchStart', dirPath, workspaceId)
       return () => {
         ipcRenderer.removeListener(channel, handler)
-        ipcRenderer.invoke('fs:watchStop', dirPath)
+        ipcRenderer.invoke('fs:watchStop', dirPath, workspaceId)
       }
     },
-    revealInFinder: (path: string) => ipcRenderer.invoke('fs:revealInFinder', path),
+    revealInFinder: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:revealInFinder', path, workspaceId),
     writeBrief: (cardId: string, content: string) => ipcRenderer.invoke('fs:writeBrief', cardId, content),
-    stat: (path: string) => ipcRenderer.invoke('fs:stat', path),
-    isProbablyTextFile: (path: string) => ipcRenderer.invoke('fs:isProbablyTextFile', path),
-    copyIntoDir: (sourcePath: string, destDir: string) => ipcRenderer.invoke('fs:copyIntoDir', sourcePath, destDir),
+    stat: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:stat', path, workspaceId),
+    isProbablyTextFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:isProbablyTextFile', path, workspaceId),
+    copyIntoDir: (sourcePath: string, destDir: string, workspaceId?: string) => ipcRenderer.invoke('fs:copyIntoDir', sourcePath, destDir, workspaceId),
     selectDir: () => ipcRenderer.invoke('workspace:openFolder'),
   },
 

@@ -608,6 +608,11 @@ export interface AppSettings {
   // separately in the encrypted secrets store; this struct holds only the
   // non-secret configuration (provider choice, voice id, lang, etc.).
   voice?: VoiceSettings
+  // Optional hardening flags. All default off so existing installs are unchanged.
+  security: {
+    /** When true, fs IPC paths must fall under a workspace project root or CONTEX_HOME. */
+    restrictFsToWorkspaceRoots: boolean
+  }
 }
 
 export interface VoiceSettings {
@@ -813,6 +818,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoSpeak: 'off',
     bargeIn: true,
   },
+  security: {
+    restrictFsToWorkspaceRoots: false,
+  },
 }
 
 /** Deep-merge a single font token with its default */
@@ -905,6 +913,10 @@ export function withDefaultSettings(input: Partial<AppSettings> | null | undefin
     storage: {
       ...DEFAULT_SETTINGS.storage,
       ...(settings.storage ?? {}),
+    },
+    security: {
+      ...DEFAULT_SETTINGS.security,
+      ...(settings.security ?? {}),
     },
     generationProviders,
     // Resolve fonts: new 3-token system, with legacy migration

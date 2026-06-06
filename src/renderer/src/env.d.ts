@@ -25,22 +25,22 @@ interface ElectronAPI {
     delete(id: string): Promise<void>
   }
   fs: {
-    readDir(path: string): Promise<Array<{ name: string; path: string; isDir: boolean; ext: string }>>
-    readFile(path: string): Promise<string>
-    writeFile(path: string, content: string): Promise<void>
-    createFile(path: string): Promise<void>
-    createDir(path: string): Promise<void>
-    deleteFile(path: string): Promise<void>
-    delete(path: string): Promise<void>
-    rename(oldPath: string, newPath: string): Promise<void>
-    renameFile(oldPath: string, newPath: string): Promise<void>
+    readDir(path: string, workspaceId?: string): Promise<Array<{ name: string; path: string; isDir: boolean; ext: string }>>
+    readFile(path: string, workspaceId?: string): Promise<string>
+    writeFile(path: string, content: string, workspaceId?: string): Promise<void>
+    createFile(path: string, workspaceId?: string): Promise<void>
+    createDir(path: string, workspaceId?: string): Promise<void>
+    deleteFile(path: string, workspaceId?: string): Promise<void>
+    delete(path: string, workspaceId?: string): Promise<void>
+    rename(oldPath: string, newPath: string, workspaceId?: string): Promise<void>
+    renameFile(oldPath: string, newPath: string, workspaceId?: string): Promise<void>
     basename(path: string): Promise<string>
-    revealInFinder?(path: string): Promise<void>
+    revealInFinder?(path: string, workspaceId?: string): Promise<void>
     writeBrief(cardId: string, content: string): Promise<string>
-    stat(path: string): Promise<{ size: number; mtimeMs: number; isFile: boolean; isDir: boolean } | null>
-    isProbablyTextFile(path: string): Promise<boolean>
-    copyIntoDir(sourcePath: string, destDir: string): Promise<{ path: string }>
-    watch(dirPath: string, callback: () => void): () => void
+    stat(path: string, workspaceId?: string): Promise<{ size: number; mtimeMs: number; isFile: boolean; isDir: boolean } | null>
+    isProbablyTextFile(path: string, workspaceId?: string): Promise<boolean>
+    copyIntoDir(sourcePath: string, destDir: string, workspaceId?: string): Promise<{ path: string }>
+    watch(dirPath: string, callback: () => void, workspaceId?: string): () => void
   }
   git?: {
     status(dirPath: string): Promise<{ isRepo: boolean; root: string; files: Array<{ path: string; status: string }> }>

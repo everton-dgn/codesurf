@@ -1,6 +1,6 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { readFileSync } from 'fs'
-import { join } from 'path'
+import path, { join } from 'path'
 import type { AppSettings, Workspace } from '../../shared/types'
 import { DEFAULT_SETTINGS, withDefaultSettings } from '../../shared/types'
 import { ensureDaemonRunning } from '../daemon/manager'
@@ -37,6 +37,44 @@ export function extractWorkspacePrimaryPath(workspace: Workspace | null | undefi
     : workspace.path
   const normalized = String(projectPath ?? '').trim()
   return normalized || null
+}
+
+/** All project folders attached to a workspace (primary + projectPaths). */
+export function extractWorkspaceProjectPaths(workspace: Workspace | null | undefined): string[] {
+  if (!workspace) return []
+  const paths = new Set<string>()
+  const primary = extractWorkspacePrimaryPath(workspace)
+  if (primary) paths.add(primary)
+  if (Array.isArray(workspace.projectPaths)) {
+    for (const projectPath of workspace.projectPaths) {
+      const normalized = String(projectPath ?? '').trim()
+      if (normalized) paths.add(normalized)
+    }
+  }
+  if (workspace.path) {
+    const legacyPath = String(workspace.path).trim()
+    if (legacyPath) paths.add(legacyPath)
+  }
+  return [...paths]
+}
+
+export async function getAllWorkspaceProjectPaths(): Promise<string[]> {
+  await ensureDaemonRunning()
+  const workspaces = await daemonClient.listWorkspaces()
+  const paths = new Set<string>()
+  for (const workspace of workspaces) {
+    for (const projectPath of extractWorkspaceProjectPaths(workspace)) {
+      paths.add(path.resolve(projectPath))
+    }
+  }
+  return [...paths]
+}
+
+export async function getWorkspaceProjectPathsById(workspaceId: string): Promise<string[]> {
+  await ensureDaemonRunning()
+  const workspaces = await daemonClient.listWorkspaces()
+  const workspace = workspaces.find(entry => entry.id === workspaceId) ?? null
+  return extractWorkspaceProjectPaths(workspace).map(projectPath => path.resolve(projectPath))
 }
 
 function normalizeSettingsDocument(raw: string): AppSettings {

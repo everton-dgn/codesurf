@@ -55,7 +55,37 @@ function trackWatchSender(sender: WebContents, resolvedPath: string): void {
 // --- Security: path validation (SEC-03) ---
 const SENSITIVE_DIRS = ['.ssh', '.gnupg', '.aws', '.config']
 
-function validateFsPath(filePath: string): string {
+export interface FsPathScopeOptions {
+  restrictToWorkspaceRoots?: boolean
+  allowedRoots?: string[]
+}
+
+export function isPathUnderRoot(candidatePath: string, rootPath: string): boolean {
+  const resolvedCandidate = path.resolve(candidatePath)
+  const resolvedRoot = path.resolve(rootPath)
+  if (resolvedCandidate === resolvedRoot) return true
+  const prefix = resolvedRoot.endsWith(path.sep) ? resolvedRoot : resolvedRoot + path.sep
+  return resolvedCandidate.startsWith(prefix)
+}
+
+export function assertPathAllowedForFs(
+  resolvedPath: string,
+  options?: FsPathScopeOptions,
+): void {
+  if (!options?.restrictToWorkspaceRoots) return
+
+  // CONTEX_HOME is always allowed when workspace scoping is enabled.
+  if (resolvedPath === CONTEX_HOME || resolvedPath.startsWith(CONTEX_HOME + path.sep)) return
+
+  const allowedRoots = options.allowedRoots ?? []
+  for (const root of allowedRoots) {
+    if (isPathUnderRoot(resolvedPath, root)) return
+  }
+
+  throw new Error(`Access denied: path "${resolvedPath}" is outside allowed workspace roots`)
+}
+
+export function validateFsPath(filePath: string, options?: FsPathScopeOptions): string {
   const resolved = path.resolve(resolveFsPath(filePath))
   const home = resolveHome()
   // Always allow app config paths
@@ -74,10 +104,33 @@ function validateFsPath(filePath: string): string {
     throw new Error(`Path "${filePath}" contains directory traversal`)
   }
 
-  // Note: paths outside the home directory are allowed — users legitimately open
-  // projects on other drives (common on Windows where home is C:\ and projects live
-  // on D:\ or G:\). Sensitive dirs and traversal are already blocked above.
+  assertPathAllowedForFs(resolved, options)
+
+  // Note: when workspace scoping is off, paths outside the home directory are
+  // allowed — users legitimately open projects on other drives (common on
+  // Windows where home is C:\ and projects live on D:\ or G:\).
   return resolved
+}
+
+async function validateFsPathForHandler(filePath: string, workspaceId?: string): Promise<string> {
+  const {
+    readSettingsSync,
+    getAllWorkspaceProjectPaths,
+    getWorkspaceProjectPathsById,
+  } = await import('./workspace.ts')
+  const settings = readSettingsSync()
+  if (!settings.security.restrictFsToWorkspaceRoots) {
+    return validateFsPath(filePath)
+  }
+
+  const allowedRoots = workspaceId
+    ? await getWorkspaceProjectPathsById(workspaceId)
+    : await getAllWorkspaceProjectPaths()
+
+  return validateFsPath(filePath, {
+    restrictToWorkspaceRoots: true,
+    allowedRoots,
+  })
 }
 
 export function assertSafeCardId(cardId: string): void {
@@ -141,8 +194,8 @@ async function getUniqueCopyPath(destDir: string, sourcePath: string): Promise<s
   }
 }
 
-async function isProbablyTextFile(filePath: string): Promise<boolean> {
-  const resolved = validateFsPath(filePath)
+async function isProbablyTextFile(resolvedPath: string): Promise<boolean> {
+  const resolved = resolvedPath
   const handle = await fs.open(resolved, 'r')
   try {
     const sampleSize = 8192
@@ -169,9 +222,9 @@ async function isProbablyTextFile(filePath: string): Promise<boolean> {
 export function registerFsIPC(): void {
   const { ipcMain, shell } = getElectron()
 
-  ipcMain.handle('fs:readDir', async (_, dirPath: string) => {
+  ipcMain.handle('fs:readDir', async (_, dirPath: string, workspaceId?: string) => {
     try {
-      const resolvedDirPath = validateFsPath(dirPath)
+      const resolvedDirPath = await validateFsPathForHandler(dirPath, workspaceId)
       const entries = await fs.readdir(resolvedDirPath, { withFileTypes: true })
       const result: FsEntry[] = entries.map(e => ({
         name: e.name,
@@ -190,9 +243,9 @@ export function registerFsIPC(): void {
     }
   })
 
-  ipcMain.handle('fs:readFile', async (_, filePath: string) => {
+  ipcMain.handle('fs:readFile', async (_, filePath: string, workspaceId?: string) => {
     try {
-      return await fs.readFile(validateFsPath(filePath), 'utf8')
+      return await fs.readFile(await validateFsPathForHandler(filePath, workspaceId), 'utf8')
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
       if (code === 'ENOENT' || code === 'EPERM' || code === 'EACCES') {
@@ -202,41 +255,47 @@ export function registerFsIPC(): void {
     }
   })
 
-  ipcMain.handle('fs:writeFile', async (_, filePath: string, content: string) => {
-    await fs.writeFile(validateFsPath(filePath), content, 'utf8')
+  ipcMain.handle('fs:writeFile', async (_, filePath: string, content: string, workspaceId?: string) => {
+    await fs.writeFile(await validateFsPathForHandler(filePath, workspaceId), content, 'utf8')
   })
 
-  ipcMain.handle('fs:createFile', async (_, filePath: string) => {
-    await fs.writeFile(validateFsPath(filePath), '', 'utf8')
+  ipcMain.handle('fs:createFile', async (_, filePath: string, workspaceId?: string) => {
+    await fs.writeFile(await validateFsPathForHandler(filePath, workspaceId), '', 'utf8')
   })
 
-  ipcMain.handle('fs:createDir', async (_, dirPath: string) => {
-    await fs.mkdir(validateFsPath(dirPath), { recursive: true })
+  ipcMain.handle('fs:createDir', async (_, dirPath: string, workspaceId?: string) => {
+    await fs.mkdir(await validateFsPathForHandler(dirPath, workspaceId), { recursive: true })
   })
 
-  ipcMain.handle('fs:delete', async (_, fspath: string) => {
-    await fs.rm(validateFsPath(fspath), { recursive: true, force: true })
+  ipcMain.handle('fs:delete', async (_, fspath: string, workspaceId?: string) => {
+    await fs.rm(await validateFsPathForHandler(fspath, workspaceId), { recursive: true, force: true })
   })
 
   // Aliases used by renderer
-  ipcMain.handle('fs:deleteFile', async (_, fspath: string) => {
-    await fs.rm(validateFsPath(fspath), { recursive: true, force: true })
+  ipcMain.handle('fs:deleteFile', async (_, fspath: string, workspaceId?: string) => {
+    await fs.rm(await validateFsPathForHandler(fspath, workspaceId), { recursive: true, force: true })
   })
 
-  ipcMain.handle('fs:rename', async (_, oldPath: string, newPath: string) => {
-    await fs.rename(validateFsPath(oldPath), validateFsPath(newPath))
+  ipcMain.handle('fs:rename', async (_, oldPath: string, newPath: string, workspaceId?: string) => {
+    await fs.rename(
+      await validateFsPathForHandler(oldPath, workspaceId),
+      await validateFsPathForHandler(newPath, workspaceId),
+    )
   })
 
-  ipcMain.handle('fs:renameFile', async (_, oldPath: string, newPath: string) => {
-    await fs.rename(validateFsPath(oldPath), validateFsPath(newPath))
+  ipcMain.handle('fs:renameFile', async (_, oldPath: string, newPath: string, workspaceId?: string) => {
+    await fs.rename(
+      await validateFsPathForHandler(oldPath, workspaceId),
+      await validateFsPathForHandler(newPath, workspaceId),
+    )
   })
 
   ipcMain.handle('fs:basename', async (_, filePath: string) => {
     return basename(filePath)
   })
 
-  ipcMain.handle('fs:revealInFinder', async (_, filePath: string) => {
-    shell.showItemInFolder(validateFsPath(filePath))
+  ipcMain.handle('fs:revealInFinder', async (_, filePath: string, workspaceId?: string) => {
+    shell.showItemInFolder(await validateFsPathForHandler(filePath, workspaceId))
   })
 
   ipcMain.handle('fs:writeBrief', async (_, cardId: string, content: string) => {
@@ -249,9 +308,9 @@ export function registerFsIPC(): void {
     return briefPath
   })
 
-  ipcMain.handle('fs:stat', async (_, filePath: string) => {
+  ipcMain.handle('fs:stat', async (_, filePath: string, workspaceId?: string) => {
     try {
-      const stats = await fs.stat(validateFsPath(filePath))
+      const stats = await fs.stat(await validateFsPathForHandler(filePath, workspaceId))
       return {
         size: stats.size,
         mtimeMs: stats.mtimeMs,
@@ -266,15 +325,16 @@ export function registerFsIPC(): void {
     }
   })
 
-  ipcMain.handle('fs:isProbablyTextFile', async (_, filePath: string) => {
-    const stats = await fs.stat(validateFsPath(filePath))
+  ipcMain.handle('fs:isProbablyTextFile', async (_, filePath: string, workspaceId?: string) => {
+    const resolved = await validateFsPathForHandler(filePath, workspaceId)
+    const stats = await fs.stat(resolved)
     if (!stats.isFile()) return false
-    return isProbablyTextFile(filePath)
+    return isProbablyTextFile(resolved)
   })
 
-  ipcMain.handle('fs:copyIntoDir', async (_, sourcePath: string, destDir: string) => {
-    const resolvedSource = validateFsPath(sourcePath)
-    const resolvedDestDir = validateFsPath(destDir)
+  ipcMain.handle('fs:copyIntoDir', async (_, sourcePath: string, destDir: string, workspaceId?: string) => {
+    const resolvedSource = await validateFsPathForHandler(sourcePath, workspaceId)
+    const resolvedDestDir = await validateFsPathForHandler(destDir, workspaceId)
     await fs.mkdir(resolvedDestDir, { recursive: true })
 
     const sourceStats = await fs.stat(resolvedSource)
@@ -290,8 +350,8 @@ export function registerFsIPC(): void {
     return { path: destPath }
   })
 
-  ipcMain.handle('fs:watchStart', async (event, dirPath: string) => {
-    const resolved = validateFsPath(dirPath)
+  ipcMain.handle('fs:watchStart', async (event, dirPath: string, workspaceId?: string) => {
+    const resolved = await validateFsPathForHandler(dirPath, workspaceId)
     // Reuse an existing watcher for this path and just add this window as a
     // subscriber. Previously a second window watching the same dir was dropped
     // (its events never fired) and the first window's close tore the shared
@@ -325,8 +385,8 @@ export function registerFsIPC(): void {
     } catch { /* ignore */ }
   })
 
-  ipcMain.handle('fs:watchStop', async (event, dirPath: string) => {
-    const resolved = validateFsPath(dirPath)
+  ipcMain.handle('fs:watchStop', async (event, dirPath: string, workspaceId?: string) => {
+    const resolved = await validateFsPathForHandler(dirPath, workspaceId)
     const entry = watchers.get(resolved)
     if (!entry) return
     entry.subscribers.delete(event.sender)

@@ -1232,6 +1232,22 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                 {permissionsError}
               </div>
             )}
+            <SectionLabel label="Filesystem Access" />
+            <SettingRow
+              label="Restrict file access to workspace folders"
+              description="When enabled, read/write IPC only allows paths under workspace project roots or ~/.codesurf. Off by default."
+            >
+              <Toggle
+                value={settings.security.restrictFsToWorkspaceRoots}
+                onChange={v => updateSettingsPatch({
+                  security: {
+                    ...settings.security,
+                    restrictFsToWorkspaceRoots: v,
+                  },
+                })}
+              />
+            </SettingRow>
+
             {(permissionData?.grants.length ?? 0) === 0 ? (
               <div style={{ fontSize: fonts.secondarySize, color: theme.text.muted, padding: '8px 2px' }}>
                 {permissionsLoading ? 'Loading permission grants…' : 'No remembered tool approvals.'}
