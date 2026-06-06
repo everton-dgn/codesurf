@@ -1001,7 +1001,22 @@ function processEvent(evt: { type: string; payload: Record<string, unknown>; id:
 
 // ─── Main TileChrome ─────────────────────────────────────────────────────────
 
-export function TileChrome({
+function areTileChromePropsEqual(prev: Props, next: Props): boolean {
+  if (prev.isSelected !== next.isSelected) return false
+  const prevTile = prev.tile
+  const nextTile = next.tile
+  return (
+    prevTile.id === nextTile.id &&
+    prevTile.x === nextTile.x &&
+    prevTile.y === nextTile.y &&
+    prevTile.width === nextTile.width &&
+    prevTile.height === nextTile.height &&
+    prevTile.zIndex === nextTile.zIndex &&
+    prevTile.type === nextTile.type
+  )
+}
+
+function TileChromeComponent({
   tile, workspaceId, workspaceDir, onClose, onActivate, onTitlebarMouseDown, onResizeMouseDown, onContextMenu,
   onExpandChange, children, isSelected, forceExpanded, allowOverflow,
   busUnreadCount, onBusPopupToggle, showBusPopup, discoveryConnected, connectedPeers, titlebarColor: titlebarColorProp, titlebarExtra, busEvents
@@ -1693,3 +1708,5 @@ export function TileChrome({
     </div>
   )
 }
+
+export const TileChrome = React.memo(TileChromeComponent, areTileChromePropsEqual)

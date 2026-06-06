@@ -123,6 +123,42 @@ type DragState =
 
 const GRID = 20 // default, overridden by settings at runtime
 const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
+const ALIGN_GUIDE_THRESH = 6
+
+type AlignmentGuide = { x?: number; y?: number }
+
+function computeAlignmentGuides(
+  newX: number,
+  newY: number,
+  w: number,
+  h: number,
+  others: TileState[],
+): AlignmentGuide[] {
+  const newGuides: AlignmentGuide[] = []
+  for (const o of others) {
+    const dx_checks: [number, number][] = [
+      [newX, o.x], [newX, o.x + o.width / 2 - w / 2], [newX, o.x + o.width - w],
+      [newX + w / 2, o.x + o.width / 2], [newX + w, o.x], [newX + w, o.x + o.width],
+    ]
+    for (const [a, b] of dx_checks) {
+      if (Math.abs(a - b) < ALIGN_GUIDE_THRESH) newGuides.push({ x: b })
+    }
+    const dy_checks: [number, number][] = [
+      [newY, o.y], [newY, o.y + o.height / 2 - h / 2], [newY, o.y + o.height - h],
+      [newY + h / 2, o.y + o.height / 2], [newY + h, o.y], [newY + h, o.y + o.height],
+    ]
+    for (const [a, b] of dy_checks) {
+      if (Math.abs(a - b) < ALIGN_GUIDE_THRESH) newGuides.push({ y: b })
+    }
+  }
+  const seen = new Set<string>()
+  return newGuides.filter(g => {
+    const k = g.x !== undefined ? `x:${g.x}` : `y:${g.y}`
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+}
 
 function findFirstLeafId(node: PanelNode): string | null {
   if (node.type === 'leaf') return node.id
@@ -983,6 +1019,17 @@ function App(): JSX.Element {
   const panVelocityRef = useRef({ vx: 0, vy: 0 })
   const panLastPos = useRef({ x: 0, y: 0, t: 0 })
   const panInertiaRaf = useRef<number>(0)
+  const snapGuideRafRef = useRef<number | null>(null)
+  const pendingTileDragRef = useRef<{
+    tileId: string
+    groupSnapshots: { id: string; x: number; y: number }[]
+    newX: number
+    newY: number
+    ddx: number
+    ddy: number
+    width: number
+    height: number
+  } | null>(null)
   const [nextZIndex, setNextZIndex] = useState(1)
   const [selectedTileId, setSelectedTileId] = useState<string | null>(null)
   const [selectedTileIds, setSelectedTileIds] = useState<Set<string>>(new Set())
@@ -2788,43 +2835,50 @@ function App(): JSX.Element {
         const newY = snapValue(dragState.initY + wdy)
         const ddx = newX - dragState.initX
         const ddy = newY - dragState.initY
-        setTiles(prev => {
-          const dragging = prev.find(t => t.id === dragState.tileId)
-          if (!dragging) return prev
-          const others = prev.filter(t => t.id !== dragState.tileId && !dragState.groupSnapshots.find(g => g.id === t.id))
-          const w = dragging.width
-          const h = dragging.height
-          const THRESH = 6
-          const newGuides: { x?: number; y?: number }[] = []
-          for (const o of others) {
-            const dx_checks: [number, number][] = [
-              [newX, o.x], [newX, o.x + o.width / 2 - w / 2], [newX, o.x + o.width - w],
-              [newX + w / 2, o.x + o.width / 2], [newX + w, o.x], [newX + w, o.x + o.width],
-            ]
-            for (const [a, b] of dx_checks) {
-              if (Math.abs(a - b) < THRESH) newGuides.push({ x: b })
+        const dragging = tilesRef.current.find(t => t.id === dragState.tileId)
+        if (!dragging) return
+
+        // Buffer latest drag position; apply tile moves + guides once per frame.
+        pendingTileDragRef.current = {
+          tileId: dragState.tileId,
+          groupSnapshots: dragState.groupSnapshots,
+          newX,
+          newY,
+          ddx,
+          ddy,
+          width: dragging.width,
+          height: dragging.height,
+        }
+        if (snapGuideRafRef.current !== null) return
+        snapGuideRafRef.current = requestAnimationFrame(() => {
+          snapGuideRafRef.current = null
+          const pending = pendingTileDragRef.current
+          if (!pending) return
+
+          const excludeIds = new Set([
+            pending.tileId,
+            ...pending.groupSnapshots.map(g => g.id),
+          ])
+          const others = tilesRef.current.filter(t => !excludeIds.has(t.id))
+          setGuides(computeAlignmentGuides(
+            pending.newX,
+            pending.newY,
+            pending.width,
+            pending.height,
+            others,
+          ))
+          setTiles(prev => prev.map(t => {
+            if (t.id === pending.tileId) return { ...t, x: pending.newX, y: pending.newY }
+            const snap2 = pending.groupSnapshots.find(g => g.id === t.id)
+            if (snap2) {
+              return {
+                ...t,
+                x: snapValue(snap2.x + pending.ddx),
+                y: snapValue(snap2.y + pending.ddy),
+              }
             }
-            const dy_checks: [number, number][] = [
-              [newY, o.y], [newY, o.y + o.height / 2 - h / 2], [newY, o.y + o.height - h],
-              [newY + h / 2, o.y + o.height / 2], [newY + h, o.y], [newY + h, o.y + o.height],
-            ]
-            for (const [a, b] of dy_checks) {
-              if (Math.abs(a - b) < THRESH) newGuides.push({ y: b })
-            }
-          }
-          const seen = new Set<string>()
-          const dedupedGuides = newGuides.filter(g => {
-            const k = g.x !== undefined ? `x:${g.x}` : `y:${g.y}`
-            if (seen.has(k)) return false
-            seen.add(k); return true
-          })
-          setGuides(dedupedGuides)
-          return prev.map(t => {
-            if (t.id === dragState.tileId) return { ...t, x: newX, y: newY }
-            const snap2 = dragState.groupSnapshots.find(g => g.id === t.id)
-            if (snap2) return { ...t, x: snapValue(snap2.x + ddx), y: snapValue(snap2.y + ddy) }
             return t
-          })
+          }))
         })
       } else if (dragState.type === 'resize') {
         const wdx = dx / viewport.zoom
@@ -2844,7 +2898,30 @@ function App(): JSX.Element {
       }
     }
 
+    const flushPendingTileDrag = () => {
+      if (snapGuideRafRef.current !== null) {
+        cancelAnimationFrame(snapGuideRafRef.current)
+        snapGuideRafRef.current = null
+      }
+      const pending = pendingTileDragRef.current
+      if (!pending) return
+      setTiles(prev => prev.map(t => {
+        if (t.id === pending.tileId) return { ...t, x: pending.newX, y: pending.newY }
+        const snap2 = pending.groupSnapshots.find(g => g.id === t.id)
+        if (snap2) {
+          return {
+            ...t,
+            x: snapValue(snap2.x + pending.ddx),
+            y: snapValue(snap2.y + pending.ddy),
+          }
+        }
+        return t
+      }))
+      pendingTileDragRef.current = null
+    }
+
     const onUp = () => {
+      if (dragState.type === 'tile') flushPendingTileDrag()
       if (dragState.type === 'connection') {
         if (dragState.targetTileId) {
           lockConnection(dragState.sourceTileId, dragState.targetTileId)
@@ -2942,10 +3019,15 @@ function App(): JSX.Element {
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     return () => {
+      if (snapGuideRafRef.current !== null) {
+        cancelAnimationFrame(snapGuideRafRef.current)
+        snapGuideRafRef.current = null
+      }
+      pendingTileDragRef.current = null
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [dragState, findManualConnectionTarget, groups, lockConnection, nextZIndex, saveCanvas, screenToWorld, triggerDiscoveryPulse, viewport])
+  }, [dragState, findManualConnectionTarget, groups, lockConnection, nextZIndex, saveCanvas, screenToWorld, snapValue, triggerDiscoveryPulse, viewport])
 
   // ─── Zoom — native listener needed for { passive: false } ────────────────
   useEffect(() => {
