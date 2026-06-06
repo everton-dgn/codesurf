@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type {
   AppSettings,
   SkillDefinition,
@@ -22,6 +22,7 @@ import { useChatTileCoreState } from '../hooks/useChatTileCoreState'
 import { useChatTileProviders } from '../hooks/useChatTileProviders'
 import { useChatTilePersistence } from '../hooks/useChatTilePersistence'
 import { useChatTileMessaging } from '../hooks/useChatTileMessaging'
+import { useChatTileTranscript } from '../hooks/useChatTileTranscript'
 
 import { useTheme } from '../ThemeContext'
 import { WorkingDots } from './shared/streamdown-utils'
@@ -35,7 +36,7 @@ import { stripCapabilityPrefix, getAllNodeTools } from '../../../shared/nodeTool
 import type { ToolBlock, ChatMessage, BlockNote, FileChange } from '../../../shared/chat-types'
 import { useChatStreamHandler } from '../hooks/useChatStreamHandler'
 
-import { buildChatMessageHistoryFingerprint } from '../../../shared/chat-history'
+
 import { BlockNoteAffordance } from './chat/BlockNoteAffordance'
 import { setChatStreaming } from './chatStreamingStore'
 import { setTileTodos, clearTileTodos, useTileTodos, type TileTodoItem } from '../state/tileTodosStore'
@@ -85,16 +86,12 @@ import {
   MONO_SIZE_DEFAULT,
   CHAT_MESSAGE_MAX_WIDTH,
   CHAT_OFFSCREEN_MESSAGE_STYLE,
-  CHAT_RENDER_PAGE_SIZE,
-  CHAT_INITIAL_RENDER_WINDOW,
-  LINKED_SESSION_LIVE_TAIL_LIMIT,
-  LINKED_SESSION_HISTORY_PAGE_SIZE,
-  LINKED_SESSION_HISTORY_LOAD_THRESHOLD,
+
   CHAT_COMPOSER_WIDTH,
   CHAT_COMPOSER_MIN_WIDTH_STYLE,
   CHAT_COMPOSER_MIN_HEIGHT,
   CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT,
-  CHAT_AUTO_SCROLL_THRESHOLD,
+
   TOOLBAR_ICON_SIZE,
   TOOLBAR_PILL_ICON_SIZE,
   LIVE_TOOL_COLLAPSE_GRACE_MS,
@@ -108,7 +105,6 @@ import {
   getImplicitPeerImageAttachments,
   collectModelReadPaths,
   canUsePagedLinkedHistory,
-  mergeHistoricalMessages,
   hasVisibleFileChangeStats,
   hasRenderableFileChangeDiff,
   getExternalAgentToolBlocks,
@@ -485,15 +481,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setChatStreaming(tileId, isStreaming, { sessionId, entryId: linkedSessionEntryId })
     return () => { setChatStreaming(tileId, false) }
   }, [tileId, isStreaming, sessionId, linkedSessionEntryId])
-  // Older messages are loaded on demand and prepended into the same transcript
-  // list. They stay out of the live model context and persistence hot path,
-  // but render with the normal chat UI once loaded.
-  const [historicalMessages, setHistoricalMessages] = useState<ChatMessage[]>([])
-  const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW)
-  const [loadingEarlier, setLoadingEarlier] = useState(false)
-  const [earlierLoadError, setEarlierLoadError] = useState<string | null>(null)
-  const pendingHistoryPrependRef = useRef<{ previousHeight: number; previousTop: number } | null>(null)
-  const loadEarlierMessagesRef = useRef<() => Promise<void>>(async () => {})
   const { localExecutionLabel, remoteHosts, activeCloudHost, executionDisplayLabel, executionDisplayDetail } = useChatExecutionHosts({
     executionPreference: settings?.execution ?? null,
     executionTarget,
@@ -553,7 +540,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [queueCollapsed, setQueueCollapsed] = useState(true)
   const prevQueuedCountRef = useRef(0)
   const [isDropTarget, setIsDropTarget] = useState(false)
-  const [showScrollToLatest, setShowScrollToLatest] = useState(false)
   const [branchFilter, setBranchFilter] = useState('')
   const { gitStatus, gitBranches, refreshGitState } = useChatGitState(_workspaceDir)
   const pagedLinkedHistoryEnabledRef = useRef(pagedLinkedHistoryEnabled)
@@ -679,6 +665,36 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     lastJobSequenceRef,
   })
 
+  const {
+    messagesRef,
+    stickToBottomRef,
+    historicalMessages,
+    setHistoricalMessages,
+    allMessages,
+    renderedMessages,
+    hiddenMessageCount,
+    loadingEarlier,
+    earlierLoadError,
+    showScrollToLatest,
+    scrollToLatest,
+    reviewLatestChanges,
+    handleMessagesScroll,
+    handleMessagesWheel,
+    handleMessagesKeyDown,
+    setAnnotationComposerActive,
+  } = useChatTileTranscript({
+    workspaceId,
+    sessionId,
+    linkedSessionEntryId,
+    linkedSessionHint,
+    hasEarlierMessages,
+    setHasEarlierMessages,
+    messages,
+    setMessages,
+    pagedLinkedHistoryEnabled,
+    isStreaming,
+  })
+
   // ─── TTS auto-speak (last-message-only, sentence-streamed) ──────────
   // Voice config comes from the persisted AppSettings.voice block (edited
   // via Settings → Voice). The ChatTile receives `settings` as a prop, so
@@ -756,13 +772,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     pluginSlashCommands,
   })
 
-  const messagesRef = useRef<HTMLDivElement>(null)
-  const stickToBottomRef = useRef(true)
-  // Previous scrollTop, used by handleMessagesScroll to detect scroll direction.
-  // Any user scroll toward the top releases stickToBottomRef immediately, so
-  // auto-pin can't fight the user while they're reading history during streaming.
-  const lastScrollTopRef = useRef<number>(0)
-  const showScrollToLatestRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const acRef = useRef<HTMLDivElement>(null)
   const modelMenuRef = useRef<HTMLDivElement>(null)
@@ -773,81 +782,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const locationMenuRef = useRef<HTMLDivElement>(null)
   const branchMenuRef = useRef<HTMLDivElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
-
-  const loadEarlierMessages = useCallback(async () => {
-    if (!pagedLinkedHistoryEnabled || !workspaceId || !linkedSessionEntryId || !hasEarlierMessages || loadingEarlier) return
-    const api = window.electron?.chat?.loadSessionHistory
-    if (typeof api !== 'function') {
-      setEarlierLoadError('History loader unavailable')
-      return
-    }
-
-    const oldestLoadedMessage = historicalMessages[0] ?? messages[0] ?? null
-    const beforeFingerprint = oldestLoadedMessage
-      ? buildChatMessageHistoryFingerprint(oldestLoadedMessage)
-      : null
-    const scroller = messagesRef.current
-    if (scroller) {
-      pendingHistoryPrependRef.current = {
-        previousHeight: scroller.scrollHeight,
-        previousTop: scroller.scrollTop,
-      }
-    }
-
-    setLoadingEarlier(true)
-    setEarlierLoadError(null)
-    try {
-      const res = await api({
-        workspaceId,
-        sessionEntryId: linkedSessionEntryId,
-        entryHint: linkedSessionHint ?? null,
-        beforeFingerprint,
-        limit: LINKED_SESSION_HISTORY_PAGE_SIZE,
-      })
-      if (!res?.ok || !Array.isArray(res.messages)) {
-        setEarlierLoadError(res?.error || 'Could not load earlier messages')
-        pendingHistoryPrependRef.current = null
-        return
-      }
-      const liveFingerprints = new Set(messages.map(message => buildChatMessageHistoryFingerprint(message)))
-      const olderPage = (res.messages as ChatMessage[]).filter(message => !liveFingerprints.has(buildChatMessageHistoryFingerprint(message)))
-      if (olderPage.length === 0) {
-        pendingHistoryPrependRef.current = null
-      } else {
-        setHistoricalMessages(prev => mergeHistoricalMessages(prev, olderPage))
-      }
-      setHasEarlierMessages(res.hasMore === true)
-    } catch (err: any) {
-      pendingHistoryPrependRef.current = null
-      setEarlierLoadError(String(err?.message ?? err ?? 'Load failed'))
-    } finally {
-      setLoadingEarlier(false)
-    }
-  }, [pagedLinkedHistoryEnabled, workspaceId, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, loadingEarlier, historicalMessages, messages])
-
-  useEffect(() => {
-    loadEarlierMessagesRef.current = loadEarlierMessages
-  }, [loadEarlierMessages])
-
-  const renderedMessages = useMemo(() => {
-    // Dedupe by message ID when combining historical (session-restore) with
-    // live messages. Live wins — it has the freshest streaming state. Without
-    // this, an overlapping claude-N id from both sources triggers React's
-    // "two children with the same key" warning.
-    let combined: ChatMessage[]
-    if (historicalMessages.length > 0) {
-      const liveIds = new Set(messages.map(m => m.id))
-      combined = [
-        ...historicalMessages.filter(m => !liveIds.has(m.id)),
-        ...messages,
-      ]
-    } else {
-      combined = messages
-    }
-
-    if (combined.length <= visibleMessageLimit) return combined
-    return combined.slice(-visibleMessageLimit)
-  }, [historicalMessages, messages, visibleMessageLimit])
 
   const mergeDrawerFileChanges = useCallback((fileChanges: FileChange[]): FileChange[] => {
     const merged = new Map<string, FileChange>()
@@ -865,7 +799,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     return Array.from(merged.values())
   }, [])
 
-  const hiddenMessageCount = Math.max(0, historicalMessages.length + messages.length - renderedMessages.length)
   const latestChangeDrawer = useMemo<LatestChangeDrawerState | null>(() => {
     const batchMessages: ChatMessage[] = []
     for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
@@ -1308,21 +1241,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     }
   }, [messages, pagedLinkedHistoryEnabled])
 
-  useEffect(() => {
-    if (!pagedLinkedHistoryEnabled || isStreaming) return
-    if (messages.length <= LINKED_SESSION_LIVE_TAIL_LIMIT) return
-
-    const overflowCount = messages.length - LINKED_SESSION_LIVE_TAIL_LIMIT
-    if (overflowCount <= 0) return
-
-    const overflowMessages = messages.slice(0, overflowCount)
-    if (overflowMessages.length === 0) return
-
-    setHistoricalMessages(prev => mergeHistoricalMessages(prev, overflowMessages))
-    setMessages(prev => prev.slice(-LINKED_SESSION_LIVE_TAIL_LIMIT))
-    setHasEarlierMessages(true)
-  }, [pagedLinkedHistoryEnabled, isStreaming, messages])
-
   // Publish the latest task list for this tile so external chrome (tab bar,
   // sidebar) can surface the agent's current plan without drilling into
   // ChatTile internals. Walks reverse-chronologically across both the live
@@ -1330,9 +1248,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // Codex `update_plan` data even when it lived outside the recent tail.
   useEffect(() => {
     let latest: TileTodoItem[] | null = null
-    const allMessages = historicalMessages.length > 0
-      ? [...historicalMessages, ...messages]
-      : messages
     outer: for (let i = allMessages.length - 1; i >= 0; i -= 1) {
       const msg = allMessages[i]
       const blocks = msg.toolBlocks
@@ -1346,7 +1261,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       }
     }
     setTileTodos(tileId, latest)
-  }, [tileId, historicalMessages, messages])
+  }, [tileId, allMessages])
 
   // Clear the published todos when the tile unmounts so stale state doesn't
   // linger in the store.
@@ -1447,9 +1362,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // the live-collapse grace window. This avoids the old 500ms parent-level
   // rerender loop that made the transcript pulse while streaming.
   useEffect(() => {
-    const sourceMessages = historicalMessages.length > 0
-      ? [...historicalMessages, ...messages]
-      : messages
+    const sourceMessages = allMessages
     const now = Date.now()
     let nextDeadline: number | null = null
 
@@ -1470,7 +1383,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       setToolCollapseTick(n => (n + 1) & 0xffff)
     }, timeoutMs)
     return () => window.clearTimeout(id)
-  }, [historicalMessages, messages, toolCollapseTick])
+  }, [allMessages, toolCollapseTick])
 
   useEffect(() => {
     if (!stateLoadedRef.current) return
@@ -1683,149 +1596,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [dictation])
 
-  const isNearLatest = useCallback((el: HTMLDivElement) => {
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_AUTO_SCROLL_THRESHOLD
-  }, [])
-
-  const syncScrollToLatestVisibility = useCallback((next: boolean) => {
-    if (showScrollToLatestRef.current === next) return
-    showScrollToLatestRef.current = next
-    setShowScrollToLatest(next)
-  }, [])
-
-  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    const el = messagesRef.current
-    if (!el) return
-    stickToBottomRef.current = true
-    syncScrollToLatestVisibility(false)
-    el.scrollTo({ top: el.scrollHeight, behavior })
-  }, [syncScrollToLatestVisibility])
-
-  const reviewLatestChanges = useCallback(() => {
-    const scroller = messagesRef.current
-    if (!scroller) return
-    const blocks = scroller.querySelectorAll<HTMLElement>('[data-tool-block-kind="file-changes"]')
-    const latestBlock = blocks.item(blocks.length - 1)
-    if (!latestBlock) {
-      scrollToLatest()
-      return
-    }
-
-    stickToBottomRef.current = false
-    syncScrollToLatestVisibility(true)
-    latestBlock.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
-  }, [scrollToLatest, syncScrollToLatestVisibility])
-
-  // Direction-aware user-intent handlers. Only UPWARD input releases
-  // stick-to-bottom; downward input is the user following along, so we let
-  // the auto-pin mechanism keep working normally. This avoids the previous
-  // bug where any wheel (including downward) froze auto-pin for 800ms and
-  // left streaming content drifting off-screen above the viewport.
-  const handleMessagesWheel = useCallback((ev: React.WheelEvent<HTMLDivElement>) => {
-    if (ev.deltaY < 0) {
-      // Wheeled UP — user wants to read history. Release stick.
-      stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    }
-    // ev.deltaY >= 0 (down or zero): no-op. Let auto-pin keep working.
-  }, [syncScrollToLatestVisibility])
-
-  const handleMessagesKeyDown = useCallback((ev: React.KeyboardEvent<HTMLDivElement>) => {
-    if (ev.key === 'ArrowUp' || ev.key === 'PageUp' || ev.key === 'Home') {
-      stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    }
-  }, [syncScrollToLatestVisibility])
-
-  const handleMessagesScroll = useCallback(() => {
-    const el = messagesRef.current
-    if (!el) return
-
-    const prevTop = lastScrollTopRef.current
-    const currentTop = el.scrollTop
-    lastScrollTopRef.current = currentTop
-
-    if (currentTop < prevTop) {
-      // Scrolled toward the top — release stick. This covers keyboard nav,
-      // programmatic "scroll up", and any input we didn't catch at the wheel
-      // layer. Safe because auto-pin always goes DOWN (scrollTop=scrollHeight).
-      if (stickToBottomRef.current) stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    } else if (isNearLatest(el)) {
-      // At or near bottom → (re-)stick and collapse the rendered transcript
-      // back to the latest two pages. Older messages remain in state/session,
-      // but React stops reconciling DOM the user cannot see.
-      if (!stickToBottomRef.current) stickToBottomRef.current = true
-      if (visibleMessageLimit !== CHAT_INITIAL_RENDER_WINDOW) setVisibleMessageLimit(CHAT_INITIAL_RENDER_WINDOW)
-      syncScrollToLatestVisibility(false)
-    }
-
-    if (el.scrollTop <= LINKED_SESSION_HISTORY_LOAD_THRESHOLD && !loadingEarlier) {
-      pendingHistoryPrependRef.current = { previousHeight: el.scrollHeight, previousTop: el.scrollTop }
-      if (hiddenMessageCount > 0) {
-        setVisibleMessageLimit(prev => prev + CHAT_RENDER_PAGE_SIZE)
-      } else if (pagedLinkedHistoryEnabled && hasEarlierMessages) {
-        void loadEarlierMessagesRef.current()
-      }
-    }
-  }, [isNearLatest, syncScrollToLatestVisibility, pagedLinkedHistoryEnabled, hasEarlierMessages, loadingEarlier, hiddenMessageCount, visibleMessageLimit])
-
-  useLayoutEffect(() => {
-    const pending = pendingHistoryPrependRef.current
-    const el = messagesRef.current
-    if (!pending || !el) return
-    pendingHistoryPrependRef.current = null
-    const delta = el.scrollHeight - pending.previousHeight
-    el.scrollTop = pending.previousTop + delta
-  }, [historicalMessages, visibleMessageLimit])
-
-  useEffect(() => {
-    if (loadingEarlier) return
-    const el = messagesRef.current
-    if (!el) return
-    if (el.scrollHeight > el.clientHeight + LINKED_SESSION_HISTORY_LOAD_THRESHOLD) return
-
-    pendingHistoryPrependRef.current = { previousHeight: el.scrollHeight, previousTop: el.scrollTop }
-    if (hiddenMessageCount > 0) {
-      setVisibleMessageLimit(prev => prev + CHAT_RENDER_PAGE_SIZE)
-    } else if (pagedLinkedHistoryEnabled && hasEarlierMessages) {
-      void loadEarlierMessagesRef.current()
-    }
-  }, [pagedLinkedHistoryEnabled, hasEarlierMessages, loadingEarlier, historicalMessages.length, messages.length, hiddenMessageCount, visibleMessageLimit])
-
-  // Tracks whether a block-note composer is currently active (open AND has
-  // non-empty text). While true, auto-scroll is suppressed so the viewport
-  // doesn't jump out from under the user while they're typing a note in
-  // place. New streamed tokens still land at the bottom of the scroll area,
-  // we just don't yank the scroll position to follow them.
-  const annotationComposerActiveRef = useRef(false)
-  const [_annotationComposerActive, setAnnotationComposerActiveState] = useState(false)
-  const setAnnotationComposerActive = useCallback((active: boolean) => {
-    annotationComposerActiveRef.current = active
-    setAnnotationComposerActiveState(active)
-    if (active) {
-      // Freezing the scroll position means auto-stick is no longer valid —
-      // if the user wants to jump back they can click the "scroll to latest"
-      // pill. This matches the behaviour when the user scrolls up manually.
-      stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    }
-  }, [syncScrollToLatestVisibility])
-
-  // Auto-scroll only while the user is already following the latest messages
-  // AND there's no active note composer demanding stable scroll.
-  useLayoutEffect(() => {
-    const el = messagesRef.current
-    if (!el) return
-    if (annotationComposerActiveRef.current) return
-    if (!stickToBottomRef.current) {
-      syncScrollToLatestVisibility(true)
-      return
-    }
-    el.scrollTop = el.scrollHeight
-    syncScrollToLatestVisibility(false)
-  }, [messages, syncScrollToLatestVisibility])
-
   /**
    * Updates or clears the note attached to a specific block. Passing `text === null`
    * deletes the note. Notes are stored inline on the underlying record (message,
@@ -1899,10 +1669,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     note: BlockNote
   }> => {
     const out: Array<{ kind: 'message' | 'tool' | 'thinking'; messageId: string; blockId?: string; role?: string; context: string; note: BlockNote }> = []
-    const sourceMessages = historicalMessages.length > 0
-      ? [...historicalMessages, ...messages]
-      : messages
-    for (const m of sourceMessages) {
+    for (const m of allMessages) {
       if (m.note) {
         const snippet = m.content.trim().slice(0, 200)
         out.push({ kind: 'message', messageId: m.id, role: m.role, context: snippet, note: m.note })
@@ -1921,7 +1688,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       }
     }
     return out
-  }, [historicalMessages, messages])
+  }, [allMessages])
 
   /** Copies a Markdown-formatted export of all attached notes to the clipboard. */
   const exportNotesToClipboard = useCallback(async () => {
@@ -2519,14 +2286,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     if (droppedPaths.length === 0) return
     addAttachments(droppedPaths)
   }, [addAttachments])
-
-  // Drop any previously-loaded older pages whenever the backing linked
-  // session changes so the next thread starts from a clean tail view.
-  useEffect(() => {
-    setHistoricalMessages([])
-    setEarlierLoadError(null)
-    pendingHistoryPrependRef.current = null
-  }, [sessionId, linkedSessionEntryId])
 
   const selectAcItem = useCallback((item: AutocompleteItem) => {
     const ta = textareaRef.current
