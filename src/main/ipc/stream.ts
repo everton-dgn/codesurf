@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow, type WebContents } from 'electron'
 import { request as httpRequest } from 'http'
 import { request as httpsRequest } from 'https'
 import { getStreamParser } from '../agent-stream'
+import { assertSafeStreamUrl } from '../utils/urlSafety'
 
 interface StreamRequest {
   cardId: string
@@ -51,6 +52,8 @@ export function registerStreamIPC(): void {
       activeStreams.get(req.cardId)?.destroy()
       activeStreams.delete(req.cardId)
     }
+
+    assertSafeStreamUrl(req.url)
 
     const url = new URL(req.url)
     const isHttps = url.protocol === 'https:'

@@ -1,9 +1,16 @@
-import { app, ipcMain, shell, type WebContents } from 'electron'
-import { promises as fs, watch as fsWatch, FSWatcher } from 'fs'
+import { createRequire } from 'node:module'
+import type { WebContents } from 'electron'
+import { promises as fs, watch as fsWatch, type FSWatcher } from 'fs'
 import path from 'node:path'
 import { basename, extname, join, parse } from 'path'
 import { homedir } from 'os'
-import { CONTEX_HOME, CONTEX_HOME_DIRNAME } from '../paths'
+import { CONTEX_HOME, CONTEX_HOME_DIRNAME } from '../paths.ts'
+
+const requireElectron = createRequire(import.meta.url)
+
+function getElectron(): typeof import('electron') {
+  return requireElectron('electron') as typeof import('electron')
+}
 
 interface WatchEntry {
   watcher: FSWatcher
@@ -73,7 +80,21 @@ function validateFsPath(filePath: string): string {
   return resolved
 }
 
-const resolveHome = (): string => app.getPath('home') || process.env.HOME || process.env.USERPROFILE || homedir()
+export function assertSafeCardId(cardId: string): void {
+  if (!cardId || !/^[a-zA-Z0-9-]+$/.test(cardId)) {
+    throw new Error(`Unsafe card ID: ${cardId}`)
+  }
+}
+
+const resolveHome = (): string => {
+  try {
+    const { app } = getElectron()
+    if (app?.getPath) return app.getPath('home') || process.env.HOME || process.env.USERPROFILE || homedir()
+  } catch {
+    // Not running in Electron main (e.g. unit tests importing pure helpers).
+  }
+  return process.env.HOME || process.env.USERPROFILE || homedir()
+}
 
 function resolveFsPath(rawPath: string): string {
   const home = resolveHome()
@@ -146,6 +167,8 @@ async function isProbablyTextFile(filePath: string): Promise<boolean> {
 }
 
 export function registerFsIPC(): void {
+  const { ipcMain, shell } = getElectron()
+
   ipcMain.handle('fs:readDir', async (_, dirPath: string) => {
     try {
       const resolvedDirPath = validateFsPath(dirPath)
@@ -217,6 +240,7 @@ export function registerFsIPC(): void {
   })
 
   ipcMain.handle('fs:writeBrief', async (_, cardId: string, content: string) => {
+    assertSafeCardId(cardId)
     const { join } = await import('path')
     const briefDir = join(CONTEX_HOME, 'briefs')
     await fs.mkdir(briefDir, { recursive: true })

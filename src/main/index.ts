@@ -815,7 +815,8 @@ app.whenReady().then(async () => {
         ...customServers
       }
       cfg.updatedAt = new Date().toISOString()
-      await fsP.writeFile(mcpConfigPath, JSON.stringify(cfg, null, 2))
+      await fsP.writeFile(mcpConfigPath, JSON.stringify(cfg, null, 2), { mode: 0o600 })
+      await fsP.chmod(mcpConfigPath, 0o600).catch(() => {})
       return cfg
     } catch (e) { return null }
   })

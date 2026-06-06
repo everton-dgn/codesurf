@@ -10,7 +10,7 @@
  */
 
 import { bus } from './event-bus'
-import { createServer, IncomingMessage, ServerResponse } from 'http'
+import { createServer, type Server, IncomingMessage, ServerResponse } from 'http'
 import { promises as fs } from 'fs'
 import { dirname, join } from 'path'
 import { BrowserWindow } from 'electron'
@@ -1838,6 +1838,7 @@ async function handleMCP(req: MCPRequest): Promise<unknown> {
 }
 
 let serverPort: number | null = null
+let mcpHttpServer: Server | null = null
 
 function setCorsHeaders(res: ServerResponse, req?: IncomingMessage): void {
   // The real DNS-rebinding defense is isLoopbackHost() below — every request
@@ -1866,6 +1867,37 @@ function isLoopbackHost(req: IncomingMessage): boolean {
   return name === '127.0.0.1' || name === 'localhost' || name === '[::1]' || name === '::1'
 }
 
+function isSensitiveMcpRoute(method: string | undefined, isEvents: boolean): boolean {
+  if (isEvents) return true
+  return method === 'POST'
+}
+
+export function requireMcpAuth(req: IncomingMessage, res: ServerResponse): boolean {
+  const auth = req.headers.authorization ?? ''
+  if (auth !== `Bearer ${MCP_TOKEN}`) {
+    setCorsHeaders(res, req)
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Unauthorized' }))
+    return false
+  }
+  return true
+}
+
+export function stopMCPServer(): Promise<void> {
+  return new Promise(resolve => {
+    const server = mcpHttpServer
+    if (!server) {
+      resolve()
+      return
+    }
+    server.close(() => {
+      mcpHttpServer = null
+      serverPort = null
+      resolve()
+    })
+  })
+}
+
 export async function startMCPServer(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -1888,6 +1920,10 @@ export async function startMCPServer(): Promise<number> {
         setCorsHeaders(res, req)
         res.writeHead(200)
         res.end()
+        return
+      }
+
+      if (isSensitiveMcpRoute(req.method, isEvents) && !requireMcpAuth(req, res)) {
         return
       }
 
@@ -1916,9 +1952,6 @@ export async function startMCPServer(): Promise<number> {
         })
         return
       }
-
-      // Auth check disabled — MCP server is localhost-only
-      // Token still written to config for future use if needed
 
       // SSE push: POST /push — agent sends an event to the canvas
       if (req.method === 'POST' && url.pathname === '/push') {
@@ -2021,6 +2054,7 @@ export async function startMCPServer(): Promise<number> {
       })
     })
 
+    mcpHttpServer = server
     server.listen(0, '127.0.0.1', async () => {
       const addr = server.address() as { port: number }
       serverPort = addr.port

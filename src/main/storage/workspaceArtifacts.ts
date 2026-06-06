@@ -1,8 +1,7 @@
 import { promises as fs } from 'fs'
 import { join } from 'path'
-import { CONTEX_HOME } from '../paths'
-import { getWorkspaceStorageIds } from '../ipc/workspace'
-import { readJsonArtifact, writeJsonArtifactAtomic } from './jsonArtifacts'
+import { CONTEX_HOME } from '../paths.ts'
+import { readJsonArtifact, writeJsonArtifactAtomic } from './jsonArtifacts.ts'
 
 export function assertSafeWorkspaceArtifactId(id: string): void {
   if (/[\/\\]|\.\./.test(id)) throw new Error(`Unsafe ID: ${id}`)
@@ -46,6 +45,7 @@ async function migrateStorageToContexDir(storageId: string): Promise<void> {
 const migratedStorageIds = new Set<string>()
 
 async function resolveStorageIds(workspaceId: string): Promise<string[]> {
+  const { getWorkspaceStorageIds } = await import('../ipc/workspace.ts')
   const ids = await getWorkspaceStorageIds(workspaceId)
   return Array.from(new Set(ids))
 }
@@ -88,6 +88,33 @@ export function sessionArchiveStatePath(storageId: string): string {
   return join(CONTEX_HOME, 'workspaces', storageId, '.contex', 'session-archives.json')
 }
 
+function isMergeableObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+export function mergeTileState(existing: unknown, patch: unknown): unknown {
+  if (!isMergeableObject(patch)) {
+    return patch
+  }
+  if (!isMergeableObject(existing)) {
+    return patch
+  }
+
+  const result: Record<string, unknown> = { ...existing }
+  for (const [key, patchValue] of Object.entries(patch)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue
+    }
+    const existingValue = result[key]
+    if (isMergeableObject(patchValue) && isMergeableObject(existingValue)) {
+      result[key] = mergeTileState(existingValue, patchValue)
+    } else {
+      result[key] = patchValue
+    }
+  }
+  return result
+}
+
 export async function loadWorkspaceTileState<T>(workspaceId: string, tileId: string, fallback: T): Promise<T> {
   const storageIds = await ensureWorkspaceStorageMigrated(workspaceId)
   for (const storageId of storageIds) {
@@ -109,6 +136,8 @@ export async function saveWorkspaceTileState(workspaceId: string, tileId: string
   const dir = join(CONTEX_HOME, 'workspaces', storageId, '.contex')
   const path = tileStatePath(storageId, tileId)
   await fs.mkdir(dir, { recursive: true })
-  await writeJsonArtifactAtomic(path, state)
+  const existing = await readJsonArtifact(path)
+  const merged = existing ? mergeTileState(existing.value, state) : state
+  await writeJsonArtifactAtomic(path, merged)
   return { storageId, path }
 }
