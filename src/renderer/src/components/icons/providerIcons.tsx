@@ -8,7 +8,6 @@
  * Keep visually consistent: all icons render at 24x24 viewBox so the caller
  * can request any pixel size without re-tuning paths.
  */
-import React from 'react'
 import { Bot, FileText } from 'lucide-react'
 
 export interface BrandIconProps {

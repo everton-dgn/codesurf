@@ -419,7 +419,7 @@ export function PromptsSection({ workspacePath, hideHeaderText = false }: { work
   )
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%', minHeight: 0 }}>
       <PageHeader
         title="Prompt Templates"
         description="Reusable prompt templates with variable fields"
@@ -428,15 +428,17 @@ export function PromptsSection({ workspacePath, hideHeaderText = false }: { work
         onLocations={() => setLocationsOpen(true)}
         hideText={hideHeaderText}
       />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 8 }}>
-        {items.map(p => (
-          <ItemCard key={p.id} title={p.name || 'Untitled'} description={p.description}
-            chips={[`${p.fields.length} field${p.fields.length !== 1 ? 's' : ''}`, ...p.tags]}
-            onEdit={() => setEditing(p)} onDelete={() => save(items.filter(i => i.id !== p.id))}
-          />
-        ))}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 8 }}>
+          {items.map(p => (
+            <ItemCard key={p.id} title={p.name || 'Untitled'} description={p.description}
+              chips={[`${p.fields.length} field${p.fields.length !== 1 ? 's' : ''}`, ...p.tags]}
+              onEdit={() => setEditing(p)} onDelete={() => save(items.filter(i => i.id !== p.id))}
+            />
+          ))}
+        </div>
+        {items.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: theme.text.disabled, fontSize: fonts.secondarySize }}>No templates yet. Create one to get started.</div>}
       </div>
-      {items.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: theme.text.disabled, fontSize: fonts.secondarySize }}>No templates yet. Create one to get started.</div>}
     </div>
   )
 }
@@ -813,7 +815,7 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
   }, [showRegistry])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', minHeight: 0 }}>
       <PageHeader
         title="Tools & Actions"
         description="Builtin tools, MCP servers, and integrations"
@@ -822,6 +824,7 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
         hideText={hideHeaderText}
       />
 
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* ── Builtin Tools ── */}
       <div>
         <div style={{ fontSize: fonts.secondarySize, fontWeight: 700, color: theme.text.disabled, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Built-in Tools</div>
@@ -910,6 +913,7 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
         <div style={{ fontSize: fonts.secondarySize, color: theme.text.muted }}>
           MCP server connections are configured below in this same panel. Scroll down to manage connected servers, add new ones, or configure workspace-specific servers.
         </div>
+      </div>
       </div>
 
       {/* ── Registry Dialog ── */}
@@ -1025,8 +1029,7 @@ const AGENT_ICONS: Record<string, JSX.Element> = {
 }
 
 export function AgentsSection({ workspacePath, hideHeaderText = false }: { workspacePath: string; hideHeaderText?: boolean }): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
+  void hideHeaderText
   const [items, setItems] = useState<AgentMode[]>([])
   const [editing, setEditing] = useState<AgentMode | null>(null)
   const [locationsOpen, setLocationsOpen] = useState(false)
@@ -1145,7 +1148,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
   )
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%', minHeight: 0 }}>
       <PageHeader
         title="Agent Modes"
         description="Agent personas with system prompts and tool access"
@@ -1154,17 +1157,19 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
         onLocations={() => setLocationsOpen(true)}
         hideText={hideHeaderText}
       />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
-        {items.map(m => (
-          <ItemCard key={m.id} title={m.name || 'Untitled'} description={m.description} color={m.color}
-            chips={[
-              m.tools ? `${m.tools.length} tool${m.tools.length !== 1 ? 's' : ''}` : 'All tools',
-              ...(m.isBuiltin ? ['Built-in'] : []),
-              ...(m.source ? [m.source] : []),
-            ]}
-            onEdit={() => setEditing(m)} onDelete={m.isBuiltin ? undefined : () => save(items.filter(i => i.id !== m.id))}
-          />
-        ))}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
+          {items.map(m => (
+            <ItemCard key={m.id} title={m.name || 'Untitled'} description={m.description} color={m.color}
+              chips={[
+                m.tools ? `${m.tools.length} tool${m.tools.length !== 1 ? 's' : ''}` : 'All tools',
+                ...(m.isBuiltin ? ['Built-in'] : []),
+                ...(m.source ? [m.source] : []),
+              ]}
+              onEdit={() => setEditing(m)} onDelete={m.isBuiltin ? undefined : () => save(items.filter(i => i.id !== m.id))}
+            />
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -1255,7 +1260,6 @@ const TAB_ICONS: Record<Tab, JSX.Element> = {
 
 export default function CustomisationTile({ tileId: _tileId, workspacePath, width: _width, height: _height, initialTab }: Props): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   const [tab, setTab] = useState<Tab>(initialTab ?? 'prompts')
 
   return (

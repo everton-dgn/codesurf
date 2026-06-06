@@ -1,12 +1,9 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { Brain, ChevronRight, Clock, DollarSign, Check, Wrench, MessageSquare } from 'lucide-react'
+import React, { useState, useRef, useEffect } from 'react'
 import { useDetectedAgents } from '../hooks/useDetectedAgents'
 import { useMCPServers } from '../hooks/useMCPServers'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
-import { usePatchCodeBlocks, useLinkClickHandler, ensureShimmerStyles, ShimmerText, WorkingDots, streamdownPlugins, ChatMarkdown } from './shared/streamdown-utils'
-import type { ToolBlock, ThinkingBlock, ContentBlock, ChatMessage } from '../../../shared/chat-types'
-import { dispatchOpenLink, findAnchorFromEventTarget } from '../utils/links'
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,8 +43,6 @@ export interface KanbanCardData {
 
 interface Comment { id: string; text: string; ts: number }
 interface Attachment { id: string; name: string; path: string }
-
-type CardChatMessage = ChatMessage
 
 export interface DetectedAgent {
   id: string
@@ -117,96 +112,6 @@ export function buildLaunchCmd(card: KanbanCardData, briefPath?: string, agentPa
   return parts.join(' ')
 }
 
-// ─── Shared chat-like progress components ───────────────────────────────────
-
-function ThinkingBlockView({ thinking }: { thinking: ThinkingBlock }): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const [expanded, setExpanded] = useState(false)
-  const isActive = !thinking.done
-  const hasContent = thinking.content.length > 0
-
-  useEffect(() => { if (hasContent && isActive) setExpanded(true) }, [hasContent, isActive])
-  useEffect(() => {
-    if (thinking.done && expanded) {
-      const t = setTimeout(() => setExpanded(false), 800)
-      return () => clearTimeout(t)
-    }
-  }, [thinking.done, expanded])
-
-  return (
-    <div style={{ overflow: 'hidden', width: '100%' }}>
-      <button
-        onClick={() => hasContent && setExpanded(e => !e)}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          padding: '5px 10px 5px 8px',
-          background: expanded ? theme.surface.selection : 'transparent',
-          border: expanded ? `1px solid ${theme.surface.selectionBorder}` : '1px solid transparent',
-          cursor: hasContent ? 'pointer' : 'default',
-          color: isActive ? theme.accent.hover : theme.chat.muted,
-          fontSize: fonts.secondarySize, fontWeight: 500,
-          borderRadius: expanded ? '8px 8px 0 0' : 8,
-          lineHeight: 1,
-          backdropFilter: expanded ? 'blur(8px)' : 'none',
-        }}
-      >
-        <Brain size={11} style={{ opacity: isActive ? 0.8 : 0.4, flexShrink: 0 }} />
-        {isActive ? <ShimmerText baseColor={theme.accent.hover} style={{ fontSize: fonts.secondarySize, fontWeight: 500 }}>Thinking</ShimmerText> : <span style={{ opacity: 0.6, fontSize: fonts.secondarySize, fontWeight: 500 }}>Thought</span>}
-        {isActive && !hasContent && <WorkingDots color={theme.accent.hover} size={3} />}
-        {hasContent && <ChevronRight size={10} style={{ transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.4, flexShrink: 0 }} />}
-      </button>
-      {expanded && hasContent && (
-        <div style={{ padding: '8px 12px 10px 12px', fontSize: fonts.secondarySize, lineHeight: 1.6, color: theme.accent.hover, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 200, overflowY: 'auto', background: theme.surface.selection, border: `1px solid ${theme.surface.selectionBorder}`, borderTop: 'none', borderRadius: '0 0 8px 8px', backdropFilter: 'blur(8px)', opacity: 0.85 }}>
-          {thinking.content}
-          {isActive && <span style={{ display: 'inline-block', width: 5, height: 12, marginLeft: 2, verticalAlign: 'text-bottom', background: theme.accent.hover, borderRadius: 1, animation: 'chat-pulse 1s ease-in-out infinite' }} />}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function formatToolInput(input: string): string {
-  try { return JSON.stringify(JSON.parse(input), null, 2) } catch { return input }
-}
-
-function ToolBlockView({ block }: { block: ToolBlock }): JSX.Element {
-  const fonts = useAppFonts()
-  const theme = useTheme()
-  const [expanded, setExpanded] = useState(false)
-  const isRunning = block.status === 'running'
-
-  return (
-    <div style={{ background: theme.chat.assistantBubble, border: `1px solid ${theme.chat.assistantBubbleBorder}`, borderRadius: 10, overflow: 'hidden', maxWidth: '100%', width: 'fit-content' }}>
-      <button onClick={() => setExpanded(e => !e)} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '5px 10px', background: 'none', border: 'none', cursor: 'pointer', color: isRunning ? theme.chat.textSecondary : theme.chat.muted, fontSize: fonts.secondarySize, lineHeight: 1 }}>
-        <Wrench size={11} style={{ opacity: isRunning ? 0.7 : 0.5, flexShrink: 0 }} />
-        {isRunning ? (
-          <>
-            <ShimmerText baseColor={theme.chat.textSecondary} style={{ fontSize: fonts.size, fontWeight: 500 }}>{block.name}</ShimmerText>
-            {block.summary && <ShimmerText baseColor={theme.chat.muted} style={{ fontSize: fonts.size, marginLeft: 4, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{block.summary}</ShimmerText>}
-          </>
-        ) : (
-          <>
-            <span style={{ fontWeight: 500, fontSize: fonts.size }}>{block.name}</span>
-            {block.summary && <span style={{ fontSize: fonts.size, color: theme.chat.muted, marginLeft: 4, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{block.summary}</span>}
-          </>
-        )}
-        <span style={{ flex: isRunning || block.summary ? undefined : 1 }} />
-        {block.elapsed != null && <span style={{ fontSize: 10, color: theme.chat.muted, display: 'flex', alignItems: 'center', gap: 3, fontFamily: fonts.mono, flexShrink: 0 }}><Clock size={9} /> {block.elapsed.toFixed(1)}s</span>}
-        {!isRunning && !block.elapsed && <Check size={11} color={theme.status.success} style={{ flexShrink: 0 }} />}
-        <ChevronRight size={12} style={{ transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.4, flexShrink: 0 }} />
-      </button>
-      {expanded && block.input && (
-        <div style={{ padding: '4px 10px 8px 10px', borderTop: `1px solid ${theme.chat.assistantBubbleBorder}` }}>
-          <pre style={{ margin: 0, padding: 8, borderRadius: 6, background: theme.surface.panelMuted, color: theme.chat.textSecondary, fontSize: 10, lineHeight: 1.4, fontFamily: fonts.mono, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 200, overflowY: 'auto' }}>{formatToolInput(block.input)}</pre>
-          {block.summary && <div style={{ marginTop: 6, padding: '4px 0', fontSize: fonts.secondarySize, color: theme.chat.muted, fontFamily: fonts.mono }}>{block.summary}</div>}
-        </div>
-      )}
-      {isRunning && <div style={{ height: 2, width: '100%', background: `linear-gradient(90deg, transparent 0%, ${theme.accent.soft} 30%, ${theme.accent.base}88 50%, ${theme.accent.soft} 70%, transparent 100%)`, backgroundSize: '200% 100%', animation: 'chat-shimmer 1.5s ease-in-out infinite' }} />}
-    </div>
-  )
-}
-
 // ─── KanbanCard ───────────────────────────────────────────────────────────────
 
 function CardAgentRunner({ termId, workspaceDir, launchCmd }: { termId: string; workspaceDir: string; launchCmd?: string }): null {
@@ -256,7 +161,7 @@ interface Props {
 }
 
 export function KanbanCard({
-  card, workspaceDir, active, dragging, isRunning, allCards,
+  card, workspaceDir, active, dragging, isRunning: _isRunning, allCards,
   onUpdate, onRemove, onLaunch, onPause, onSave, onFocus, onDragStart, onDragEnd
 }: Props): JSX.Element {
   const [expanded, setExpanded] = useState(false)
@@ -959,13 +864,11 @@ function getInputStyle(theme: ReturnType<typeof useTheme>): React.CSSProperties 
 
 function Label({ children }: { children: React.ReactNode }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   return <div style={{ fontSize: 10, color: theme.text.disabled, fontFamily: 'inherit', letterSpacing: 0.5, marginBottom: 6, textTransform: 'uppercase' }}>{children}</div>
 }
 
 function Chip({ label, prefix, bg, fg, title, neutral = false }: { label: string; prefix: string; bg: string; fg: string; title?: string; neutral?: boolean }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   // Neutral chip = high-contrast inverted pair: dark plate in light theme,
   // light plate in dark theme. Anchored on text.primary and text.inverse so
   // both shift with the contrast slider.
@@ -993,7 +896,6 @@ function Chip({ label, prefix, bg, fg, title, neutral = false }: { label: string
 
 function AddBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   const [h, setH] = useState(false)
   return (
     <button onClick={onClick}

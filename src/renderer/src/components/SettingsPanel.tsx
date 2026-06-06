@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, lazy } from 'react'
 import type { AppSettings, AutoDreamSettings, ExecutionHostRecord, ExecutionMode, GenerationProviderSettings, ToolPermissionGrant, Workspace } from '../../../shared/types'
 import { DEFAULT_SETTINGS, withDefaultSettings } from '../../../shared/types'
-import { Settings, Type, Monitor, FolderOpen, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, Puzzle, RefreshCw, Star, Wrench, Users, FileText, Globe, Eye, EyeOff, PanelRight, Pin, Shield, KeyRound, Image as ImageIcon, Video, Mic } from 'lucide-react'
+import { Settings, Type, Monitor, Plus, Trash2, ChevronDown, ChevronRight, RotateCcw, Puzzle, RefreshCw, Star, Wrench, Users, FileText, Globe, Eye, EyeOff, PanelRight, Pin, Shield, KeyRound, Image as ImageIcon, Video, Mic } from 'lucide-react'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { DEFAULT_THEME_ID, THEME_OPTIONS, getThemeCanvasDefaults, resolveEffectiveThemeId, getThemeById, type AppearanceMode } from '../theme'
@@ -132,7 +132,7 @@ function ExtSettingsPanel({ extId, tileType }: { extId: string; tileType: string
 
 // ─── Chrome Sync section ──────────────────────────────────────────────────────
 
-interface ChromeProfile { name: string; dir: string; email?: string }
+
 
 type DaemonStatus = {
   running: boolean

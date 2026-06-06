@@ -29,7 +29,7 @@ export interface ComputedTokens {
   code: CodeBlockTokens
   table: TableTokens
   /** github-dark / github-light shiki theme pair. */
-  shikiTheme: [string, string]
+  shikiTheme: ['github-light', 'github-light'] | ['github-dark', 'github-dark']
 }
 
 export function computeTokens(theme: AppTheme): ComputedTokens {

@@ -655,7 +655,7 @@ function ChatStreamdown({ text, isStreaming, className }: {
       }}
       plugins={plugins as any}
       mode={isStreaming ? 'streaming' : 'static'}
-      shikiTheme={tokens.shikiTheme}
+      shikiTheme={tokens.shikiTheme as ['github-light', 'github-light'] | ['github-dark', 'github-dark']}
       controls={{ code: { copy: true, download: false }, table: false, mermaid: false }}
       lineNumbers={false}
     >

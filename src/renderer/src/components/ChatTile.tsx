@@ -7,7 +7,7 @@ import type {
   SkillDefinition,
 } from '../../../shared/types'
 import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
-import { dispatchOpenLink, findAnchorFromEventTarget } from '../utils/links'
+import { dispatchOpenLink } from '../utils/links'
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
 import {
   ShieldCheck, ChevronDown, AlertTriangle,
@@ -28,13 +28,13 @@ import { DiffView } from './chat/DiffView'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
 import { CHAT_TILE_STYLES } from './chat/chatStyles'
 import {
-  type BuiltinProvider, type ModelOption, type ModeOption, type ThinkingOption,
+  type BuiltinProvider, type ModelOption, type ModeOption,
   DEFAULT_MODELS, DEFAULT_PROVIDER_ID, PROVIDER_MODES, EXTENSION_PROVIDER_MODE,
   THINKING_OPTIONS, PROVIDER_LABELS, isBuiltinProvider, getApproxContextWindowTokens,
   getApproxSystemOverheadTokens, resolveProviderModeId,
 } from '../config/providers'
 import { stripCapabilityPrefix, getAllNodeTools } from '../../../shared/nodeTools'
-import type { ToolBlock, ThinkingBlock, ContentBlock, ChatMessage, BlockNote, FileChange } from '../../../shared/chat-types'
+import type { ToolBlock, ChatMessage, BlockNote, FileChange } from '../../../shared/chat-types'
 import { useChatStreamHandler } from '../hooks/useChatStreamHandler'
 import type { SessionEntryHint } from '../../../shared/session-types'
 import { buildChatMessageHistoryFingerprint } from '../../../shared/chat-history'
@@ -443,7 +443,6 @@ type ChatDispatchValue = {
   sendAnswer: (text: string) => void | Promise<void>
 }
 const ChatDispatchCtx = React.createContext<ChatDispatchValue | null>(null)
-function useChatDispatch(): ChatDispatchValue | null { return React.useContext(ChatDispatchCtx) }
 
 function buildOutgoingMessageContent(draftInput: string, draftAttachments: PendingAttachment[]): string {
   const trimmedInput = draftInput.trim()
@@ -1723,7 +1722,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     let cancelled = false
 
     void Promise.all(connectedPeers.map(async (peer) => {
-      const entries = await window.electron.tileContext.getAll(workspaceId, peer.peerId, 'ctx:')
+      const entries = await window.electron.tileContext?.getAll(workspaceId, peer.peerId, 'ctx:') ?? []
       return [peer.peerId, Array.isArray(entries) ? entries : []] as const
     })).then((results) => {
       if (cancelled) return
@@ -4569,27 +4568,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     focusComposer()
   }, [tileId, focusComposer])
 
-  const clearConversation = useCallback(() => {
-    if (isStreaming) return
-    setMessagesSafe([])
-    setAttachments([])
-    setQueuedTurns([])
-    flushQueueStateNow([])
-    logQueueEvent('clear')
-    setPreserveSessionSummary(false)
-    setLinkedSessionEntryId(null)
-    setLinkedSessionHint(null)
-    setHasEarlierMessages(false)
-    setSessionId(null)
-    setJobId(null)
-    setJobSequence(0)
-    lastJobSequenceRef.current = 0
-    setHistoricalMessages([])
-    setLoadingEarlier(false)
-    setEarlierLoadError(null)
-    window.electron?.chat?.clearSession?.(tileId)
-  }, [isStreaming, tileId, flushQueueStateNow, logQueueEvent])
-
   // Drop any previously-loaded older pages whenever the backing linked
   // session changes so the next thread starts from a clean tail view.
   useEffect(() => {
@@ -4674,9 +4652,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     const newVal = input.slice(0, triggerStart) + replacement + textAfter
     setInput(newVal)
     if (item.attachPath) {
+      const attachPath = item.attachPath
       setAttachments(prev => {
-        if (prev.some(existing => existing.path === item.attachPath)) return prev
-        return [...prev, { path: item.attachPath, kind: isImagePath(item.attachPath) ? 'image' : 'file' }]
+        if (prev.some(existing => existing.path === attachPath)) return prev
+        return [...prev, { path: attachPath, kind: isImagePath(attachPath) ? 'image' : 'file' }]
       })
     }
     setAcType(null)

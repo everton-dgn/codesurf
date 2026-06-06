@@ -1999,14 +1999,15 @@ async function findLatestCodexPlanSnapshotMessage(filePath: string): Promise<Imp
     return null
   }
 
-  if (!latest) return null
+  const planSnapshot = latest as { lineNumber: number; timestamp: number; call: PendingImportedToolCall } | null
+  if (!planSnapshot) return null
 
   return makeImportedRichMessage({
-    id: `codex-plan-${latest.lineNumber}`,
+    id: `codex-plan-${planSnapshot.lineNumber}`,
     role: 'assistant',
     content: '',
-    timestamp: latest.timestamp,
-    toolBlocks: buildImportedToolBlocks([latest.call]),
+    timestamp: planSnapshot.timestamp,
+    toolBlocks: buildImportedToolBlocks([planSnapshot.call]),
   })
 }
 

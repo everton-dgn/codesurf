@@ -26,12 +26,12 @@ export interface SidebarFooterProps {
 }
 
 export function SidebarFooter({
-  onNewTerminal, onNewKanban, onNewBrowser, onNewChat, onNewFiles,
+  onNewTerminal, onNewKanban, onNewBrowser, onNewChat: _onNewChat, onNewFiles,
   onOpenSettings,
   extensionTiles, extensionEntries, onAddExtensionTile,
   collapsed,
   galleryEnabled,
-  onOpenGallery,
+  onOpenGallery: _onOpenGallery,
 }: SidebarFooterProps): React.JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()

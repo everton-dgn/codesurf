@@ -205,7 +205,6 @@ function getTitlebarForeground(background: string | null | undefined, lightFallb
 
 function TaskStatusIcon({ status }: { status: TaskItem['status'] }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   if (status === 'done') return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
       <circle cx="6" cy="6" r="5" stroke={theme.status.success} strokeWidth="1.2" />
@@ -239,7 +238,6 @@ function TaskStatusIcon({ status }: { status: TaskItem['status'] }): JSX.Element
 
 function ToolStatusIcon({ status }: { status: ToolItem['status'] }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   if (status === 'done') return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
       <circle cx="6" cy="6" r="5" stroke={theme.status.success} strokeWidth="1.2" />
@@ -268,7 +266,6 @@ function ActionBtn({ title, color, onClick, children }: {
   title: string; color: string; onClick: () => void; children: React.ReactNode
 }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   return (
     <button
       title={title}
@@ -698,7 +695,6 @@ function ContextPanel({ items, onAddNote, onRemoveItem }: {
 
 function MessagePanel({ messages }: { messages: MessageItem[] }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
       {messages.length === 0 ? (
@@ -737,7 +733,6 @@ function EmptyState({ text }: { text: string }): JSX.Element {
 
 function Divider(): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   return <div style={{ height: 1, background: theme.border.subtle, margin: '4px 12px' }} />
 }
 
@@ -810,7 +805,6 @@ function TabButton({ tab, active, count, onClick }: {
   tab: DrawerTab; active: boolean; count: number; onClick: () => void
 }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   const [h, setH] = useState(false)
   return (
     <button
@@ -1293,7 +1287,12 @@ export function TileChrome({
       processEvent(event, setData)
       persistToActivityStore(workspaceId, tile.id, event)
     })
-    return () => { unsub?.then?.(fn => fn?.()) ?? unsub?.() }
+    return () => {
+      if (typeof unsub === 'function') unsub()
+      else if (unsub && typeof (unsub as Promise<() => void>).then === 'function') {
+        void (unsub as Promise<() => void>).then((fn) => fn?.())
+      }
+    }
   }, [tile.id, hasDrawer, workspaceId])
 
   // Also extract from busEvents prop

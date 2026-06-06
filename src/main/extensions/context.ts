@@ -137,7 +137,7 @@ export class ExtensionContext {
     this.ipc = {
       handle: (channel, handler) => {
         const fullChannel = `ext:${extId}:${channel}`
-        ipcMain.handle(fullChannel, async (event, ...args) => {
+        ipcMain.handle(fullChannel, async (_event, ...args) => {
           return handler(...args)
         })
         this.ipcHandlers.push(fullChannel)

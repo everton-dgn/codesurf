@@ -104,7 +104,7 @@ const LazyExtensionTile = React.lazy(() => import('./components/ExtensionTile').
 const LazyClusoWidgetMount = React.lazy(() =>
   import('./components/ClusoWidgetMount')
     .then(m => ({ default: m.ClusoWidgetMount }))
-    .catch(() => ({ default: () => null as React.ReactNode }))
+    .catch(() => ({ default: () => null }))
 )
 const LazyAgentSetup = React.lazy(() => import('./components/AgentSetup').then(m => ({ default: m.AgentSetup })))
 const LazySkillInstallModal = React.lazy(() => import('./components/SkillInstallModal').then(m => ({ default: m.SkillInstallModal })))
@@ -737,10 +737,10 @@ function routeToSvgPath(points: { x: number; y: number }[]): string {
 }
 
 function getConnectionHandlePoint(tile: TileState, side: AnchorPoint['side'] = 'right'): AnchorPoint {
-  if (side === 'left') return { x: tile.x - 18, y: tile.y + tile.height / 2, side }
-  if (side === 'top') return { x: tile.x + tile.width / 2, y: tile.y - 18, side }
-  if (side === 'bottom') return { x: tile.x + tile.width / 2, y: tile.y + tile.height + 18, side }
-  return { x: tile.x + tile.width + 18, y: tile.y + tile.height / 2, side }
+  if (side === 'left') return makeAnchor(side, tile.x - 18, tile.y + tile.height / 2, GRID)
+  if (side === 'top') return makeAnchor(side, tile.x + tile.width / 2, tile.y - 18, GRID)
+  if (side === 'bottom') return makeAnchor(side, tile.x + tile.width / 2, tile.y + tile.height + 18, GRID)
+  return makeAnchor(side, tile.x + tile.width + 18, tile.y + tile.height / 2, GRID)
 }
 
 function getNearestTileSide(tile: TileState, point: { x: number; y: number }): AnchorPoint['side'] {
@@ -995,7 +995,7 @@ function App(): JSX.Element {
   // First-run onboarding (P9): gate on a real disk load so returning users
   // (whose persisted settings already have the flag) never see a flash.
   const [settingsLoaded, setSettingsLoaded] = useState(false)
-  const [showMinimap, setShowMinimap] = useState(false)
+  const [showMinimap] = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const { addTemplate: addLayoutTemplate } = useLayoutTemplates()
   const [expandedTileId, setExpandedTileId] = useState<string | null>(null)
@@ -1003,7 +1003,7 @@ function App(): JSX.Element {
   const [chatReloadTokens, setChatReloadTokens] = useState<Record<string, number>>({})
   const [extActionsVersion, setExtActionsVersion] = useState(0)
   const [activePanelId, setActivePanelId] = useState<string | null>(null)
-  const [expandLayoutGroupId, setExpandLayoutGroupId] = useState<string | null>(null)
+  const [, setExpandLayoutGroupId] = useState<string | null>(null)
   const expandLayoutGroupIdRef = useRef<string | null>(null)
   // Non-layout group expanded as a fullscreen sub-canvas. Members stay free-floating.
   const [expandedCanvasGroupId, setExpandedCanvasGroupId] = useState<string | null>(null)
@@ -1193,7 +1193,7 @@ function App(): JSX.Element {
       if (!hasCompatibleMatch) {
         chatTileProximities.set(tile.id, { hasMatch: false, distance: Infinity })
       } else {
-        chatTileProximities.set(tile.id, { hasMatch: true, distance: discovery.match.distance })
+        chatTileProximities.set(tile.id, { hasMatch: true, distance: discovery!.match!.distance })
       }
     }
 
@@ -1309,7 +1309,7 @@ function App(): JSX.Element {
   pendingViewportRef.current = viewport
   nextZIndexRef.current = nextZIndex
 
-  const scheduleViewportUpdate = useCallback((nextViewport: typeof viewport) => {
+  const _scheduleViewportUpdate = useCallback((nextViewport: typeof viewport) => {
     pendingViewportRef.current = nextViewport
     if (viewportAnimationFrameRef.current !== null) return
     viewportAnimationFrameRef.current = requestAnimationFrame(() => {
@@ -1317,6 +1317,7 @@ function App(): JSX.Element {
       setViewport(pendingViewportRef.current)
     })
   }, [])
+  void _scheduleViewportUpdate
 
   useEffect(() => () => {
     if (viewportAnimationFrameRef.current !== null) {
@@ -1552,23 +1553,23 @@ function App(): JSX.Element {
       setSettingsLoaded(true)
       setWorkspaces(wsList)
       const workspaceById = new Map(wsList.map(entry => [entry.id, entry]))
-      const miniWorkspaceId = getCanonicalWorkspaceId(wsList, miniChatOptions?.workspaceId ?? null)
       const restoredWorkspaceId = getCanonicalWorkspaceId(wsList, persistedWorkspaceTabs.currentWorkspaceId)
       const activeWorkspaceId = getCanonicalWorkspaceId(wsList, active?.id ?? null)
       const fallbackWorkspaceId = getCanonicalWorkspaceId(wsList, wsList[0]?.id ?? null)
-      const miniWorkspace = miniWorkspaceId
-        ? (workspaceById.get(miniWorkspaceId) ?? null)
-        : null
-      const restoredWorkspace = restoredWorkspaceId
-        ? (workspaceById.get(restoredWorkspaceId) ?? null)
-        : null
-      const targetWorkspace = miniWorkspace
-        ?? restoredWorkspace
-        ?? (activeWorkspaceId ? (workspaceById.get(activeWorkspaceId) ?? null) : null)
-        ?? (fallbackWorkspaceId ? (workspaceById.get(fallbackWorkspaceId) ?? null) : null)
+      let targetWorkspace: Workspace | null =
+        (restoredWorkspaceId ? workspaceById.get(restoredWorkspaceId) : undefined)
+        ?? (activeWorkspaceId ? workspaceById.get(activeWorkspaceId) : undefined)
+        ?? (fallbackWorkspaceId ? workspaceById.get(fallbackWorkspaceId) : undefined)
+        ?? null
+      if (miniChatOptions) {
+        const miniId = getCanonicalWorkspaceId(wsList, miniChatOptions.workspaceId)
+        if (miniId) {
+          targetWorkspace = workspaceById.get(miniId) ?? targetWorkspace
+        }
+      }
       const restoredOpenWorkspaceIds = persistedWorkspaceTabs.openWorkspaceIds
         .map(id => getCanonicalWorkspaceId(wsList, id))
-        .filter((id): id is string => Boolean(id) && workspaceById.has(id))
+        .filter((id): id is string => id != null && workspaceById.has(id))
 
       if (targetWorkspace && !restoredOpenWorkspaceIds.includes(targetWorkspace.id)) {
         restoredOpenWorkspaceIds.push(targetWorkspace.id)
@@ -1955,12 +1956,13 @@ function App(): JSX.Element {
     y: point.y * viewport.zoom + viewport.ty,
   }), [viewport])
 
-  const worldToScreenRect = useCallback((tile: TileState) => ({
+  const _worldToScreenRect = useCallback((tile: TileState) => ({
     left: tile.x * viewport.zoom + viewport.tx,
     top: tile.y * viewport.zoom + viewport.ty,
     width: tile.width * viewport.zoom,
     height: tile.height * viewport.zoom,
   }), [viewport])
+  void _worldToScreenRect
 
   const triggerDiscoveryPulse = useCallback((tileId: string, tileList: TileState[]) => {
     if (!autoConnectionsEnabled) return
@@ -2225,12 +2227,18 @@ function App(): JSX.Element {
     options?: { panelId?: string | null; preview?: boolean },
   ): string => {
     const panelId = options?.panelId ?? activePanelIdRef.current
-    const updatedTiles = [...tilesRef.current, newTile]
-    const newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
-    setTiles(updatedTiles)
+    let updatedTiles = tilesRef.current
+    let newNZ = nextZIndexRef.current
+    setTiles(prev => {
+      updatedTiles = [...prev, newTile]
+      tilesRef.current = updatedTiles
+      newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
+      nextZIndexRef.current = newNZ
+      saveCanvas(updatedTiles, viewportRef.current, newNZ)
+      return updatedTiles
+    })
     setNextZIndex(newNZ)
     setSelectedTileId(newTile.id)
-    saveCanvas(updatedTiles, viewportRef.current, newNZ)
     if (panelLayoutRef.current && panelId) {
       setPanelLayout(prev => prev ? addTabToLeaf(prev, panelId, newTile.id, { preview: options?.preview }) : prev)
       setActivePanelId(panelId)
@@ -2246,12 +2254,18 @@ function App(): JSX.Element {
     options?: { preview?: boolean },
   ): string => {
     cleanupTileResources(currentTileId)
-    const updatedTiles = [...tilesRef.current.filter(tile => tile.id !== currentTileId), newTile]
-    const newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
-    setTiles(updatedTiles)
+    let updatedTiles = tilesRef.current
+    let newNZ = nextZIndexRef.current
+    setTiles(prev => {
+      updatedTiles = [...prev.filter(tile => tile.id !== currentTileId), newTile]
+      tilesRef.current = updatedTiles
+      newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
+      nextZIndexRef.current = newNZ
+      saveCanvas(updatedTiles, viewportRef.current, newNZ)
+      return updatedTiles
+    })
     setNextZIndex(newNZ)
     setSelectedTileId(newTile.id)
-    saveCanvas(updatedTiles, viewportRef.current, newNZ)
     setPanelLayout(prev => prev
       ? setActiveTab(replaceTabInLeaf(prev, panelId, currentTileId, newTile.id, { preview: options?.preview }), panelId, newTile.id)
       : prev)
@@ -2684,6 +2698,14 @@ function App(): JSX.Element {
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (dragState.type === null) return
+      if (dragState.type === 'select') {
+        const rect = canvasRef.current?.getBoundingClientRect()
+        if (!rect) return
+        const curWx = (e.clientX - rect.left - viewport.tx) / viewport.zoom
+        const curWy = (e.clientY - rect.top - viewport.ty) / viewport.zoom
+        setDragState(prev => prev.type === 'select' ? { ...prev, curWx, curWy } : prev)
+        return
+      }
       const dx = e.clientX - dragState.startX
       const dy = e.clientY - dragState.startY
 
@@ -2754,12 +2776,6 @@ function App(): JSX.Element {
             return { ...t, x: snapValue(snap2.x + wdx), y: snapValue(snap2.y + wdy) }
           }))
         }
-      } else if (dragState.type === 'select') {
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect) return
-        const curWx = (e.clientX - rect.left - viewport.tx) / viewport.zoom
-        const curWy = (e.clientY - rect.top - viewport.ty) / viewport.zoom
-        setDragState(prev => prev.type === 'select' ? { ...prev, curWx, curWy } : prev)
       } else if (dragState.type === 'connection') {
         const current = screenToWorld(e.clientX, e.clientY)
         const targetTileId = findManualConnectionTarget(dragState.sourceTileId, current)
@@ -4955,23 +4971,20 @@ function App(): JSX.Element {
         ['#000000', '#000000', '#000000', '#000000', '#000000', '#000000'],
       ], [theme.mode])
   const activeBrandWordmark = brandWordmarks[brandWordmarkIndex % brandWordmarks.length]
-  const activeBrandPalette = brandPalettes[brandPaletteIndex % brandPalettes.length]
-  const activeBrandWordmarkScale = activeBrandWordmark[0]
+  void brandPalettes[brandPaletteIndex % brandPalettes.length]
+  void (activeBrandWordmark[0]
     ? Math.min(1, (32 / activeBrandWordmark[0].length) * (
       brandWordmarkIndex === 0 ? 1 : brandWordmarkIndex === 1 ? 1.44 : 1.2
     )) * 0.62
-    : 1
+    : 1)
   const translucentBackgroundOpacity = Math.max(0.05, Math.min(1, settings.translucentBackgroundOpacity ?? 1))
   const canvasBackground = withAlpha(settings.canvasBackground, translucentBackgroundOpacity)
   const canvasLayerBackground = theme.canvas.backgroundEffect
     ? `${theme.canvas.backgroundEffect}, ${canvasBackground}`
     : canvasBackground
-  const sidebarPanelTop = 0
   const sidebarFooterBottom = 2
   const sidebarFooterLeft = 0
   const sidebarFooterHeight = 42
-  const sidebarToFooterGap = 8
-  const sidebarPanelBottomOffset = sidebarFooterBottom + sidebarFooterHeight - 12
   // 2px margin between the main panel's bottom edge and the footer top.
   const mainPanelBottomInset = sidebarFooterHeight-6
   const mainPanelTop = 39
@@ -5033,7 +5046,6 @@ function App(): JSX.Element {
   const workspaceTabInactiveHoverBackground = theme.mode === 'light'
     ? `color-mix(in srgb, ${theme.surface.panel} 78%, transparent)`
     : theme.surface.hover
-  const workspaceTabActiveBorder = `color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
   const workspaceTabCloseHoverBackground = `color-mix(in srgb, ${theme.surface.selection} 70%, ${theme.surface.hover})`
   const workspaceTabMaxWidth = 'min(248px, 24vw)'
   const workspaceTabActiveHeight = 27
@@ -5042,7 +5054,6 @@ function App(): JSX.Element {
   const workspaceTabInactiveTextOffset = 0
   const workspaceTabActiveBottomGap = 3
   const workspaceTabInactiveBottomGap = workspaceTabActiveBottomGap + 3
-  const workspaceTabAttachedBottomGap = -2
   // Discovery connection colors — adapt to theme mode
   const dsc = theme.mode === 'light'
     ? { line: '53, 104, 255', dot: '53, 104, 255', bg: '255, 255, 255', text: theme.accent.base }
@@ -5998,11 +6009,12 @@ function App(): JSX.Element {
               // Check for .vsix first
               const vsixPath = droppedPaths.find(p => p.endsWith('.vsix'))
               if (vsixPath) {
-                window.api.extensions.installVsix(vsixPath).then((result: any) => {
+                window.electron.extensions.installVsix?.(vsixPath).then((result) => {
                   if (result?.ok) {
                     console.log('[vsix] Installed:', result.name)
-                    if (result.tiles && result.tiles.length > 0) {
-                      addTile('extension', undefined, world)
+                    const firstTile = result.tiles?.[0]
+                    if (firstTile) {
+                      addTile(firstTile.type as TileState['type'], undefined, world)
                     }
                   } else {
                     console.error('[vsix] Install failed:', result?.error)
@@ -6819,9 +6831,6 @@ function App(): JSX.Element {
             {!panelLayout && (manualConnectionRenderRoutes.length > 0 || ambientDiscoveryRenderRoutes.length > 0 || discoveryPreview?.match || discoveryPulses.length > 0 || dragState.type === 'connection') && (
               <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: dragState.type === 'connection' ? 99996 : discoveryHighlightZIndex }}>
                 {(() => {
-                  const previewPairKey = discoveryPreview?.match && discoveryFocusTileId
-                    ? [discoveryFocusTileId, discoveryPreview.match.tile.id].sort().join('::')
-                    : null
                   return (
                     <>
                 {ambientDiscoveryRenderRoutes.map(connection => (
@@ -6853,10 +6862,6 @@ function App(): JSX.Element {
                   const targetTile = tileByIdMap.get(discoveryPreview.match.tile.id)
                   if (!sourceTile || !targetTile) return null
                   const previewRoute = discoveryPreview.match.route
-                  const sourceRect = { left: sourceTile.x, top: sourceTile.y, width: sourceTile.width, height: sourceTile.height }
-                  const targetRect = { left: targetTile.x, top: targetTile.y, width: targetTile.width, height: targetTile.height }
-                  const labelPoint = getRouteMidpoint(discoveryPreview.match.route)
-
                   return (
                     <>
                       {getRouteSegments(previewRoute).map((segment, index) => (
@@ -7017,12 +7022,6 @@ function App(): JSX.Element {
                   const sourceTile = tileByIdMap.get(pulse.sourceTileId)
                   const targetTile = tileByIdMap.get(pulse.targetTileId)
                   if (!sourceTile || !targetTile) return null
-
-                  const pairKey = [pulse.sourceTileId, pulse.targetTileId].sort().join('::')
-                  const _hidePulsePills = previewPairKey === pairKey
-                  const sourceRect = { left: sourceTile.x, top: sourceTile.y, width: sourceTile.width, height: sourceTile.height }
-                  const targetRect = { left: targetTile.x, top: targetTile.y, width: targetTile.width, height: targetTile.height }
-                  const labelPoint = getRouteMidpoint(pulse.route)
 
                   return (
                     <React.Fragment key={pulse.id}>

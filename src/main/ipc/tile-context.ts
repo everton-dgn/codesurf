@@ -17,7 +17,7 @@ async function saveTileState(workspaceId: string, tileId: string, state: TileCon
 }
 
 function publishContextChanged(tileId: string, key: string, value: unknown): void {
-  const evt = bus.publish({
+  void bus.publish({
     channel: `ctx:${tileId}`,
     type: 'data',
     source: `tile:${tileId}`,

@@ -75,7 +75,7 @@ async function readAppSettingsForMcp(): Promise<ReturnType<typeof withDefaultSet
         : parsed
       // gap-03: generation keys are persisted as keychain-backed blanks; resolve
       // them so image/video generation tools get the real key.
-      return resolveGenerationKeys(withDefaultSettings(settings))
+      return resolveGenerationKeys(withDefaultSettings(settings as Partial<AppSettings> | null | undefined))
     } catch {
       // try next source
     }

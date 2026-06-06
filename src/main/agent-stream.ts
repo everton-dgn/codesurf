@@ -16,7 +16,7 @@ export interface StreamEvent {
   error?: string
 }
 
-function sendStream(cardId: string, event: StreamEvent): void {
+function sendStream(_cardId: string, event: StreamEvent): void {
   BrowserWindow.getAllWindows().forEach(win => {
     if (!win.webContents.isDestroyed()) {
       win.webContents.send('agent:stream', event)

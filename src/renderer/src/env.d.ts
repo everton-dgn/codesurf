@@ -288,6 +288,7 @@ interface ElectronAPI {
     updatePeers(tileId: string, workspaceDir: string, peers: Array<{ peerId: string; peerType: string; tools: string[] }>): Promise<void>
     onData(tileId: string, cb: (data: string) => void): () => void
     onActive(tileId: string, cb: () => void): () => void
+    cd?(tileId: string, dir: string): Promise<void>
   }
   browserTile: {
     sync(payload: { tileId: string; url: string; mode: 'desktop' | 'mobile'; zIndex: number; visible: boolean; bounds: { left: number; top: number; width: number; height: number } }): Promise<unknown>
@@ -297,6 +298,13 @@ interface ElectronAPI {
   }
   agents: {
     detect(): Promise<Array<{ id: string; label: string; cmd: string; path?: string; version?: string; available: boolean }>>
+  }
+  agentPaths?: {
+    get(): Promise<Record<string, string | null>>
+    detect(): Promise<Record<string, string | null>>
+    set(agentId: string, path: string | null): Promise<{ ok: boolean; error?: string }>
+    needsSetup(): Promise<boolean>
+    confirmAll(): Promise<void>
   }
   updater: {
     check(): Promise<{ ok: boolean; currentVersion: string; status: string; updateAvailable: boolean; updateInfo?: { version?: string; releaseName?: string; releaseDate?: string } }>
@@ -419,6 +427,7 @@ interface ElectronAPI {
     enable(extId: string): Promise<boolean>
     disable(extId: string): Promise<boolean>
     installFromFile(): Promise<{ ok: boolean; extId?: string; name?: string; error?: string; canceled?: boolean }>
+    installVsix?(vsixPath: string): Promise<{ ok: boolean; extId?: string; name?: string; error?: string; tiles?: import('../../shared/types').ExtensionTileContrib[] }>
     refresh(workspacePath?: string | null): Promise<Array<{ id: string; name: string; version: string; description?: string; author?: string; tier: 'safe' | 'power'; ui?: import('../../shared/types').ExtensionManifest['ui']; enabled: boolean; contributes?: import('../../shared/types').ExtensionManifest['contributes'] }>>
     invoke(extId: string, method: string, ...args: unknown[]): Promise<unknown>
     getSettings(extId: string): Promise<Record<string, unknown>>

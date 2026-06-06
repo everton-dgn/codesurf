@@ -42,7 +42,9 @@ export function watch(dirPath: string, callback: () => void): () => void {
 }
 
 export function revealInFinder(path: string): Promise<void> {
-  return api().revealInFinder(path)
+  const reveal = api().revealInFinder
+  if (!reveal) return Promise.resolve()
+  return reveal(path)
 }
 
 export function stat(path: string): Promise<unknown | null> {

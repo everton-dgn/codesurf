@@ -295,7 +295,7 @@ function applyRuntimeAppBranding(): void {
   const iconPath = resolveAppIconPath()
   if (iconPath && process.platform === 'darwin') {
     try {
-      app.dock.setIcon(nativeImage.createFromPath(iconPath))
+      app.dock?.setIcon(nativeImage.createFromPath(iconPath))
     } catch (err) {
       console.warn('[app] Failed to set dock icon:', err)
     }
@@ -354,7 +354,7 @@ function installMediaPermissionHandlers(): void {
   if (!defaultSession) return
 
   defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return permission === 'media' || permission === 'display-capture'
+    return permission === 'media' || (permission as string) === 'display-capture'
   })
 
   defaultSession.setPermissionRequestHandler(async (_webContents, permission, callback) => {

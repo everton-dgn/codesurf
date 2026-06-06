@@ -185,7 +185,7 @@ export function buildNestedSessionList(
     const parentNode = parent ? nodes.get(parent.id) : null
     const childNode = nodes.get(session.id)
     if (!parentNode || !childNode) continue
-    childNode.parentId = parent.id
+    childNode.parentId = parent!.id
     parentNode.children.push(childNode)
   }
 

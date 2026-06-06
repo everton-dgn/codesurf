@@ -1,4 +1,5 @@
 import type { AggregatedSessionEntry } from '../../../shared/session-types'
+import type { CanvasState } from '../../../shared/types'
 
 function api() {
   return window.electron.canvas
@@ -8,7 +9,7 @@ export function load(workspaceId: string): Promise<unknown> {
   return api().load(workspaceId)
 }
 
-export function save(workspaceId: string, state: unknown): Promise<void> {
+export function save(workspaceId: string, state: CanvasState): Promise<void> {
   return api().save(workspaceId, state)
 }
 

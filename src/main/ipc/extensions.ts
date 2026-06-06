@@ -6,7 +6,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { promises as fs } from 'fs'
 import { join, basename, extname } from 'path'
-import { createReadStream } from 'fs'
+
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import type { ExtensionRegistry } from '../extensions/registry'

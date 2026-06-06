@@ -29,6 +29,10 @@ export interface AppTheme {
     selection: string
     selectionBorder: string
     accentSoft: string
+    /** Elevated overlay surface (alias of panelMuted). */
+    overlay?: string
+    /** Base panel surface (alias of panel). */
+    base?: string
   }
   border: {
     subtle: string
@@ -217,6 +221,8 @@ export function applyContrast(theme: AppTheme, factor: number): AppTheme {
       selection: theme.surface.selection,
       selectionBorder: theme.surface.selectionBorder,
       accentSoft: theme.surface.accentSoft,
+      overlay: S(theme.surface.overlay ?? theme.surface.panelMuted),
+      base: S(theme.surface.base ?? theme.surface.panel),
     },
     border: {
       ...theme.border,
@@ -439,6 +445,8 @@ function defineTheme(spec: ThemeSpec): AppTheme {
       selection: `rgba(${accentRgb},${isDark ? 0.14 : 0.18})`,
       selectionBorder: `rgba(${accentRgb},${isDark ? 0.28 : 0.34})`,
       accentSoft: `rgba(${accentRgb},${isDark ? 0.16 : 0.20})`,
+      overlay: spec.surface.panelMuted,
+      base: spec.surface.panel,
     },
     border: {
       ...border,
@@ -516,8 +524,15 @@ function hexToRgb(hex: string): string {
 
 function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {
   const panelBackground = theme.surface.panel
+  const overlay = theme.surface.overlay ?? theme.surface.panelMuted
+  const base = theme.surface.base ?? theme.surface.panel
   return {
     ...theme,
+    surface: {
+      ...theme.surface,
+      overlay,
+      base,
+    },
     terminal: {
       ...theme.terminal,
       background: panelBackground,

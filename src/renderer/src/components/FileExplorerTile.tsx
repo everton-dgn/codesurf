@@ -699,7 +699,7 @@ export default function FileExplorerTile({
 
   const [treeEntries, setTreeEntries] = useState<TreeEntry[]>([])
   const [sortMode, setSortMode] = useState<SortMode>('name')
-  const [viewMode, setViewMode] = useState<ViewMode>('tree')
+  const [viewMode] = useState<ViewMode>('tree')
   const [search, setSearch] = useState('')
   const [gitStatus, setGitStatus] = useState<Record<string, GitStatus>>({})
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
@@ -951,10 +951,12 @@ export default function FileExplorerTile({
 
   // cd a specific connected terminal to a directory
   const cdTerminal = useCallback((dirPath: string, terminalId?: string) => {
+    const cd = window.electron.terminal.cd
+    if (!cd) return
     if (terminalId) {
-      window.electron.terminal.cd(terminalId, dirPath)
+      void cd(terminalId, dirPath)
     } else if (connectedTerminalIds.length === 1) {
-      window.electron.terminal.cd(connectedTerminalIds[0], dirPath)
+      void cd(connectedTerminalIds[0], dirPath)
     }
   }, [connectedTerminalIds])
 

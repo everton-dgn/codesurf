@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 import type { TileState } from '../../../shared/types'
 import { useTheme } from '../ThemeContext'
 import { parseColor } from '../colorMath'

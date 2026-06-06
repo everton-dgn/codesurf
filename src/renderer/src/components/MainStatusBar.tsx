@@ -1,6 +1,6 @@
 import React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Cpu, Activity, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react'
+import { Cpu, Activity, RefreshCw, RotateCcw } from 'lucide-react'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 import { Tooltip } from './Tooltip'
@@ -360,11 +360,11 @@ export function MainStatusBar({ onOpenDaemonTask, health = 'compact' }: MainStat
       : theme.status.danger
   const daemonActiveJobCount = daemonSummary?.jobs.active ?? 0
   const daemonBackgroundJobCount = daemonSummary?.jobs.backgroundActive ?? 0
-  const daemonStatusLabel = daemon?.running
+  void (daemon?.running
     ? (daemonActiveJobCount > 0 ? 'ACTIVE' : 'READY')
     : daemon == null
       ? 'DAEMON'
-      : 'OFFLINE'
+      : 'OFFLINE')
   const daemonStatusDetail = daemon?.running && daemonBackgroundJobCount > 0
     ? `${daemonBackgroundJobCount} BG`
     : null

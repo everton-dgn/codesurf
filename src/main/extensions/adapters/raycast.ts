@@ -88,7 +88,7 @@ export const raycastAdapter: ExtensionAdapter = {
     }
   },
 
-  async wrapEntry(dir: string, manifest: ExtensionManifest): Promise<string> {
+  async wrapEntry(dir: string, _manifest: ExtensionManifest): Promise<string> {
     // Generate shim HTML files for each command
     const raw = await fs.readFile(join(dir, 'package.json'), 'utf8')
     const pkg = JSON.parse(raw) as RaycastPackageJson

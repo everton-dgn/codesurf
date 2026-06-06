@@ -97,8 +97,9 @@ function AgentOverview({ workspaceId, onFocusTile }: {
 
   const refresh = useCallback(() => {
     if (!workspaceId || !window.electron?.activity) return
-    window.electron.activity.byAgent(workspaceId).then((result: Record<string, ActivityRecord[]>) => {
-      setGroups(result)
+    window.electron.activity.byAgent(workspaceId).then((result) => {
+      const groups = result as Record<string, ActivityRecord[]>
+      setGroups(groups)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [workspaceId])
@@ -208,7 +209,6 @@ function AgentOverview({ workspaceId, onFocusTile }: {
 
 function StatusPill({ count, color }: { count: number; color: string }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   return (
     <span style={{
       fontSize: 9, fontWeight: 700, color,
@@ -291,10 +291,10 @@ function ActivityRecordRow({ record, onFocusTile }: {
 
 // ─── Main KanbanTile ────────────────────────────────────────────────────────
 
-export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, onFocusTile }: Props): JSX.Element {
+export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, height: _height, onFocusTile }: Props): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
-  const [mode, setMode] = useState<KanbanMode>('board')
+  const [mode] = useState<KanbanMode>('board')
   const [columns, setColumns] = useState<KanbanColumn[]>(DEFAULT_COLUMNS)
   const [cards, setCards] = useState<KanbanCardData[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -344,7 +344,6 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
     return acc
   }, {} as Record<string, ActivityEvent>)
 
-  const HEADER = 38
   const MIN_COL_W = 180
 
   const logActivity = useCallback((type: ActivityEvent['type'], cardId: string, message: string) => {
@@ -613,7 +612,9 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
       }
 
       if (command === 'kanban_move_card' && typeof payload.card_id === 'string' && typeof payload.column_id === 'string') {
-        setCards(prev => prev.map(c => c.id === payload.card_id ? { ...c, columnId: payload.column_id } : c))
+        const cardId = payload.card_id
+        const columnId = payload.column_id
+        setCards(prev => prev.map(c => c.id === cardId ? { ...c, columnId } : c))
         return
       }
 
