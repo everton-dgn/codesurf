@@ -55,7 +55,10 @@ describe('Electrobun window.electron facade', () => {
 
   test('returns startup-safe defaults if the Electrobun runtime is temporarily unavailable', () => {
     expect(getDefaultElectrobunInvokeResponse('workspace:list')).toEqual([])
-    expect(getDefaultElectrobunInvokeResponse('settings:get')).toMatchObject({ appearance: 'light' })
+    expect(getDefaultElectrobunInvokeResponse('settings:get')).toMatchObject({
+      appearance: 'light',
+      security: { restrictFsToWorkspaceRoots: true },
+    })
     expect(getDefaultElectrobunInvokeResponse('window:isFresh')).toBe(false)
     expect(getDefaultElectrobunInvokeResponse('canvas:load')).toBe(null)
     expect(getDefaultElectrobunInvokeResponse('bus:publish')).toBe(true)

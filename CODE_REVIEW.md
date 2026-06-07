@@ -1,36 +1,49 @@
 # Contex — Full Code Review Report
 
-**Date:** 2026-03-21 (original) · **Updated:** 2026-06-06  
+**Date:** 2026-03-21 (original) · **Updated:** 2026-06-07
 **Codebase:** ~92K LOC (June 2026)  
 **Reviewers:** 4 specialized agents (correctness, security, performance, maintainability)  
 **Findings:** 7 Critical, 9 High, 19 Medium, 14 Low
 
 ---
 
-## ✅ Post-hardening status (2026-06-06, branch `feature/hardening-wave-1`)
+## ✅ Post-hardening status (2026-06-07, branch `feature/hardening-wave-1`)
 
 | Original ID | Status | Notes |
 |-------------|--------|-------|
 | SEC-01 MCP zero auth | **FIXED** | Bearer enforced on `/mcp`, `/push`, `/inject`, SSE |
-| SEC-02 `/inject` | **FIXED** | Same auth gate |
-| SEC-03 FS unrestricted | **Partial** | Sensitive dirs blocked; workspace scoping still open |
+| SEC-02 `/inject` | **FIXED** | Same auth gate + expanded auth tests |
+| SEC-03 FS unrestricted | **IMPROVED** | Workspace scoping default-on for fresh installs / pre-onboarding |
 | SEC-04 Terminal spawn | **FIXED** | Shell + agent CLI allowlists |
 | SEC-05 Git exec | **FIXED** | `execFile`, branch validation |
-| SEC-06 sandbox:false | **OPEN** | Mitigated by `contextIsolation` |
+| SEC-06 sandbox:false | **MITIGATED** | Guest webviews hardened; main window documented |
 | SEC-07 Stream SSRF | **FIXED** | `assertSafeStreamUrl` blocks private IPs |
 | SEC-08 MCP body limit | **FIXED** | 1MB cap |
 | SEC-09 CORS wildcard | **FIXED** | Origin reflection on MCP |
+| RISK-01 Extension activation | **FIXED** | Power-tier extensions default off until enabled |
 | BUG-01 Undo broken | **FIXED** | Pre-change snapshots |
 | BUG-02 removeAllListeners | **FIXED** | Per-handler `removeListener` |
 | BUG-03 Stale viewport undo | **FIXED** | Uses refs |
 | BUG-04 addTile race | **FIXED** | Functional `setTiles` |
-| BUG-05 closeTile race | **FIXED** | Functional updater |
+| BUG-05 closeTile race | **FIXED** | Functional updater + `viewportRef` in hook |
 | BUG-07 setTiles read abuse | **FIXED** | Uses refs |
 | PERF TileChrome re-render | **IMPROVED** | `React.memo` + snap RAF throttle |
-| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` extracted (−801 LOC) |
+| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` + `useTileMounting` + `tilePlacement` utils |
 | ARCH mcp-server.ts | **IMPROVED** | Tool modules + registry (2237 → 791 LOC) |
+| ARCH ChatTile.tsx | **IMPROVED** | Composer menus, live activity, autocomplete hooks |
+| CI build + e2e | **FIXED** | PR workflow runs `npm run build` + `npm run test:e2e` |
+| TEST contex-relay | **FIXED** | Relay vitest suite wired into root `npm test` |
 
-**Tests:** 331/331 pass · **Typecheck:** clean · **Build:** pass
+**Tests:** 384+ unit (incl. relay) · **E2E:** 9/9 · **Typecheck:** clean · **Build:** pass
+
+### Hardening waves (local commits on `feature/hardening-wave-1`)
+
+| Wave | Focus |
+|------|--------|
+| 1–2 | MCP auth, preload listener cleanup, undo fixes, canvas E2E |
+| 3 | Guest webview hardening (SEC-06), FS scoping defaults, ChatTile composer extraction |
+| 4 | Extension activation policy, CI build+e2e, MCP auth test expansion |
+| 5 | `useTileMounting` hook, relay in `npm test`, Electrobun security parity, audit refresh |
 
 ---
 

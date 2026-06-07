@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types.ts'
+import { type AppSettings, withFreshInstallDefaults } from '../../shared/types.ts'
 
 export type ElectrobunInvokeArgs = unknown[]
 
@@ -49,10 +49,11 @@ export function createElectrobunEventHub(): ElectrobunEventHub {
 }
 
 function cloneDefaultSettings(): AppSettings {
+  const defaults = withFreshInstallDefaults()
   if (typeof structuredClone === 'function') {
-    return structuredClone(DEFAULT_SETTINGS)
+    return structuredClone(defaults)
   }
-  return JSON.parse(JSON.stringify(DEFAULT_SETTINGS)) as AppSettings
+  return JSON.parse(JSON.stringify(defaults)) as AppSettings
 }
 
 export function getDefaultElectrobunInvokeResponse(channel: string): unknown {

@@ -13,6 +13,8 @@ import {
   createElectrobunElectronFacade,
   getDefaultElectrobunInvokeResponse,
 } from '../src/electrobun/browser/electron-facade.ts'
+import { formatGuestWebviewTagPreferences } from '../src/shared/guest-webview-preferences.ts'
+import { GUEST_WEBVIEW_WEB_PREFERENCES } from '../src/main/secure-web-preferences.ts'
 
 const PRELOAD_SOURCE = readFileSync(
   join(__dirname, '../src/preload/index.ts'),
@@ -101,5 +103,24 @@ describe('Electrobun preload parity checklist', () => {
       }
       expect(typeof cursor?.[method]).toBe('function')
     }
+  })
+})
+
+describe('Electrobun security defaults parity', () => {
+  test('fallback settings match fresh-install FS scoping defaults', () => {
+    const settings = getDefaultElectrobunInvokeResponse('settings:get') as { security?: { restrictFsToWorkspaceRoots?: boolean } }
+    expect(settings.security?.restrictFsToWorkspaceRoots).toBe(true)
+  })
+
+  test('guest webview tag preferences align with main-process enforcement', () => {
+    const tagPrefs = formatGuestWebviewTagPreferences()
+    expect(tagPrefs).toContain('sandbox=yes')
+    expect(tagPrefs).toContain('contextIsolation=yes')
+    expect(tagPrefs).toContain('nodeIntegration=no')
+    expect(tagPrefs).toContain('webSecurity=yes')
+    expect(GUEST_WEBVIEW_WEB_PREFERENCES.sandbox).toBe(true)
+    expect(GUEST_WEBVIEW_WEB_PREFERENCES.contextIsolation).toBe(true)
+    expect(GUEST_WEBVIEW_WEB_PREFERENCES.nodeIntegration).toBe(false)
+    expect(GUEST_WEBVIEW_WEB_PREFERENCES.webSecurity).toBe(true)
   })
 })
