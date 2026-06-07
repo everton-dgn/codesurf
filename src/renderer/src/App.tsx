@@ -9,6 +9,8 @@ import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
 import { useLayoutTemplates } from './hooks/useLayoutTemplates'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
+import { useScrollFadeIndicators } from './hooks/useScrollFadeIndicators'
+import { useShellLayoutMetrics } from './hooks/useShellLayoutMetrics'
 import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
   useCanvasEngine,
@@ -348,32 +350,6 @@ function hrefToLocalPath(href: string): string | null {
   return normalizeLocalPathCandidate(href)
 }
 
-function withAlpha(color: string, alpha: number): string {
-  const trimmed = color.trim()
-
-  if (trimmed.startsWith('#')) {
-    const hex = trimmed.slice(1)
-    if (hex.length === 3) {
-      const [r, g, b] = hex.split('').map(ch => parseInt(ch + ch, 16))
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`
-    }
-    if (hex.length === 6) {
-      const r = parseInt(hex.slice(0, 2), 16)
-      const g = parseInt(hex.slice(2, 4), 16)
-      const b = parseInt(hex.slice(4, 6), 16)
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`
-    }
-  }
-
-  const rgbMatch = trimmed.match(/^rgba?\(([^)]+)\)$/i)
-  if (rgbMatch) {
-    const [r = '0', g = '0', b = '0'] = rgbMatch[1].split(',').map(part => part.trim())
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`
-  }
-
-  return color
-}
-
 const SETTINGS_CACHE_KEY = 'contex:settings-cache'
 const WORKSPACE_TAB_STATE_KEY = 'codesurf:workspace-tabs:v1'
 const BRAND_WORDMARK_CACHE_KEY = 'contex:brand-wordmark-index'
@@ -434,6 +410,7 @@ function persistWorkspaceTabState(state: PersistedWorkspaceTabState): void {
 
 function App(): JSX.Element {
   useAutoHideScrollbars()
+  useScrollFadeIndicators()
   const miniChatOptions = useMemo(() => readMiniChatOptions(), [])
 
   const [tiles, setTiles] = useState<TileState[]>([])
@@ -2712,138 +2689,61 @@ function App(): JSX.Element {
       brandWordmarkIndex === 0 ? 1 : brandWordmarkIndex === 1 ? 1.44 : 1.2
     )) * 0.62
     : 1)
-  const translucentBackgroundOpacity = Math.max(0.05, Math.min(1, settings.translucentBackgroundOpacity ?? 1))
-  const canvasBackground = withAlpha(settings.canvasBackground, translucentBackgroundOpacity)
-  const canvasLayerBackground = theme.canvas.backgroundEffect
-    ? `${theme.canvas.backgroundEffect}, ${canvasBackground}`
-    : canvasBackground
-  const sidebarFooterBottom = 2
-  const sidebarFooterLeft = 0
-  const sidebarFooterHeight = 42
-  // 2px margin between the main panel's bottom edge and the footer top.
-  const mainPanelBottomInset = sidebarFooterHeight-6
-  const mainPanelTop = 39
-  const mainStatusBarLeft = sidebarCollapsed ? 0 : sidebarWidth
-  const collapsedSidebarPillSize = 24
-  const sidebarToggleLeft = 78
-  const sidebarToggleTop = 10
-  const workspaceTabsMinimumLeft = sidebarToggleLeft + collapsedSidebarPillSize + 14
-  // Sidebar's absolute wrapper sits at left: 6 with width sidebarWidth, so its
-  // right edge is at (6 + sidebarWidth). Adding 12 here puts the main-panel
-  // left edge 6px to the right of the sidebar — a visible 6px gap.
-  const expandedLayoutLeft = sidebarWidth + 12
-  const mainPanelLeft = sidebarCollapsed ? 6 : expandedLayoutLeft
-  const mainPanelRadius = 10
-  const discoveryHighlightZIndex = 0
-  const discoveryGlowZIndex = 0
-  const discoveryPillZIndex = 99997
-  const openWorkspaceTabs = openWorkspaceIds
-    .map(id => workspaces.find(ws => ws.id === id) ?? null)
-    .filter((ws): ws is Workspace => Boolean(ws))
-  const hasWorkspaceTabs = openWorkspaceTabs.length > 0
-  const workspaceTitleFallback = workspace?.name?.trim() || 'WORKSPACES'
-  const showTopWorkspacePickerTab = showWorkspacePickerTab || (!workspace && openWorkspaceTabs.length === 0)
-  const mainPanelCornerRadii = {
-    topLeft: mainPanelRadius,
-    topRight: mainPanelRadius,
-    bottomRight: mainPanelRadius,
-    bottomLeft: mainPanelRadius,
-  }
-  const mainPanelBorderRadius = `${mainPanelCornerRadii.topLeft}px ${mainPanelCornerRadii.topRight}px ${mainPanelCornerRadii.bottomRight}px ${mainPanelCornerRadii.bottomLeft}px`
-  const mainPanelBackground = panelLayout ? theme.surface.app : canvasLayerBackground
-  // Edge shadows compose multiple alpha layers; the alpha values stay
-  // constant by design (Tahoe glass) and the surfaces beneath them track
-  // contrast, so the perceived edge weight follows the palette.
-  // Dark-mode shadows anchor on #000 (not text.primary) — when the contrast
-  // slider lifts text.primary toward white, text-anchored shadows turn into
-  // a glow. Only use text.primary for shadow tinting in light mode where
-  // it's already dark.
-  const mainPanelInsetEdgeShadow = theme.mode === 'light'
-    ? `inset 0 0 0 0.5px color-mix(in srgb, ${theme.surface.app} 96%, transparent), inset -0.5px 0 0 color-mix(in srgb, ${theme.text.primary} 2.5%, transparent), inset 0 -0.5px 0 color-mix(in srgb, ${theme.text.primary} 2.5%, transparent)`
-    // Dark inset hairline — pure white at low alpha so the contrast slider
-    // doesn't pump it into a halo.
-    : `inset 0 0 0 0.5px rgba(255,255,255,0.045)`
-  const mainPanelOuterEdgeShadow = theme.mode === 'light'
-    ? `0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 4%, transparent)`
-    : `0 0 0 0.5px rgba(0,0,0,0.30)`
-  const selectedTabDropShadow = theme.mode === 'light'
-    ? `0 5px 12px color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
-    : `0 5px 12px rgba(0,0,0,0.36)`
-  const mainPanelShadow = `${mainPanelOuterEdgeShadow}, ${selectedTabDropShadow}`
-  const workspaceTabLabelSize = Math.max(12, appFonts.size - 1)
-  const workspaceTabBackground = panelLayout ? theme.surface.panel : mainPanelBackground
-  // Inactive tab on light is a translucent paper plate over the canvas; on
-  // dark it stays transparent so the canvas shows through. Anchoring on
-  // surface.panel rather than literal white means contrast tracks here.
-  const workspaceTabInactiveBackground = theme.mode === 'light'
-    ? `color-mix(in srgb, ${theme.surface.panel} 58%, transparent)`
-    : 'transparent'
-  const workspaceTabInactiveHoverBackground = theme.mode === 'light'
-    ? `color-mix(in srgb, ${theme.surface.panel} 78%, transparent)`
-    : theme.surface.hover
-  const workspaceTabCloseHoverBackground = `color-mix(in srgb, ${theme.surface.selection} 70%, ${theme.surface.hover})`
-  const workspaceTabMaxWidth = 'min(248px, 24vw)'
-  const workspaceTabActiveHeight = 27
-  const workspaceTabInactiveHeight = 22
-  const workspaceTabTextOffset = -1
-  const workspaceTabInactiveTextOffset = 0
-  const workspaceTabActiveBottomGap = 3
-  const workspaceTabInactiveBottomGap = workspaceTabActiveBottomGap + 3
-  // Discovery connection colors — adapt to theme mode
-  const dsc = theme.mode === 'light'
-    ? { line: '53, 104, 255', dot: '53, 104, 255', bg: '255, 255, 255', text: theme.accent.base }
-    : { line: '123, 241, 255', dot: '123, 241, 255', bg: '5, 13, 19', text: 'rgba(215, 247, 255, 0.97)' }
+
+  const {
+    sidebarFooterBottom,
+    sidebarFooterLeft,
+    sidebarFooterHeight,
+    mainPanelBottomInset,
+    mainPanelTop,
+    mainStatusBarLeft,
+    collapsedSidebarPillSize,
+    sidebarToggleLeft,
+    sidebarToggleTop,
+    workspaceTabsMinimumLeft,
+    mainPanelLeft,
+    discoveryHighlightZIndex,
+    discoveryGlowZIndex,
+    discoveryPillZIndex,
+    openWorkspaceTabs,
+    hasWorkspaceTabs,
+    workspaceTitleFallback,
+    showTopWorkspacePickerTab,
+    mainPanelCornerRadii,
+    mainPanelBorderRadius,
+    mainPanelBackground,
+    mainPanelInsetEdgeShadow,
+    mainPanelShadow,
+    workspaceTabLabelSize,
+    workspaceTabBackground,
+    workspaceTabInactiveBackground,
+    workspaceTabInactiveHoverBackground,
+    workspaceTabCloseHoverBackground,
+    workspaceTabMaxWidth,
+    workspaceTabActiveHeight,
+    workspaceTabInactiveHeight,
+    workspaceTabTextOffset,
+    workspaceTabInactiveTextOffset,
+    workspaceTabActiveBottomGap,
+    workspaceTabInactiveBottomGap,
+    dsc,
+  } = useShellLayoutMetrics({
+    settings,
+    theme,
+    sidebarCollapsed,
+    sidebarWidth,
+    panelLayout,
+    openWorkspaceIds,
+    workspaces,
+    workspace,
+    showWorkspacePickerTab,
+    appFonts,
+  })
 
   useEffect(() => {
     if (!canvasGlowEnabled) hideCanvasGlow()
     return () => hideCanvasGlow()
   }, [canvasGlowEnabled, hideCanvasGlow])
-
-  useEffect(() => {
-    const selector = '.cs-fade-scroll-y, [data-scroll-fade="y"], [style*="overflow-y: auto"], [style*="overflow: auto"]'
-    let raf = 0
-    const updateScrollFades = () => {
-      raf = 0
-      document.querySelectorAll<HTMLElement>(selector).forEach(el => {
-        if (el.dataset.scrollFade === 'none') {
-          el.removeAttribute('data-scroll-fade-active')
-          return
-        }
-        const style = window.getComputedStyle(el)
-        const canScrollY = style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflowY === 'overlay'
-        const needsFade = canScrollY && el.clientHeight > 0 && el.scrollHeight - el.clientHeight > 2
-        if (needsFade) {
-          if (el.getAttribute('data-scroll-fade-active') !== 'true') el.setAttribute('data-scroll-fade-active', 'true')
-        } else if (el.hasAttribute('data-scroll-fade-active')) {
-          el.removeAttribute('data-scroll-fade-active')
-        }
-      })
-    }
-    const scheduleUpdate = () => {
-      if (raf) return
-      raf = window.requestAnimationFrame(updateScrollFades)
-    }
-    scheduleUpdate()
-    const mutationObserver = new MutationObserver(scheduleUpdate)
-    mutationObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: ['class', 'style', 'data-scroll-fade', 'data-scroll-fade-active'],
-    })
-    const resizeObserver = new ResizeObserver(scheduleUpdate)
-    resizeObserver.observe(document.documentElement)
-    window.addEventListener('resize', scheduleUpdate)
-    const interval = window.setInterval(scheduleUpdate, 1000)
-    return () => {
-      if (raf) window.cancelAnimationFrame(raf)
-      mutationObserver.disconnect()
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', scheduleUpdate)
-      window.clearInterval(interval)
-    }
-  }, [])
 
   useEffect(() => {
     if (!miniChatOptions) return
