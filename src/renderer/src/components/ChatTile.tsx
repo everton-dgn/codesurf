@@ -46,9 +46,11 @@ import { ChatTileComposer } from './chat/ChatTileComposer'
 
 import { ToolPermissionProvider } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
-import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME } from './chat/dreamToolActions'
+
 import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
 import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
+import { useChatTileDreamPolling } from '../hooks/useChatTileDreamPolling'
+import { useChatTileComposerKeys } from '../hooks/useChatTileComposerKeys'
 import { useContributions } from '../hooks/useContributions'
 import { type PaletteCommand } from '../lib/commandRegistry'
 import { type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
@@ -797,80 +799,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     renderedMessages,
   })
 
-  // Dream completion → synthetic chip in chat history.
-  //
-  // Polls the daemon summary every 5s. When the workspace's `lastRun.completedAt`
-  // advances to a value we haven't seen yet (and the run succeeded), append a
-  // single ChatMessage carrying a 'Dream completed' tool block. This appears
-  // inline with the rest of history, scrolls with it, and persists to canvas
-  // state alongside any other message — same lifecycle as a checkpoint chip.
-  //
-  // The first poll after mount seeds the "last seen" ref without injecting a
-  // chip, so reopening a tile doesn't dump every historical dream into the
-  // transcript. Only completions that happen *while the tile is open* show up.
-  const lastSeenDreamCompletionRef = useRef<string | null>(null)
-  const dreamPollSeededRef = useRef(false)
-  useEffect(() => {
-    if (!workspaceId) return
-    let cancelled = false
-
-    const poll = async () => {
-      try {
-        const summary = await window.electron.system.daemonSummary()
-        if (cancelled) return
-        const lastRun = summary?.dreaming?.lastRun
-        if (!lastRun) return
-        const matchesWorkspace = !lastRun.workspaceId || lastRun.workspaceId === workspaceId
-        if (!matchesWorkspace) return
-        const completedAt = lastRun.completedAt ?? null
-        if (!completedAt) return
-        if (!dreamPollSeededRef.current) {
-          dreamPollSeededRef.current = true
-          lastSeenDreamCompletionRef.current = completedAt
-          return
-        }
-        if (lastSeenDreamCompletionRef.current === completedAt) return
-        lastSeenDreamCompletionRef.current = completedAt
-        if (lastRun.status === 'failed' || lastRun.status === 'cancelled') return
-
-        const runId = String(lastRun.id ?? completedAt)
-        const sessionsReviewed = Number(lastRun.sessionsReviewed ?? 0)
-        const summaryText = sessionsReviewed > 0
-          ? `Auto-dream consolidated ${sessionsReviewed} session${sessionsReviewed === 1 ? '' : 's'}`
-          : 'Auto-dream completed'
-        const toolId = `${DREAM_TOOL_ID_PREFIX}${runId}`
-        const ts = Date.parse(completedAt) || Date.now()
-
-        setMessagesSafe(prev => {
-          // De-dupe: if a dream message with this toolId already exists in history, skip.
-          if (prev.some(m => m.toolBlocks?.some(tb => tb.id === toolId))) return prev
-          return [...prev, {
-            id: `msg-dream-${runId}`,
-            role: 'system',
-            content: '',
-            timestamp: ts,
-            contentBlocks: [{ type: 'tool', toolId }],
-            toolBlocks: [{
-              id: toolId,
-              name: DREAM_TOOL_NAME,
-              input: '',
-              summary: summaryText,
-              status: 'done',
-            }],
-          }]
-        })
-      } catch {
-        // Polling failures are non-fatal — try again next tick.
-      }
-    }
-
-    poll()
-    const interval = window.setInterval(poll, 5000)
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [workspaceId, setMessagesSafe])
+  useChatTileDreamPolling(workspaceId, setMessagesSafe)
 
   useEffect(() => { ensureChatMdStyle() }, [])
 
@@ -1946,70 +1875,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [input, acType, syncComposerHeight])
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // ─── Push-to-talk: hold spacebar (when input empty) to record ────────
-    // Only triggers when the draft is empty so we don't break normal typing.
-    // The keyup handler on the textarea stops recording when the key is released.
-    // e.repeat guards against the auto-repeat keydown stream after the first event.
-    if (
-      e.key === ' '
-      && !e.repeat
-      && !e.metaKey && !e.ctrlKey && !e.altKey
-      && input.length === 0
-      && !isDictating
-    ) {
-      e.preventDefault()
-      toggleDictation()
-      return
-    }
-    // While recording, swallow further space events on the textarea so the
-    // recognizer's audio gathering isn't visually polluted by " " characters
-    // landing in the input. (We append the transcript on stop.)
-    if (e.key === ' ' && isDictating) {
-      e.preventDefault()
-      return
-    }
-
-    // Autocomplete keyboard navigation
-    if (acType && acItems.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setAcIndex(i => (i + 1) % acItems.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setAcIndex(i => (i - 1 + acItems.length) % acItems.length)
-        return
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        selectAcItem(acItems[acIndex])
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setAcType(null)
-        setAcQuery('')
-        return
-      }
-    }
-
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      sendMessage()
-    }
-  }, [sendMessage, acType, acItems, acIndex, selectAcItem, input.length, isDictating, toggleDictation])
-
-  // Release push-to-talk on space-up. toggleDictation is idempotent — safe
-  // even if the user held space without ever entering recording mode (e.g.
-  // ignored because the input wasn't empty).
-  const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === ' ' && isDictating) {
-      e.preventDefault()
-      toggleDictation()
-    }
-  }, [isDictating, toggleDictation])
+  const { handleKeyDown, handleKeyUp } = useChatTileComposerKeys({
+    input,
+    isDictating,
+    toggleDictation,
+    acType,
+    acItems,
+    acIndex,
+    setAcIndex,
+    setAcType,
+    setAcQuery,
+    selectAcItem,
+    sendMessage,
+  })
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     handleComposerInputChange(e, setInput, syncComposerHeight)
