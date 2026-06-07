@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
-import { Plus, Package, Link2, X } from 'lucide-react'
+import { Link2, X } from 'lucide-react'
 import { CanvasGroupFrames } from './components/canvas/CanvasGroupFrames'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
@@ -14,6 +14,9 @@ import { useShellLayoutMetrics } from './hooks/useShellLayoutMetrics'
 import { useBrandWordmarkPrefs } from './hooks/useBrandWordmarkPrefs'
 import { readMiniChatOptions } from './lib/miniChatWindow'
 import { MiniChatWindow } from './components/MiniChatWindow'
+import { AppSidebarRegion } from './components/AppSidebarRegion'
+import { AppWorkspaceTabBar } from './components/AppWorkspaceTabBar'
+import { AppOverlays } from './components/AppOverlays'
 import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
   useCanvasEngine,
@@ -90,8 +93,6 @@ import {
   resolveChatSurfaceTargetTile,
 } from './utils/appLaunchRequests'
 import { getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
-import { MainStatusBar } from './components/MainStatusBar'
-import { DevSandboxFrame } from './components/DevSandboxFrame'
 import { resolveProviderModeId } from './config/providers'
 
 const LazyPanelLayout = React.lazy(() => import('./components/PanelLayout').then(m => ({ default: m.PanelLayout })))
@@ -125,25 +126,10 @@ function buildSessionEntryHint(session: AggregatedSessionEntry): SessionEntryHin
 }
 
 const LazyTileChrome = React.lazy(() => import('./components/TileChrome').then(m => ({ default: m.TileChrome })))
-const LazySidebar = React.lazy(() => import('./components/Sidebar').then(m => ({ default: m.Sidebar })))
-const LazySidebarFooter = React.lazy(() => import('./components/Sidebar').then(m => ({ default: m.SidebarFooter })))
-const LazyContextMenu = React.lazy(() => import('./components/ContextMenu').then(m => ({ default: m.ContextMenu })))
-const LazyMCPPanel = React.lazy(() => import('./components/MCPPanel').then(m => ({ default: m.MCPPanel })))
 const LazyArrangeToolbar = React.lazy(() => import('./components/ArrangeToolbar').then(m => ({ default: m.ArrangeToolbar })))
 const LazyMinimap = React.lazy(() => import('./components/Minimap').then(m => ({ default: m.Minimap })))
-const LazySettingsPanel = React.lazy(() => import('./components/SettingsPanel').then(m => ({ default: m.SettingsPanel })))
-const LazyExtensionsGallery = React.lazy(() => import('./components/ExtensionsGallery').then(m => ({ default: m.ExtensionsGallery })))
 const LazyStickyColorPicker = React.lazy(() => import('./components/NoteTile').then(m => ({ default: m.StickyColorPicker })))
 const LazyConnectionPill = React.lazy(() => import('./components/ConnectionPill').then(m => ({ default: m.ConnectionPill })))
-const LazyClusoWidgetMount = React.lazy(() =>
-  import('./components/ClusoWidgetMount')
-    .then(m => ({ default: m.ClusoWidgetMount }))
-    .catch(() => ({ default: () => null }))
-)
-const LazyAgentSetup = React.lazy(() => import('./components/AgentSetup').then(m => ({ default: m.AgentSetup })))
-const LazySkillInstallModal = React.lazy(() => import('./components/SkillInstallModal').then(m => ({ default: m.SkillInstallModal })))
-const LazyCommandPalette = React.lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
-const LazyOnboardingOverlay = React.lazy(() => import('./components/OnboardingOverlay').then(m => ({ default: m.OnboardingOverlay })))
 
 const GRID = 20 // default, overridden by settings at runtime
 const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
@@ -251,53 +237,6 @@ function dedupeLockedConnections(connections: LockedConnection[]): LockedConnect
     next.push({ sourceTileId, targetTileId })
   }
   return next
-}
-
-function WorkspaceTabIcon({ size = 14 }: { size?: number }): React.JSX.Element {
-  return <Package size={size} strokeWidth={2} aria-hidden="true" />
-}
-
-function WorkspaceTabLabel({ children, active }: { children: string; active: boolean }): React.JSX.Element {
-  const sharedStyle: React.CSSProperties = {
-    gridArea: '1 / 1',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    minWidth: 0,
-  }
-
-  return (
-    <span
-      style={{
-        display: 'grid',
-        alignItems: 'center',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        minWidth: 0,
-        lineHeight: 1,
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          ...sharedStyle,
-          visibility: 'hidden',
-          fontWeight: 700,
-        }}
-      >
-        {children}
-      </span>
-      <span
-        style={{
-          ...sharedStyle,
-          fontWeight: active ? 700 : 400,
-        }}
-      >
-        {children}
-      </span>
-    </span>
-  )
 }
 
 const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'json', 'py', 'rs', 'go', 'cpp', 'c', 'java', 'css', 'html', 'sh', 'bash', 'yaml', 'yml', 'toml', 'xml'])
@@ -2478,6 +2417,7 @@ function App(): JSX.Element {
     mainPanelBackground,
     mainPanelInsetEdgeShadow,
     mainPanelShadow,
+    selectedTabDropShadow,
     workspaceTabLabelSize,
     workspaceTabBackground,
     workspaceTabInactiveBackground,
@@ -2549,596 +2489,88 @@ function App(): JSX.Element {
     <FontTokenProvider value={fontTokens}>
     <FontProvider value={appFonts}>
     <div className="w-full h-full" style={{ position: 'relative', color: theme.text.primary, fontFamily: appFonts.primary, fontSize: appFonts.size, background: theme.surface.app }}>
-      {/* Sidebar inset panel — floats over the canvas */}
-      <div style={{
-        position: 'absolute',
-        top: 19,
-        left: 6,
-        bottom: mainPanelBottomInset,
-        padding: '0px',
-        width: sidebarCollapsed ? 0 : sidebarWidth,
-        flexShrink: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        minWidth: sidebarCollapsed ? 0 : 270,
-        zIndex: 10,
-        pointerEvents: 'none',
-        transition: 'width 0.15s ease',
-      }}>
-        <div style={{
-          width: '100%',
-          height: '100%',
-          background: 'transparent',
-          backdropFilter: 'none',
-          WebkitBackdropFilter: 'none',
-          borderRadius: 12,
-          border: 'none',
-          paddingTop: 8,
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          pointerEvents: 'auto',
-          position: 'relative',
-        }}>
-          {/* Sidebar content */}
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: sidebarFooterHeight, position: 'relative', zIndex: 2 }}>
-            <Suspense fallback={
-              <div style={{
-                flex: 1,
-                color: theme.text.disabled,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 11
-              }}>
-                Loading sidebar…
-              </div>
-            }>
-              <LazySidebar
-                workspace={workspace}
-                workspaces={workspaces}
-                tiles={tiles}
-                activeChatTileId={activeChatTileId}
-                activeChatSessionId={activeChatSessionMatch.sessionId}
-                activeChatSessionEntryId={activeChatSessionMatch.entryId}
-                onSwitchWorkspace={handleSwitchWorkspace}
-                onDeleteWorkspace={handleDeleteWorkspace}
-                onNewWorkspace={handleNewWorkspace}
-                onOpenFolder={handleOpenFolder}
-                onOpenFile={handleOpenFile}
-                onFocusTile={bringToFront}
-                onUpdateTile={(tileId, patch) => {
-                  setTiles(prev => {
-                    const updated = prev.map(t => t.id === tileId ? { ...t, ...patch } : t)
-                    saveCanvas(updated, viewport, nextZIndex)
-                    return updated
-                  })
-                }}
-                onCloseTile={closeTile}
-                onNewTerminal={() => addTile('terminal')}
-                onNewKanban={() => addTile('kanban')}
-                onNewBrowser={() => addTile('browser')}
-                onNewChat={() => addTile('chat')}
-                onNewChatForProject={async ({ workspaceId }) => {
-                  // Switch to the project's workspace first (if different)
-                  // so the newly created chat inherits the right context.
-                  if (workspaceId && workspaceId !== workspace?.id) {
-                    await handleSwitchWorkspace(workspaceId)
-                  }
-                  const chatTileId = addTile('chat')
-                  bringToFront(chatTileId)
-                  // If we're currently in fullscreen mode, make the new chat
-                  // the fullscreen tile so the user lands directly in it.
-                  // Otherwise it just appears on the canvas.
-                  if (expandedTileIdRef.current) {
-                    setExpandedTileId(chatTileId)
-                  }
-                }}
-                onNewFiles={() => addTile('files')}
-                onOpenSettings={(tab) => setShowSettings(tab)}
-                onOpenSessionInChat={openSessionInChat}
-                onOpenSessionInApp={openSessionInApp}
-                extensionTiles={visibleSidebarExtensionTiles}
-                extensionEntries={visibleSidebarExtensionEntries}
-                onAddExtensionTile={(type) => addTile(type as TileType)}
-                pinnedExtensionIds={settings.extensionsDisabled ? [] : (settings.pinnedExtensionIds ?? [])}
-                onTogglePinnedExtension={(key) => {
-                  updateAppSettings(current => {
-                    const pinned = current.pinnedExtensionIds ?? []
-                    return {
-                      pinnedExtensionIds: pinned.includes(key)
-                        ? pinned.filter(id => id !== key)
-                        : [...pinned, key],
-                    }
-                  })
-                }}
-                collapsed={sidebarCollapsed}
-                width={sidebarWidth}
-                onWidthChange={setSidebarWidth}
-                onResizeStateChange={setSidebarResizing}
-                onToggleCollapse={() => setSidebarCollapsed(p => !p)}
-                showFooter={false}
-              />
-            </Suspense>
-          </div>
-        </div>
-      </div>
-
-      {!sidebarCollapsed && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            left: mainPanelLeft,
-            top: mainPanelTop,
-            bottom: mainPanelBottomInset,
-            width: 0.5,
-            background: theme.border.subtle,
-            pointerEvents: 'none',
-            zIndex: 92,
-            transition: 'left 0.15s ease',
-          }}
-        />
-      )}
-
-      <div
-        style={{
-          position: 'absolute',
-          left: sidebarCollapsed ? 0 : sidebarFooterLeft,
-          bottom: sidebarFooterBottom,
-          // Toolbar persists above canvas and spills past the sidebar edge when
-          // content is wider than the sidebar (e.g. Get Extensions + tile icons).
-          // Width is always intrinsic so the icons never stack vertically.
-          height: sidebarFooterHeight,
-          zIndex: 140,
-          pointerEvents: 'auto',
-          transition: 'left 0.15s ease',
-          overflow: 'visible',
-        }}
-      >
-        <Suspense fallback={null}>
-          <LazySidebarFooter
-            onNewTerminal={() => addTile('terminal')}
-            onNewKanban={() => addTile('kanban')}
-            onNewBrowser={() => addTile('browser')}
-            onNewChat={() => addTile('chat')}
-            onNewFiles={() => addTile('files')}
-            onOpenSettings={(tab) => setShowSettings(tab)}
-            extensionTiles={visibleSidebarExtensionTiles}
-            extensionEntries={visibleSidebarExtensionEntries}
-            onAddExtensionTile={(type) => addTile(type as TileType)}
-            collapsed={sidebarCollapsed}
-            galleryEnabled={settings.extensionsGalleryEnabled !== false}
-            onOpenGallery={() => setShowExtensionsGallery(true)}
-          />
-        </Suspense>
-      </div>
-
-      <div
-        style={{
-          position: 'absolute',
-          left: mainStatusBarLeft,
-          right: 0,
-          bottom: 0,
-          height: sidebarFooterHeight,
-          zIndex: 95,
-          pointerEvents: 'none',
-          transform: 'translateY(5px)',
-          transition: 'left 0.15s ease',
-        }}
-      >
-        <MainStatusBar onOpenDaemonTask={openDaemonTask} health={settings.statusBarHealth ?? 'compact'} />
-      </div>
-
+      <AppSidebarRegion
+        theme={theme}
+        sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+        mainPanelBottomInset={mainPanelBottomInset}
+        sidebarFooterHeight={sidebarFooterHeight}
+        mainPanelLeft={mainPanelLeft}
+        mainPanelTop={mainPanelTop}
+        sidebarFooterLeft={sidebarFooterLeft}
+        sidebarFooterBottom={sidebarFooterBottom}
+        mainStatusBarLeft={mainStatusBarLeft}
+        workspace={workspace}
+        workspaces={workspaces}
+        tiles={tiles}
+        activeChatTileId={activeChatTileId}
+        activeChatSessionMatch={activeChatSessionMatch}
+        settings={settings}
+        visibleSidebarExtensionTiles={visibleSidebarExtensionTiles}
+        visibleSidebarExtensionEntries={visibleSidebarExtensionEntries}
+        viewport={viewport}
+        nextZIndex={nextZIndex}
+        expandedTileIdRef={expandedTileIdRef}
+        onSwitchWorkspace={handleSwitchWorkspace}
+        onDeleteWorkspace={handleDeleteWorkspace}
+        onNewWorkspace={handleNewWorkspace}
+        onOpenFolder={handleOpenFolder}
+        onOpenFile={handleOpenFile}
+        bringToFront={bringToFront}
+        setTiles={setTiles}
+        saveCanvas={saveCanvas}
+        closeTile={closeTile}
+        addTile={addTile}
+        setShowSettings={setShowSettings}
+        openSessionInChat={openSessionInChat}
+        openSessionInApp={openSessionInApp}
+        updateAppSettings={updateAppSettings}
+        setSidebarWidth={setSidebarWidth}
+        setSidebarResizing={setSidebarResizing}
+        setSidebarCollapsed={setSidebarCollapsed}
+        setExpandedTileId={setExpandedTileId}
+        setShowExtensionsGallery={setShowExtensionsGallery}
+        openDaemonTask={openDaemonTask}
+      />
       {/* Main area — toolbar overlays top, canvas fills entire window */}
       <div className="absolute inset-0 flex flex-col" style={{ position: 'absolute' }}>
-        {/* Toolbar row — floats over canvas */}
-        <div
-          className="flex items-center flex-shrink-0"
-          style={{
-            height: 38,            
-            // @ts-ignore
-            WebkitAppRegion: 'drag',
-            paddingLeft: sidebarCollapsed ? workspaceTabsMinimumLeft : Math.max(sidebarWidth + 4, workspaceTabsMinimumLeft),
-            transition: 'padding-left 0.15s ease',
-            position: 'relative',
-            zIndex: 90,
-            paddingTop: 2,
+        <AppWorkspaceTabBar
+          theme={theme}
+          sidebarCollapsed={sidebarCollapsed}
+          sidebarWidth={sidebarWidth}
+          sidebarResizing={sidebarResizing}
+          setSidebarCollapsed={setSidebarCollapsed}
+          workspaceTabsMinimumLeft={workspaceTabsMinimumLeft}
+          collapsedSidebarPillSize={collapsedSidebarPillSize}
+          sidebarToggleLeft={sidebarToggleLeft}
+          sidebarToggleTop={sidebarToggleTop}
+          openWorkspaceTabs={openWorkspaceTabs}
+          hasWorkspaceTabs={hasWorkspaceTabs}
+          workspace={workspace}
+          workspaceTitleFallback={workspaceTitleFallback}
+          showTopWorkspacePickerTab={showTopWorkspacePickerTab}
+          workspaceTabMaxWidth={workspaceTabMaxWidth}
+          workspaceTabActiveHeight={workspaceTabActiveHeight}
+          workspaceTabInactiveHeight={workspaceTabInactiveHeight}
+          workspaceTabActiveBottomGap={workspaceTabActiveBottomGap}
+          workspaceTabInactiveBottomGap={workspaceTabInactiveBottomGap}
+          workspaceTabBackground={workspaceTabBackground}
+          workspaceTabInactiveBackground={workspaceTabInactiveBackground}
+          workspaceTabInactiveHoverBackground={workspaceTabInactiveHoverBackground}
+          workspaceTabCloseHoverBackground={workspaceTabCloseHoverBackground}
+          workspaceTabLabelSize={workspaceTabLabelSize}
+          workspaceTabTextOffset={workspaceTabTextOffset}
+          workspaceTabInactiveTextOffset={workspaceTabInactiveTextOffset}
+          selectedTabDropShadow={selectedTabDropShadow}
+          onSwitchWorkspace={handleSwitchWorkspace}
+          onCloseWorkspaceTab={handleCloseWorkspaceTab}
+          onNewWorkspaceTab={showEmptyLayoutPage}
+          onCloseWorkspacePickerTab={(fallbackWorkspaceId) => {
+            setShowWorkspacePickerTab(false)
+            if (fallbackWorkspaceId) void handleSwitchWorkspace(fallbackWorkspaceId)
           }}
-        >
-          <button
-            type="button"
-            title={sidebarCollapsed ? 'Open sidebar' : 'Collapse sidebar'}
-            aria-label={sidebarCollapsed ? 'Open sidebar' : 'Collapse sidebar'}
-            aria-pressed={!sidebarCollapsed}
-            data-no-drag=""
-            onMouseDown={event => {
-              event.preventDefault()
-              event.stopPropagation()
-            }}
-            onPointerDown={event => {
-              event.preventDefault()
-              event.stopPropagation()
-              setSidebarCollapsed(p => !p)
-            }}
-            onClick={event => {
-              event.preventDefault()
-              event.stopPropagation()
-            }}
-            style={{
-              position: 'fixed',
-              top: sidebarToggleTop,
-              left: sidebarToggleLeft,
-              zIndex: 2147483647,
-              width: collapsedSidebarPillSize,
-              height: collapsedSidebarPillSize,
-              // Tahoe toolbar control: the old hover state is now the
-              // resting state so it reads as an actual button next to the
-              // traffic lights instead of disappearing into vibrancy.
-              borderRadius: '50%',
-              border: '0.5px solid transparent',
-              // Glass overlay anchored on text.primary so it reads as a
-              // light tint over a dark surface (and a near-paper tint over
-              // a light surface). Both modes look right and the contrast
-              // slider tracks because text.primary tracks.
-              background: `color-mix(in srgb, ${theme.text.primary} 10%, transparent)`,
-              backdropFilter: 'blur(20px) saturate(180%)',
-              WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-              boxShadow: 'var(--cs-edge-shadow-strong)',
-              color: theme.text.primary,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              opacity: sidebarResizing ? 0.35 : 1,
-              pointerEvents: 'auto',
-              WebkitAppRegion: 'no-drag',
-              transition: 'background 0.12s ease, color 0.12s ease, opacity 0.12s ease, transform 0.12s ease',
-            } as React.CSSProperties}
-            onMouseEnter={event => {
-              event.currentTarget.style.background = `color-mix(in srgb, ${theme.text.primary} 16%, transparent)`
-              event.currentTarget.style.color = theme.text.primary
-              event.currentTarget.style.transform = 'scale(1.03)'
-            }}
-            onMouseLeave={event => {
-              event.currentTarget.style.background = `color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
-              event.currentTarget.style.color = theme.text.primary
-              event.currentTarget.style.transform = 'scale(1)'
-            }}
-          >
-            {/* Tahoe-style sidebar toggle: outlined rounded rectangle with a
-                filled left column. Mirrors macOS's `sidebar.leading` SF
-                Symbol (which lucide doesn't ship — its PanelLeft variants
-                use only an outline divider, which read as visually identical
-                to one another at 17px). */}
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 20 20"
-              aria-hidden="true"
-              style={{ transform: sidebarCollapsed ? 'scaleX(-1)' : 'none' }}
-            >
-              <rect x="2.5" y="3.5" width="15" height="13" rx="2.6" fill="none" stroke="currentColor" strokeWidth="1.6" />
-              <rect x="2.5" y="3.5" width="5.5" height="13" rx="2.6" fill="currentColor" />
-            </svg>
-          </button>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'flex-end',
-              gap: 8,
-              minWidth: 0,
-              height: '100%',
-              paddingLeft: 8,
-              // @ts-ignore
-              WebkitAppRegion: 'no-drag',
-            }}
-          >
-            {hasWorkspaceTabs ? openWorkspaceTabs.map(ws => {
-              const isActive = ws.id === workspace?.id
-              return (
-                <div
-                  key={ws.id}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    maxWidth: workspaceTabMaxWidth,
-                    minWidth: 0,
-                    height: isActive ? workspaceTabActiveHeight : workspaceTabInactiveHeight,
-                    padding: '0 8px 0 10px',
-                    gap: 5,
-                    marginBottom: isActive ? workspaceTabActiveBottomGap : workspaceTabInactiveBottomGap,
-                    borderRadius: 8,
-                    background: isActive
-                      ? (theme.mode === 'light' ? `color-mix(in srgb, ${theme.surface.app} 86%, transparent)` : workspaceTabBackground)
-                      : workspaceTabInactiveBackground,
-                    color: isActive ? theme.text.primary : theme.text.secondary,
-                    transition: 'color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease',
-                    border: '0.5px solid transparent',
-                    boxShadow: isActive
-                      ? (theme.mode === 'light'
-                          // Match the non-selected tab's bright white "paper
-                          // edge" inset (--cs-edge-shadow-strong already has
-                          // it at 0.92 alpha in light mode); add a darker
-                          // outer hairline + drop shadow for elevation.
-                          ? `var(--cs-edge-shadow-strong), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent), ${selectedTabDropShadow}`
-                          : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`)
-                      : 'var(--cs-edge-shadow)',
-                    boxSizing: 'border-box',
-                    position: 'relative',
-                    zIndex: isActive ? 1 : 0,
-                  }}
-                  onMouseEnter={e => {
-                    if (!isActive) e.currentTarget.style.background = workspaceTabInactiveHoverBackground
-                  }}
-                  onMouseLeave={e => {
-                    if (!isActive) e.currentTarget.style.background = workspaceTabInactiveBackground
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!isActive) void handleSwitchWorkspace(ws.id)
-                    }}
-                    title={ws.name}
-                    aria-current={isActive ? 'page' : undefined}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      flex: 1,
-                      minWidth: 0,
-                      height: 20,
-                      padding: 0,
-                      border: 'none',
-                      background: 'transparent',
-                      color: 'inherit',
-                      fontSize: Math.max(11, workspaceTabLabelSize),
-                      fontWeight: 400,
-                      lineHeight: 1,
-                      letterSpacing: 0,
-                      cursor: isActive ? 'default' : 'pointer',
-                      transform: `translateY(${isActive ? workspaceTabTextOffset : workspaceTabInactiveTextOffset}px)`,
-                    }}
-                  >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 12, lineHeight: 0, color: 'currentColor', flexShrink: 0 }}>
-                      <WorkspaceTabIcon size={12} />
-                    </span>
-                    <WorkspaceTabLabel active={isActive}>{ws.name}</WorkspaceTabLabel>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation()
-                      void handleCloseWorkspaceTab(ws.id)
-                    }}
-                    aria-label={`Close ${ws.name}`}
-                    title={`Close ${ws.name}`}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: 16,
-                      height: 16,
-                      border: 'none',
-                      borderRadius: 4,
-                      background: 'transparent',
-                      color: 'currentColor',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                      padding: 0,
-                      transform: `translateY(${isActive ? workspaceTabTextOffset : workspaceTabInactiveTextOffset}px)`,
-                      transition: 'background 0.12s ease, color 0.12s ease',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background = workspaceTabCloseHoverBackground
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'transparent'
-                      e.currentTarget.style.color = 'currentColor'
-                    }}
-                  >
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ display: 'block' }}>
-                      <path d="M3 3l6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                </div>
-              )
-            }) : !showTopWorkspacePickerTab ? (
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  maxWidth: workspaceTabMaxWidth,
-                  minWidth: 0,
-                  height: workspaceTabActiveHeight,
-                  padding: '0 8px 0 10px',
-                  gap: 5,
-                  marginBottom: workspaceTabActiveBottomGap,
-                  borderRadius: 8,
-                  background: theme.mode === 'light' ? `color-mix(in srgb, ${theme.surface.app} 86%, transparent)` : workspaceTabBackground,
-                  color: theme.text.primary,
-                  fontSize: Math.max(11, workspaceTabLabelSize),
-                  fontWeight: 700,
-                  lineHeight: 1,
-                  letterSpacing: 0,
-                  border: '0.5px solid transparent',
-                  boxShadow: theme.mode === 'light'
-                    ? `inset 0 0 0 0.5px color-mix(in srgb, ${theme.surface.app} 92%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent), ${selectedTabDropShadow}`
-                    : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`,
-                  boxSizing: 'border-box',
-                  position: 'relative',
-                  zIndex: 1,
-                }}
-              >
-                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 12, lineHeight: 0, color: 'currentColor', flexShrink: 0 }}>
-                  <WorkspaceTabIcon size={12} />
-                </span>
-                <span
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    minWidth: 0,
-                    lineHeight: 1,
-                    transform: 'translateY(-1px)',
-                  }}
-                >
-                  {workspaceTitleFallback}
-                </span>
-              </div>
-            ) : null}
-
-            {showTopWorkspacePickerTab && (
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  maxWidth: workspaceTabMaxWidth,
-                  minWidth: 0,
-                  height: workspaceTabActiveHeight,
-                  padding: '0 10px',
-                  gap: 5,
-                  marginBottom: workspaceTabActiveBottomGap,
-                  borderRadius: 8,
-                  background: theme.mode === 'light' ? `color-mix(in srgb, ${theme.surface.app} 86%, transparent)` : workspaceTabBackground,
-                  color: theme.text.primary,
-                  border: '0.5px solid transparent',
-                  boxShadow: theme.mode === 'light'
-                    ? `inset 0 0 0 0.5px color-mix(in srgb, ${theme.surface.app} 92%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent), ${selectedTabDropShadow}`
-                    : `var(--cs-edge-shadow-strong), ${selectedTabDropShadow}`,
-                  boxSizing: 'border-box',
-                  position: 'relative',
-                  zIndex: 1,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => showEmptyLayoutPage({ preserveOpenTabs: openWorkspaceTabs.length > 0 })}
-                  aria-current="page"
-                  title="New workspace"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    flex: 1,
-                    minWidth: 0,
-                    height: 20,
-                    padding: 0,
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'inherit',
-                    fontSize: Math.max(11, workspaceTabLabelSize),
-                    fontWeight: 700,
-                    lineHeight: 1,
-                    letterSpacing: 0,
-                    cursor: 'default',
-                  }}
-                >
-                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 12, height: 12, lineHeight: 0, color: 'currentColor', flexShrink: 0 }}>
-                    <Plus size={12} strokeWidth={2.1} />
-                  </span>
-                  <span
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      minWidth: 0,
-                      lineHeight: 1,
-                      transform: 'translateY(-1px)',
-                    }}
-                  >
-                    WORKSPACE
-                  </span>
-                </button>
-                {openWorkspaceTabs.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation()
-                      setShowWorkspacePickerTab(false)
-                      const fallbackWorkspaceId = workspacePickerReturnWorkspaceId
-                        ?? workspace?.id
-                        ?? openWorkspaceTabs[openWorkspaceTabs.length - 1]?.id
-                        ?? null
-                      if (fallbackWorkspaceId) void handleSwitchWorkspace(fallbackWorkspaceId)
-                    }}
-                    aria-label="Close new workspace tab"
-                    title="Close new workspace tab"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: 16,
-                      height: 16,
-                      border: 'none',
-                      borderRadius: 4,
-                      background: 'transparent',
-                      color: 'currentColor',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                      padding: 0,
-                      transition: 'background 0.12s ease, color 0.12s ease',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background = workspaceTabCloseHoverBackground
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'transparent'
-                      e.currentTarget.style.color = 'currentColor'
-                    }}
-                  >
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ display: 'block', transform: 'translateY(-0.5px)' }}>
-                      <path d="M3 3l6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => showEmptyLayoutPage({ preserveOpenTabs: true })}
-              aria-label="New workspace"
-              title="New workspace"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 24,
-                height: 24,
-                marginBottom: workspaceTabInactiveBottomGap,
-                padding: 0,
-                border: '0.5px solid transparent',
-                borderRadius: '50%',
-                background: workspaceTabInactiveBackground,
-                boxShadow: 'var(--cs-edge-shadow)',
-                color: theme.text.muted,
-                cursor: 'pointer',
-                transition: 'background 0.12s ease, color 0.12s ease, transform 0.12s ease',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = workspaceTabInactiveHoverBackground
-                e.currentTarget.style.color = theme.text.primary
-                e.currentTarget.style.transform = 'scale(1.03)'
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = workspaceTabInactiveBackground
-                e.currentTarget.style.color = theme.text.muted
-                e.currentTarget.style.transform = 'scale(1)'
-              }}
-            >
-              <Plus size={13} strokeWidth={2.2} />
-            </button>
-          </div>
-        </div>
-
+          workspacePickerReturnWorkspaceId={workspacePickerReturnWorkspaceId}
+        />
         {/* Canvas surface — inset to the same rounded content area as panel mode */}
         <div
           ref={canvasRef}
@@ -4115,66 +3547,29 @@ function App(): JSX.Element {
           />
         </Suspense>
       </div>
-      {showMCP && (
-        <Suspense fallback={null}>
-          <LazyMCPPanel onClose={() => setShowMCP(false)} />
-        </Suspense>
-      )}
-      {showSettings && (
-        <Suspense fallback={null}>
-          <LazySettingsPanel settings={settings} onClose={() => setShowSettings(false)} onSettingsChange={s => setSettings(withDefaultSettings(s))} workspaces={workspaces} workspacePath={workspace?.path} initialSection={typeof showSettings === 'string' ? showSettings as any : undefined} systemPrefersDark={systemPrefersDark} />
-        </Suspense>
-      )}
-      {showExtensionsGallery && (
-        <Suspense fallback={null}>
-          <LazyExtensionsGallery
-            onClose={() => setShowExtensionsGallery(false)}
-            workspacePath={workspace?.path ?? null}
-            onSettingsChange={s => setSettings(withDefaultSettings(s))}
-          />
-        </Suspense>
-      )}
-      {settingsLoaded && !settings.onboardingComplete && (
-        <Suspense fallback={null}>
-          <LazyOnboardingOverlay
-            onComplete={() => updateAppSettings({ onboardingComplete: true })}
-            onOpenPlugins={() => setShowExtensionsGallery(true)}
-          />
-        </Suspense>
-      )}
-      {ctxMenu && (
-        <Suspense fallback={null}>
-          <LazyContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxMenu.items} onClose={closeCtx} />
-        </Suspense>
-      )}
-      <Suspense fallback={null}>
-        <LazyClusoWidgetMount />
-      </Suspense>
-      {showAgentSetup && (
-        <Suspense fallback={null}>
-          <LazyAgentSetup
-            onComplete={() => setShowAgentSetup(false)}
-            onDismiss={() => setShowAgentSetup(false)}
-          />
-        </Suspense>
-      )}
-      {skillInstallPath && (
-        <Suspense fallback={null}>
-          <LazySkillInstallModal
-            zipPath={skillInstallPath}
-            onClose={() => setSkillInstallPath(null)}
-          />
-        </Suspense>
-      )}
-      {commandPaletteOpen && (
-        <Suspense fallback={null}>
-          <LazyCommandPalette
-            open={commandPaletteOpen}
-            onOpenChange={setCommandPaletteOpen}
-          />
-        </Suspense>
-      )}
-      <DevSandboxFrame />
+      <AppOverlays
+        showMCP={showMCP}
+        setShowMCP={setShowMCP}
+        showSettings={showSettings}
+        setShowSettings={setShowSettings}
+        showExtensionsGallery={showExtensionsGallery}
+        setShowExtensionsGallery={setShowExtensionsGallery}
+        settingsLoaded={settingsLoaded}
+        settings={settings}
+        updateAppSettings={updateAppSettings}
+        setSettings={setSettings}
+        workspaces={workspaces}
+        workspacePath={workspace?.path}
+        systemPrefersDark={systemPrefersDark}
+        ctxMenu={ctxMenu}
+        closeCtx={closeCtx}
+        showAgentSetup={showAgentSetup}
+        setShowAgentSetup={setShowAgentSetup}
+        skillInstallPath={skillInstallPath}
+        setSkillInstallPath={setSkillInstallPath}
+        commandPaletteOpen={commandPaletteOpen}
+        setCommandPaletteOpen={setCommandPaletteOpen}
+      />
     </div>
     </FontProvider>
     </FontTokenProvider>
