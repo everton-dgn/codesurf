@@ -8,6 +8,7 @@
  */
 
 const { spawnSync } = require('child_process')
+const path = require('path')
 
 const raw = process.env.CODESURF_MAX_OLD_SPACE_SIZE_MB
 const maxOldSpace = raw && /^\d+$/.test(raw) ? raw : '8192'
@@ -18,9 +19,20 @@ if (raw && raw !== maxOldSpace) {
 }
 const jsFlags = `--expose-gc --max-old-space-size=${maxOldSpace}`
 
+const ensure = spawnSync(process.execPath, [path.join(__dirname, 'ensure-electron.js')], {
+  stdio: 'inherit',
+})
+if (ensure.status !== 0) {
+  process.exit(ensure.status ?? 1)
+}
+
+const env = { ...process.env }
+// electron-vite caches this without trimming; a stale value breaks spawn.
+delete env.ELECTRON_EXEC_PATH
+
 const result = spawnSync('electron-vite', ['dev', '--', `--js-flags=${jsFlags}`], {
   stdio: 'inherit',
-  env: process.env,
+  env,
   shell: true,
 })
 

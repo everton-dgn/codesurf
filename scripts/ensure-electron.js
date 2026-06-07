@@ -3,6 +3,7 @@
  *
  * Bun (and some npm postinstall runners) can exit before electron's async
  * install.js finishes, leaving only LICENSES.chromium.html in dist/.
+ * A trailing newline in path.txt also breaks electron-vite spawn (ENOENT).
  */
 
 const { downloadArtifact } = require('@electron/get')
@@ -13,6 +14,7 @@ const os = require('os')
 const path = require('path')
 
 const electronDir = path.join(__dirname, '..', 'node_modules', 'electron')
+const pathFile = path.join(electronDir, 'path.txt')
 
 function getPlatformPath() {
   const platform = process.env.npm_config_platform || os.platform()
@@ -49,17 +51,32 @@ function resolveArch(platform) {
   return arch
 }
 
+function readPathTxt() {
+  try {
+    return fs.readFileSync(pathFile, 'utf8').trim()
+  } catch {
+    return null
+  }
+}
+
+function writePathTxt(platformPath) {
+  fs.writeFileSync(pathFile, platformPath, { encoding: 'utf8', flag: 'w' })
+}
+
+function resolveBinaryPath(platformPath) {
+  return process.env.ELECTRON_OVERRIDE_DIST_PATH
+    || path.join(electronDir, 'dist', platformPath)
+}
+
 function isInstalled(version, platformPath) {
   try {
-    const distVersion = fs.readFileSync(path.join(electronDir, 'dist', 'version'), 'utf8').replace(/^v/, '')
-    const recordedPath = fs.readFileSync(path.join(electronDir, 'path.txt'), 'utf8')
+    const distVersion = fs.readFileSync(path.join(electronDir, 'dist', 'version'), 'utf8').replace(/^v/, '').trim()
+    const recordedPath = readPathTxt()
     if (distVersion !== version || recordedPath !== platformPath) return false
   } catch {
     return false
   }
-  const electronPath = process.env.ELECTRON_OVERRIDE_DIST_PATH
-    || path.join(electronDir, 'dist', platformPath)
-  return fs.existsSync(electronPath)
+  return fs.existsSync(resolveBinaryPath(platformPath))
 }
 
 async function main() {
@@ -74,8 +91,18 @@ async function main() {
   const platform = process.env.npm_config_platform || process.platform
   const arch = resolveArch(platform)
   const platformPath = getPlatformPath()
+  const binaryPath = resolveBinaryPath(platformPath)
 
-  if (isInstalled(version, platformPath)) return
+  if (fs.existsSync(binaryPath)) {
+    const rawPathTxt = fs.existsSync(pathFile) ? fs.readFileSync(pathFile, 'utf8') : ''
+    if (rawPathTxt !== platformPath) {
+      writePathTxt(platformPath)
+      if (rawPathTxt.trim() !== platformPath) {
+        console.log('[ensure-electron] Repaired path.txt (removed stray whitespace)')
+      }
+    }
+    if (isInstalled(version, platformPath)) return
+  }
 
   console.log(`[ensure-electron] Installing Electron ${version} (${platform}-${arch})...`)
   const zipPath = await downloadArtifact({
@@ -102,7 +129,7 @@ async function main() {
     fs.renameSync(srcTypeDefPath, targetTypeDefPath)
   }
 
-  await fs.promises.writeFile(path.join(electronDir, 'path.txt'), platformPath, 'utf8')
+  writePathTxt(platformPath)
   console.log('[ensure-electron] Electron binary ready')
 }
 
