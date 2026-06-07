@@ -4,7 +4,7 @@ import { CanvasGroupFrames } from './components/canvas/CanvasGroupFrames'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
 import { TileColorProvider } from './TileColorContext'
-import { withDefaultSettings, DEFAULT_SETTINGS, getCurvierBlockRadius } from '../../shared/types'
+import { withDefaultSettings, DEFAULT_SETTINGS } from '../../shared/types'
 import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
 import { useLayoutTemplates } from './hooks/useLayoutTemplates'
@@ -29,6 +29,7 @@ import { useCanvasTileShortcuts } from './hooks/useCanvasTileShortcuts'
 import { useCanvasGroupManager } from './hooks/useCanvasGroupManager'
 import { useCanvasKeyboard } from './hooks/useCanvasKeyboard'
 import { useCanvasGlow } from './hooks/useCanvasGlow'
+import { useRenderTileBody } from './hooks/useRenderTileBody'
 import { useAutoAgentProximity } from './hooks/useAutoAgentProximity'
 import { useDiscoveryPulses } from './hooks/useDiscoveryPulses'
 import {
@@ -87,7 +88,7 @@ import {
   sanitizePanelLayout,
 } from './components/panelLayoutTree'
 import { panelTreeHasSplit } from './lib/layoutSnap'
-import { basename, getDroppedPaths, toFileUrl } from './utils/dnd'
+import { basename, getDroppedPaths } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
 import {
   CODESURF_CREATE_TILE_EVENT,
@@ -151,25 +152,14 @@ const LazyTileChrome = React.lazy(() => import('./components/TileChrome').then(m
 const LazySidebar = React.lazy(() => import('./components/Sidebar').then(m => ({ default: m.Sidebar })))
 const LazySidebarFooter = React.lazy(() => import('./components/Sidebar').then(m => ({ default: m.SidebarFooter })))
 const LazyContextMenu = React.lazy(() => import('./components/ContextMenu').then(m => ({ default: m.ContextMenu })))
-const LazyImageTile = React.lazy(() => import('./components/ImageTile').then(m => ({ default: m.ImageTile })))
-const LazyMediaTile = React.lazy(() => import('./components/MediaTile').then(m => ({ default: m.MediaTile })))
-const LazyBrowserTile = React.lazy(() => import('./components/BrowserTile').then(m => ({ default: m.BrowserTile })))
-const LazyKanbanTile = React.lazy(() => import('./components/KanbanTile').then(m => ({ default: m.KanbanTile })))
 const LazyMCPPanel = React.lazy(() => import('./components/MCPPanel').then(m => ({ default: m.MCPPanel })))
 const LazyArrangeToolbar = React.lazy(() => import('./components/ArrangeToolbar').then(m => ({ default: m.ArrangeToolbar })))
 const LazyMinimap = React.lazy(() => import('./components/Minimap').then(m => ({ default: m.Minimap })))
 const LazySettingsPanel = React.lazy(() => import('./components/SettingsPanel').then(m => ({ default: m.SettingsPanel })))
 const LazyExtensionsGallery = React.lazy(() => import('./components/ExtensionsGallery').then(m => ({ default: m.ExtensionsGallery })))
-const LazyTerminalTile = React.lazy(() => import('./components/TerminalTile').then(m => ({ default: m.TerminalTile })))
-const LazyCodeTile = React.lazy(() => import('./components/CodeTile').then(m => ({ default: m.CodeTile })))
-const LazyNoteTile = React.lazy(() => import('./components/NoteTile').then(m => ({ default: m.NoteTile })))
 const LazyStickyColorPicker = React.lazy(() => import('./components/NoteTile').then(m => ({ default: m.StickyColorPicker })))
 const LazyChatTile = React.lazy(() => import('./components/ChatTile').then(m => ({ default: m.ChatTile })))
-const LazyChatTileWebview = React.lazy(() => import('./components/ChatTileWebview').then(m => ({ default: m.ChatTileWebview })))
-const LazyFileTile = React.lazy(() => import('./components/FileTile').then(m => ({ default: m.FileTile })))
-const LazyFileExplorerTile = React.lazy(() => import('./components/FileExplorerTile'))
 const LazyConnectionPill = React.lazy(() => import('./components/ConnectionPill').then(m => ({ default: m.ConnectionPill })))
-const LazyExtensionTile = React.lazy(() => import('./components/ExtensionTile').then(m => ({ default: m.ExtensionTile })))
 const LazyClusoWidgetMount = React.lazy(() =>
   import('./components/ClusoWidgetMount')
     .then(m => ({ default: m.ClusoWidgetMount }))
@@ -365,14 +355,6 @@ async function resolveFileTileType(filePath: string): Promise<TileState['type']>
   } catch {
     return byExtension
   }
-}
-
-function toBrowserTileUrl(filePath: string): string {
-  if (!filePath) return ''
-  if (/^[a-z][a-z\d+\-.]*:\/\//i.test(filePath)) return filePath
-  if (filePath === 'about:blank') return filePath
-  if (filePath.startsWith('/')) return toFileUrl(filePath)
-  return filePath
 }
 
 function hrefToLocalPath(href: string): string | null {
@@ -2365,169 +2347,6 @@ function App(): JSX.Element {
     })
   }, [viewport, nextZIndex, saveCanvas, sidebarCollapsed, sidebarWidth, zoomToFitArrangedTiles])
 
-  // ─── Render tile body ─────────────────────────────────────────────────────
-  const renderTileBody = (tile: TileState, options?: { isInteracting?: boolean; isActive?: boolean; isSelected?: boolean }): React.ReactNode => {
-    const isTileInteracting = Boolean(options?.isInteracting)
-    const isTileSelected = Boolean(options?.isSelected)
-    switch (tile.type) {
-      case 'terminal':
-        return (
-          <LazyTerminalTile
-            tileId={tile.id}
-            workspaceDir={workspace?.path ?? ''}
-            width={tile.width}
-            height={tile.height}
-            fontSize={settings.terminalFontSize || appFonts.monoSize}
-            fontFamily={settings.terminalFontFamily || appFonts.mono}
-            launchBin={tile.launchBin}
-            launchArgs={tile.launchArgs}
-          />
-        )
-      case 'code':
-        return <LazyCodeTile filePath={tile.filePath} />
-      case 'note':
-        return <LazyNoteTile tileId={tile.id} filePath={tile.filePath} workspacePath={workspace?.path} />
-      case 'image':
-        return tile.filePath ? (
-          <LazyImageTile
-            tileId={tile.id}
-            workspaceId={workspace?.id ?? ''}
-            filePath={tile.filePath}
-            onReplaceFilePath={handleImageReplaceSource}
-            isSelected={isTileSelected}
-            borderRadius={getCurvierBlockRadius(tile.borderRadius)}
-            zoom={viewport.zoom}
-          />
-        ) : null
-      case 'media':
-        return tile.filePath ? <LazyMediaTile tileId={tile.id} filePath={tile.filePath} /> : null
-      case 'file':
-        return tile.filePath ? (
-          <LazyFileTile
-            tileId={tile.id}
-            filePath={tile.filePath}
-            workspacePath={workspace?.path}
-            secondaryFont={settings.fonts.secondary}
-          />
-        ) : null
-      case 'browser':
-        return (
-          <LazyBrowserTile
-            tileId={tile.id}
-            workspaceId={workspace?.id ?? ''}
-            initialUrl={toBrowserTileUrl(tile.filePath ?? '')}
-            width={tile.width}
-            height={tile.height}
-            zIndex={tile.zIndex}
-            isInteracting={isTileInteracting}
-            isVisible={options?.isActive !== false}
-            connectedPeers={negotiatedDiscoveryState.byTileConnections.get(tile.id)?.map(link => link.peerId) ?? []}
-            hideNavbar={tile.hideNavbar}
-          />
-        )
-      case 'kanban':
-        return (
-          <LazyKanbanTile
-            tileId={tile.id}
-            workspaceId={workspace?.id ?? ''}
-            workspaceDir={workspace?.path ?? ''}
-            width={tile.width}
-            height={tile.height}
-            onFocusTile={(linkedId) => {
-              const target = tiles.find(t => t.id === linkedId)
-              if (!target) return
-              bringToFront(linkedId)
-              panToTile(target)
-            }}
-          />
-        )
-      case 'chat': {
-        const chatPeers = (negotiatedDiscoveryState.byTileConnections.get(tile.id) ?? []).map(peer => {
-          const extActions = extensionActionRegistry.get(peer.peerId)
-          const peerTile = tileByIdMap.get(peer.peerId)
-          return {
-            ...peer,
-            actions: extActions,
-            filePath: peerTile?.filePath,
-            label: peerTile?.label,
-          }
-        })
-        // Feature flag: when settings.experimental.chatTileWebview is true,
-        // mount the standalone apps/chat-app/ via iframe + bridge instead
-        // of the in-process React ChatTile. Same Props signature.
-        const useWebviewChat = (settings as { experimental?: { chatTileWebview?: boolean } } | undefined)
-          ?.experimental?.chatTileWebview === true
-        const ChatComponent = useWebviewChat ? LazyChatTileWebview : LazyChatTile
-        return (
-          <ChatComponent
-            tileId={tile.id}
-            workspaceId={workspace?.id ?? ''}
-            workspaceDir={workspace?.path ?? ''}
-            width={tile.width}
-            height={tile.height}
-            reloadToken={chatReloadTokens[tile.id] ?? 0}
-            settings={settings}
-            onChatModePreferenceChange={rememberChatProviderMode}
-            isConnected={negotiatedDiscoveryState.connectedTileIds.has(tile.id)}
-            isAutoConnected={tile.autoAgentMode && negotiatedDiscoveryState.connectedTileIds.has(tile.id)}
-            connectedPeers={chatPeers}
-          />
-        )
-      }
-      case 'files': {
-        const fileLinks = negotiatedDiscoveryState.byTileConnections.get(tile.id) ?? []
-        const terminalPeerIds = fileLinks.filter(l => l.peerType === 'terminal').map(l => l.peerId)
-        return (
-          <LazyFileExplorerTile
-            tileId={tile.id}
-            workspacePath={workspace?.path ?? ''}
-            width={tile.width}
-            height={tile.height}
-            onOpenFile={(filePath, options) => handleOpenFile(filePath, { ...options, sourceTileId: tile.id })}
-            onOpenWorkspace={() => { void handleOpenFolder() }}
-            selectedFilePath={sidebarSelectedPath}
-            connectedTerminalIds={terminalPeerIds}
-          />
-        )
-      }
-      default:
-        if (tile.type.startsWith('ext:')) {
-          const extensionPeers = (negotiatedDiscoveryState.byTileConnections.get(tile.id) ?? []).map(peer => {
-            const extActions = extensionActionRegistry.get(peer.peerId)
-            const peerTile = tileByIdMap.get(peer.peerId)
-            return {
-              peerId: peer.peerId,
-              peerType: peer.peerType,
-              tools: peer.capabilities.filter(c => c.startsWith('tool:')).map(c => stripCapabilityPrefix(c)),
-              actions: extActions,
-              filePath: peerTile?.filePath,
-              label: peerTile?.label,
-            }
-          })
-          return (
-            <LazyExtensionTile
-              tileId={tile.id}
-              extType={tile.type}
-              width={tile.width}
-              height={tile.height}
-              workspaceId={workspace?.id ?? ''}
-              workspacePath={workspace?.path ?? ''}
-              isInteracting={isTileInteracting}
-              connectedPeers={extensionPeers}
-              onCreateTile={(type, opts) => addTile(
-                type as TileType,
-                opts?.filePath,
-                opts?.x !== undefined && opts?.y !== undefined ? { x: opts.x, y: opts.y } : undefined,
-                { hideTitlebar: opts?.hideTitlebar, hideNavbar: opts?.hideNavbar },
-              )}
-              onActionsChanged={(tId, actions) => { console.log('[App] Extension actions registered:', tId, actions.map(a => a.name)); extensionActionRegistry.set(tId, actions); setExtActionsVersion(v => v + 1) }}
-            />
-          )
-        }
-        return null
-    }
-  }
-
   // Set of tile IDs that should not render on canvas (in fullscreen panel OR in a layout group)
   const panelTileIds = React.useMemo(() => {
     const ids = new Set<string>()
@@ -2717,6 +2536,45 @@ function App(): JSX.Element {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoConnectionsEnabled, panelLayout, panelTileIds, groups, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles, lockedConnections, suppressedConnections, extActionsVersion, workerDiscoveryGraph])
+
+  const terminalFontFamily = settings.terminalFontFamily || settings.fonts?.mono?.family || MONO_DEFAULT
+  const terminalFontSize = settings.terminalFontSize || settings.fonts?.mono?.size || 13
+
+  const handleFocusKanbanLinkedTile = useCallback((linkedId: string) => {
+    const target = tiles.find(t => t.id === linkedId)
+    if (!target) return
+    bringToFront(linkedId)
+    panToTile(target)
+  }, [tiles, bringToFront, panToTile])
+
+  const handleExtensionActionsChanged = useCallback((tileId: string, actions: import('./components/ExtensionTile').ExtensionAction[]) => {
+    console.log('[App] Extension actions registered:', tileId, actions.map(a => a.name))
+    extensionActionRegistry.set(tileId, actions)
+    setExtActionsVersion(v => v + 1)
+  }, [])
+
+  const getExtensionActions = useCallback((tileId: string) => extensionActionRegistry.get(tileId), [])
+
+  const renderTileBody = useRenderTileBody({
+    workspace,
+    settings,
+    terminalFontFamily,
+    terminalFontSize,
+    viewportZoom: viewport.zoom,
+    tileByIdMap,
+    chatReloadTokens,
+    byTileConnections: negotiatedDiscoveryState.byTileConnections,
+    connectedTileIds: negotiatedDiscoveryState.connectedTileIds,
+    sidebarSelectedPath,
+    onImageReplaceSource: handleImageReplaceSource,
+    onFocusLinkedTile: handleFocusKanbanLinkedTile,
+    onChatModePreferenceChange: rememberChatProviderMode,
+    onOpenFile: handleOpenFile,
+    onOpenWorkspace: () => { void handleOpenFolder() },
+    onAddTile: addTile,
+    onExtensionActionsChanged: handleExtensionActionsChanged,
+    getExtensionActions,
+  })
 
   useEffect(() => {
     const sourceTileIds = [activeChatTileId, selectedTileId].filter((value): value is string => Boolean(value))
@@ -2962,16 +2820,15 @@ function App(): JSX.Element {
     setVar('--cs-th-status-success', theme.status.success)
     setVar('--cs-th-status-warning', theme.status.warning)
     // Edge shadow alpha channels — mirror the ladder in `getEdgeShadow()`
-    // (theme.ts). Light mode keeps the bright white "paper edge" inset.
-    // Dark mode dropped the white-inset to near-zero (it was reading as a
-    // hard white halo around panels) and bumped the outer black so the
-    // panel-vs-canvas separation comes from the dark drop, not the highlight.
-    setVar('--cs-th-edge-white-alpha', isDark ? '0.035' : '0.82')
-    setVar('--cs-th-edge-white-alpha-subtle', isDark ? '0.02' : '0.68')
-    setVar('--cs-th-edge-white-alpha-strong', isDark ? '0.06' : '0.92')
-    setVar('--cs-th-edge-black-alpha', isDark ? '0.22' : '0.04')
-    setVar('--cs-th-edge-black-alpha-subtle', isDark ? '0.16' : '0.04')
-    setVar('--cs-th-edge-black-alpha-strong', isDark ? '0.30' : '0.04')
+    // (theme.ts). Light mode uses a darker outer keyline; dark mode uses one
+    // visible 0.5px light keyline so unfocused prompt/settings borders don't double up.
+    setVar('--cs-th-edge-white-alpha', isDark ? '0' : '0.62')
+    setVar('--cs-th-edge-white-alpha-subtle', isDark ? '0' : '0.52')
+    setVar('--cs-th-edge-white-alpha-strong', isDark ? '0' : '0.74')
+    setVar('--cs-th-edge-outer-rgb', isDark ? '255 255 255' : '0 0 0')
+    setVar('--cs-th-edge-black-alpha', isDark ? '0.16' : '0.10')
+    setVar('--cs-th-edge-black-alpha-subtle', isDark ? '0.10' : '0.08')
+    setVar('--cs-th-edge-black-alpha-strong', isDark ? '0.20' : '0.12')
     // Scrollbar thumb — anchor on text colour with low alpha so it stays
     // visible against any surface and tracks contrast.
     setVar('--cs-th-scrollbar-thumb', isDark ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.22)')
