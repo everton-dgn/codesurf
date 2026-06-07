@@ -11,6 +11,9 @@ import { useLayoutTemplates } from './hooks/useLayoutTemplates'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
 import { useScrollFadeIndicators } from './hooks/useScrollFadeIndicators'
 import { useShellLayoutMetrics } from './hooks/useShellLayoutMetrics'
+import { useBrandWordmarkPrefs } from './hooks/useBrandWordmarkPrefs'
+import { readMiniChatOptions } from './lib/miniChatWindow'
+import { MiniChatWindow } from './components/MiniChatWindow'
 import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
   useCanvasEngine,
@@ -99,22 +102,6 @@ type PendingSessionOpen =
 
 type SessionTargetEntry = AggregatedSessionEntry | WorkspaceSessionEntry
 type FocusOpenOptions = { persist?: boolean; sourceTileId?: string }
-type MiniChatOptions = { workspaceId: string; tileId: string; title: string }
-
-function readMiniChatOptions(): MiniChatOptions | null {
-  if (typeof window === 'undefined') return null
-  const params = new URLSearchParams(window.location.search)
-  if (params.get('miniChat') !== '1') return null
-  const workspaceId = params.get('workspaceId')?.trim() ?? ''
-  const tileId = params.get('tileId')?.trim() ?? ''
-  if (!workspaceId || !tileId) return null
-  return {
-    workspaceId,
-    tileId,
-    title: params.get('title')?.trim() || 'Mini Chat',
-  }
-}
-
 const INITIAL_EXTERNAL_SESSION_TAIL_LOAD = 20
 
 function isRuntimeSessionEntryId(sessionEntryId: string): boolean {
@@ -147,7 +134,6 @@ const LazyMinimap = React.lazy(() => import('./components/Minimap').then(m => ({
 const LazySettingsPanel = React.lazy(() => import('./components/SettingsPanel').then(m => ({ default: m.SettingsPanel })))
 const LazyExtensionsGallery = React.lazy(() => import('./components/ExtensionsGallery').then(m => ({ default: m.ExtensionsGallery })))
 const LazyStickyColorPicker = React.lazy(() => import('./components/NoteTile').then(m => ({ default: m.StickyColorPicker })))
-const LazyChatTile = React.lazy(() => import('./components/ChatTile').then(m => ({ default: m.ChatTile })))
 const LazyConnectionPill = React.lazy(() => import('./components/ConnectionPill').then(m => ({ default: m.ConnectionPill })))
 const LazyClusoWidgetMount = React.lazy(() =>
   import('./components/ClusoWidgetMount')
@@ -352,9 +338,6 @@ function hrefToLocalPath(href: string): string | null {
 
 const SETTINGS_CACHE_KEY = 'contex:settings-cache'
 const WORKSPACE_TAB_STATE_KEY = 'codesurf:workspace-tabs:v1'
-const BRAND_WORDMARK_CACHE_KEY = 'contex:brand-wordmark-index'
-const BRAND_WORDMARK_PALETTE_CACHE_KEY = 'contex:brand-wordmark-palette-index'
-
 type PersistedWorkspaceTabState = {
   openWorkspaceIds: string[]
   currentWorkspaceId: string | null
@@ -485,9 +468,6 @@ function App(): JSX.Element {
     return extensionEntries.filter(entry => entry.enabled !== false && !hidden.has(entry.id))
   }, [settings.extensionsDisabled, settings.hiddenFromSidebarExtIds, extensionEntries])
   const [systemPrefersDark, setSystemPrefersDark] = useState(true)
-  const [brandWordmarkIndex, setBrandWordmarkIndex] = useState(1)
-  const [brandPaletteIndex, setBrandPaletteIndex] = useState(0)
-  const [brandPrefsReadyTheme, setBrandPrefsReadyTheme] = useState<string | null>(null)
   const [pendingSessionOpen, setPendingSessionOpen] = useState<PendingSessionOpen | null>(null)
   const [showWorkspacePickerTab, setShowWorkspacePickerTab] = useState(false)
   const [workspacePickerReturnWorkspaceId, setWorkspacePickerReturnWorkspaceId] = useState<string | null>(null)
@@ -2472,223 +2452,7 @@ function App(): JSX.Element {
   )
 
   useAppThemeCssVars(theme, appFonts)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    setBrandPrefsReadyTheme(null)
-    try {
-      const savedWordmark = window.localStorage.getItem(`${BRAND_WORDMARK_CACHE_KEY}:${effectiveThemeId}`)
-      const savedPalette = window.localStorage.getItem(`${BRAND_WORDMARK_PALETTE_CACHE_KEY}:${effectiveThemeId}`)
-      const nextWordmark = savedWordmark === null ? 1 : Number.parseInt(savedWordmark, 10)
-      const nextPalette = savedPalette === null ? 0 : Number.parseInt(savedPalette, 10)
-      setBrandWordmarkIndex(Number.isFinite(nextWordmark) && nextWordmark >= 0 ? nextWordmark : 1)
-      setBrandPaletteIndex(Number.isFinite(nextPalette) && nextPalette >= 0 ? nextPalette : 0)
-    } catch {
-      setBrandWordmarkIndex(1)
-      setBrandPaletteIndex(0)
-    }
-    setBrandPrefsReadyTheme(effectiveThemeId)
-  }, [effectiveThemeId])
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || brandPrefsReadyTheme !== effectiveThemeId) return
-    try {
-      window.localStorage.setItem(`${BRAND_WORDMARK_CACHE_KEY}:${effectiveThemeId}`, String(brandWordmarkIndex))
-      window.localStorage.setItem(`${BRAND_WORDMARK_PALETTE_CACHE_KEY}:${effectiveThemeId}`, String(brandPaletteIndex))
-    } catch {}
-  }, [brandWordmarkIndex, brandPaletteIndex, brandPrefsReadyTheme, effectiveThemeId])
-  const brandWordmarks = React.useMemo(() => [
-    [
-      '░█▀▀░█▀█░█▀▄░█▀▀░█▀▀░█░█░█▀▄░█▀▀',
-      '░█░░░█░█░█░█░█▀▀░▀▀█░█░█░█▀▄░█▀▀',
-      '░▀▀▀░▀▀▀░▀▀░░▀▀▀░▀▀▀░▀▀▀░▀░▀░▀░░',
-    ],
-    [
-      ' ██████╗ ██████╗ ██████╗ ███████╗███████╗██╗   ██╗██████╗ ███████╗',
-      '██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔════╝██║   ██║██╔══██╗██╔════╝',
-      '██║     ██║   ██║██║  ██║█████╗  ███████╗██║   ██║██████╔╝█████╗  ',
-      '██║     ██║   ██║██║  ██║██╔══╝  ╚════██║██║   ██║██╔══██╗██╔══╝  ',
-      '╚██████╗╚██████╔╝██████╔╝███████╗███████║╚██████╔╝██║  ██║██║     ',
-      ' ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝     ',
-    ],
-    [
-      ' ██████  ██████  ██████  ███████ ███████ ██    ██ ██████  ███████ ',
-      '██      ██    ██ ██   ██ ██      ██      ██    ██ ██   ██ ██      ',
-      '██      ██    ██ ██   ██ █████   ███████ ██    ██ ██████  █████   ',
-      '██      ██    ██ ██   ██ ██           ██ ██    ██ ██   ██ ██      ',
-      ' ██████  ██████  ██████  ███████ ███████  ██████  ██   ██ ██      ',
-    ],
-    [
-      '        CCCCCCCCCCCCC     OOOOOOOOO     DDDDDDDDDDDDD      EEEEEEEEEEEEEEEEEEEEEE   SSSSSSSSSSSSSSS UUUUUUUU     UUUUUUUURRRRRRRRRRRRRRRRR   FFFFFFFFFFFFFFFFFFFFFF',
-      '     CCC::::::::::::C   OO:::::::::OO   D::::::::::::DDD   E::::::::::::::::::::E SS:::::::::::::::SU::::::U     U::::::UR::::::::::::::::R  F::::::::::::::::::::F',
-      '   CC:::::::::::::::C OO:::::::::::::OO D:::::::::::::::DD E::::::::::::::::::::ES:::::SSSSSS::::::SU::::::U     U::::::UR::::::RRRRRR:::::R F::::::::::::::::::::F',
-      '  C:::::CCCCCCCC::::CO:::::::OOO:::::::ODDD:::::DDDDD:::::DEE::::::EEEEEEEEE::::ES:::::S     SSSSSSSUU:::::U     U:::::UURR:::::R     R:::::RFF::::::FFFFFFFFF::::F',
-      ' C:::::C       CCCCCCO::::::O   O::::::O  D:::::D    D:::::D E:::::E       EEEEEES:::::S             U:::::U     U:::::U   R::::R     R:::::R  F:::::F       FFFFFF',
-      'C:::::C              O:::::O     O:::::O  D:::::D     D:::::DE:::::E             S:::::S             U:::::D     D:::::U   R::::R     R:::::R  F:::::F             ',
-      'C:::::C              O:::::O     O:::::O  D:::::D     D:::::DE::::::EEEEEEEEEE    S::::SSSS          U:::::D     D:::::U   R::::RRRRRR:::::R   F::::::FFFFFFFFFF   ',
-      'C:::::C              O:::::O     O:::::O  D:::::D     D:::::DE:::::::::::::::E     SS::::::SSSSS     U:::::D     D:::::U   R:::::::::::::RR    F:::::::::::::::F   ',
-      'C:::::C              O:::::O     O:::::O  D:::::D     D:::::DE:::::::::::::::E       SSS::::::::SS   U:::::D     D:::::U   R::::RRRRRR:::::R   F:::::::::::::::F   ',
-      'C:::::C              O:::::O     O:::::O  D:::::D     D:::::DE::::::EEEEEEEEEE          SSSSSS::::S  U:::::D     D:::::U   R::::R     R:::::R  F::::::FFFFFFFFFF   ',
-      'C:::::C              O:::::O     O:::::O  D:::::D     D:::::DE:::::E                         S:::::S U:::::D     D:::::U   R::::R     R:::::R  F:::::F             ',
-      ' C:::::C       CCCCCCO::::::O   O::::::O  D:::::D    D:::::D E:::::E       EEEEEE            S:::::S U::::::U   U::::::U   R::::R     R:::::R  F:::::F             ',
-      '  C:::::CCCCCCCC::::CO:::::::OOO:::::::ODDD:::::DDDDD:::::DEE::::::EEEEEEEE:::::ESSSSSSS     S:::::S U:::::::UUU:::::::U RR:::::R     R:::::RFF:::::::FF           ',
-      '   CC:::::::::::::::C OO:::::::::::::OO D:::::::::::::::DD E::::::::::::::::::::ES::::::SSSSSS:::::S  UU:::::::::::::UU  R::::::R     R:::::RF::::::::FF           ',
-      '     CCC::::::::::::C   OO:::::::::OO   D::::::::::::DDD   E::::::::::::::::::::ES:::::::::::::::SS     UU:::::::::UU    R::::::R     R:::::RF::::::::FF           ',
-      '        CCCCCCCCCCCCC     OOOOOOOOO     DDDDDDDDDDDDD      EEEEEEEEEEEEEEEEEEEEEE SSSSSSSSSSSSSSS         UUUUUUUUU      RRRRRRRR     RRRRRRRFFFFFFFFFFF           ',
-    ],
-    [
-      '__________  ____  ___________ __  ______  ______',
-      '  / ____/ __ \/ __ \/ ____/ ___// / / / __ \/ ____/',
-      ' / /   / / / / / / / __/  \\__ \/ / / / /_/ / /_    ',
-      '/ /___/ /_/ / /_/ / /___ ___/ / /_/ / _, _/ __/    ',
-      '\\____/\\____/_____/_____//____/\\____/_/ |_/_/     ',
-    ],
-    [
-      ' _________  ___  __________  _____  ____',
-      ' / ___/ __ \/ _ \/ __/ __/ / / / _ \/ __/',
-      '/ /__/ /_/ / // / _/_\\ \/ /_/ / , _/ _/  ',
-      '\\___/\\____/____/___/___/\\____/_/|_/_/   ',
-    ],
-    [
-      '░██████    ░██████   ░███████   ░██████████   ░██████   ░██     ░██ ░█████████  ░██████████',
-      ' ░██   ░██  ░██   ░██  ░██   ░██  ░██          ░██   ░██  ░██     ░██ ░██     ░██ ░██        ',
-      '░██        ░██     ░██ ░██    ░██ ░██         ░██         ░██     ░██ ░██     ░██ ░██        ',
-      '░██        ░██     ░██ ░██    ░██ ░█████████   ░████████  ░██     ░██ ░█████████  ░█████████ ',
-      '░██        ░██     ░██ ░██    ░██ ░██                 ░██ ░██     ░██ ░██   ░██   ░██        ',
-      ' ░██   ░██  ░██   ░██  ░██   ░██  ░██          ░██   ░██   ░██   ░██  ░██    ░██  ░██        ',
-      '  ░██████    ░██████   ░███████   ░██████████   ░██████     ░██████   ░██     ░██ ░██        ',
-    ],
-    [
-      '_____  ____   _____   ______   _____  _    _  _____   ______ ',
-      '  / ____|/ __ \\ |  __ \\ |  ____| / ____|| |  | ||  __ \\ |  ____|',
-      ' | |    | |  | || |  | || |__   | (___  | |  | || |__) || |__   ',
-      ' | |    | |  | || |  | ||  __|   \\___ \\ | |  | ||  _  / |  __|  ',
-      ' | |____| |__| || |__| || |____  ____) || |__| || | \\ \\ | |     ',
-      '  \\_____|\\____/ |_____/ |______||_____/  \\____/ |_|  \\_\\|_|     ',
-    ],
-    [
-      '▄█████ ▄████▄ ████▄  ██████ ▄█████ ██  ██ █████▄  ██████ ',
-      '██     ██  ██ ██  ██ ██▄▄   ▀▀▀▄▄▄ ██  ██ ██▄▄██▄ ██▄▄   ',
-      '▀█████ ▀████▀ ████▀  ██▄▄▄▄ █████▀ ▀████▀ ██   ██ ██     ',
-    ],
-    [
-      '▄▄▄▄▄▄▄   ▄▄▄▄▄   ▄▄▄▄▄▄    ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄ ▄▄▄  ▄▄▄ ▄▄▄▄▄▄▄    ▄▄▄▄▄▄▄ ',
-      '███▀▀▀▀▀ ▄███████▄ ███▀▀██▄ ███▀▀▀▀▀ █████▀▀▀ ███  ███ ███▀▀███▄ ███▀▀▀▀▀ ',
-      '███      ███   ███ ███  ███ ███▄▄     ▀████▄  ███  ███ ███▄▄███▀ ███▄▄    ',
-      '███      ███▄▄▄███ ███  ███ ███         ▀████ ███▄▄███ ███▀▀██▄  ███▀▀    ',
-      '▀███████  ▀█████▀  ██████▀  ▀███████ ███████▀ ▀██████▀ ███  ▀███ ███      ',
-    ],
-    [
-      '▄████████  ▄██████▄  ████████▄     ▄████████    ▄████████ ███    █▄     ▄████████    ▄████████ ',
-      '███    ███ ███    ███ ███   ▀███   ███    ███   ███    ███ ███    ███   ███    ███   ███    ███ ',
-      '███    █▀  ███    ███ ███    ███   ███    █▀    ███    █▀  ███    ███   ███    ███   ███    █▀  ',
-      '███        ███    ███ ███    ███  ▄███▄▄▄       ███        ███    ███  ▄███▄▄▄▄██▀  ▄███▄▄▄     ',
-      '███        ███    ███ ███    ███ ▀▀███▀▀▀     ▀███████████ ███    ███ ▀▀███▀▀▀▀▀   ▀▀███▀▀▀     ',
-      '███    █▄  ███    ███ ███    ███   ███    █▄           ███ ███    ███ ▀███████████   ███        ',
-      '███    ███ ███    ███ ███   ▄███   ███    ███    ▄█    ███ ███    ███   ███    ███   ███        ',
-      '████████▀   ▀██████▀  ████████▀    ██████████  ▄████████▀  ████████▀    ███    ███   ███        ',
-      '                                                                        ███    ███              ',
-    ],
-    [
-      '▄▄▄▄     ▄▄▄▄    ▄▄▄▄▄     ▄▄▄▄▄▄▄▄    ▄▄▄▄    ▄▄    ▄▄  ▄▄▄▄▄▄    ▄▄▄▄▄▄▄▄ ',
-      '  ██▀▀▀▀█   ██▀▀██   ██▀▀▀██   ██▀▀▀▀▀▀  ▄█▀▀▀▀█   ██    ██  ██▀▀▀▀██  ██▀▀▀▀▀▀ ',
-      ' ██▀       ██    ██  ██    ██  ██        ██▄       ██    ██  ██    ██  ██       ',
-      ' ██        ██    ██  ██    ██  ███████    ▀████▄   ██    ██  ███████   ███████  ',
-      ' ██▄       ██    ██  ██    ██  ██             ▀██  ██    ██  ██  ▀██▄  ██       ',
-      '  ██▄▄▄▄█   ██▄▄██   ██▄▄▄██   ██▄▄▄▄▄▄  █▄▄▄▄▄█▀  ▀██▄▄██▀  ██    ██  ██       ',
-      '    ▀▀▀▀     ▀▀▀▀    ▀▀▀▀▀     ▀▀▀▀▀▀▀▀   ▀▀▀▀▀      ▀▀▀▀    ▀▀    ▀▀▀ ▀▀       ',
-    ],
-    [
-      '▄▄▄   ▄▄▄▄  ▄▄▄▄   ▄▄▄▄▄▄  ▄▄▄▄  ▄    ▄ ▄▄▄▄▄  ▄▄▄▄▄▄',
-      ' ▄▀   ▀ ▄▀  ▀▄ █   ▀▄ █      █▀   ▀ █    █ █   ▀█ █     ',
-      ' █      █    █ █    █ █▄▄▄▄▄ ▀█▄▄▄  █    █ █▄▄▄▄▀ █▄▄▄▄▄',
-      ' █      █    █ █    █ █          ▀█ █    █ █   ▀▄ █     ',
-      '  ▀▄▄▄▀  █▄▄█  █▄▄▄▀  █▄▄▄▄▄ ▀▄▄▄█▀ ▀▄▄▄▄▀ █    ▀ █     ',
-    ],
-    [
-      '.o88b.  .d88b.  d8888b. d88888b .d8888. db    db d8888b. d88888b ',
-      'd8P  Y8 .8P  Y8. 88  `8D 88\'     88\'  YP 88    88 88  `8D 88\'     ',
-      '8P      88    88 88   88 88ooooo `8bo.   88    88 88oobY\' 88ooo   ',
-      '8b      88    88 88   88 88~~~~~   `Y8b. 88    88 88`8b   88~~~   ',
-      'Y8b  d8 `8b  d8\' 88  .8D 88.     db   8D 88b  d88 88 `88. 88      ',
-      ' `Y88P\'  `Y88P\'  Y8888D\' Y88888P `8888Y\' ~Y8888P\' 88   YD YP      ',
-    ],
-    [
-      '.d8888b.   .d88888b.  8888888b.  8888888888 .d8888b.  888     888 8888888b.  8888888888 ',
-      'd88P  Y88b d88P" "Y88b 888  "Y88b 888       d88P  Y88b 888     888 888   Y88b 888        ',
-      '888    888 888     888 888    888 888       Y88b.      888     888 888    888 888        ',
-      '888        888     888 888    888 8888888    "Y888b.   888     888 888   d88P 8888888    ',
-      '888        888     888 888    888 888           "Y88b. 888     888 8888888P"  888        ',
-      '888    888 888     888 888    888 888             "888 888     888 888 T88b   888        ',
-      'Y88b  d88P Y88b. .d88P 888  .d88P 888       Y88b  d88P Y88b. .d88P 888  T88b  888        ',
-      ' "Y8888P"   "Y88888P"  8888888P"  8888888888 "Y8888P"   "Y88888P"  888   T88b 888        ',
-    ],
-    [
-      '_______ _______ ______   _______ _______ ___ ___ _______ _______ ',
-      ' |   _   |   _   |   _  \\ |   _   |   _   |   Y   |   _   |   _   |',
-      ' |.  1___|.  |   |.  |   \\|.  1___|   1___|.  |   |.  l   |.  1___|',
-      ' |.  |___|.  |   |.  |    |.  __)_|____   |.  |   |.  _   |.  __)  ',
-      ' |:  1   |:  1   |:  1    |:  1   |:  1   |:  1   |:  |   |:  |    ',
-      ' |::.. . |::.. . |::.. . /|::.. . |::.. . |::.. . |::.|:. |::.|    ',
-      ' `-------`-------`------\' `-------`-------`-------`--- ---`---\'    ',
-    ],
-    [
-      '█████████     ███████    ██████████   ██████████  █████████  █████  █████ ███████████   ███████████',
-      '  ███░░░░░███  ███░░░░░███ ░░███░░░░███ ░░███░░░░░█ ███░░░░░███░░███  ░░███ ░░███░░░░░███ ░░███░░░░░░█',
-      ' ███     ░░░  ███     ░░███ ░███   ░░███ ░███  █ ░ ░███    ░░░  ░███   ░███  ░███    ░███  ░███   █ ░ ',
-      '░███         ░███      ░███ ░███    ░███ ░██████   ░░█████████  ░███   ░███  ░██████████   ░███████   ',
-      '░███         ░███      ░███ ░███    ░███ ░███░░█    ░░░░░░░░███ ░███   ░███  ░███░░░░░███  ░███░░░█   ',
-      '░░███     ███░░███     ███  ░███    ███  ░███ ░   █ ███    ░███ ░███   ░███  ░███    ░███  ░███  ░    ',
-      ' ░░█████████  ░░░███████░   ██████████   ██████████░░█████████  ░░████████   █████   █████ █████      ',
-      '  ░░░░░░░░░     ░░░░░░░    ░░░░░░░░░░   ░░░░░░░░░░  ░░░░░░░░░    ░░░░░░░░   ░░░░░   ░░░░░ ░░░░░      ',
-    ],
-    [
-      'MM\'""""\'YMM MMP"""""YMM M""""""\'YMM MM""""""""`M MP""""""`MM M""MMMMM""M MM"""""""`MM MM""""""""`M ',
-      'M\' .mmm. `M M\' .mmm. `M M  mmmm. `M MM  mmmmmmmM M  mmmmm..M M  MMMMM  M MM  mmmm,  M MM  mmmmmmmM ',
-      'M  MMMMMooM M  MMMMM  M M  MMMMM  M M`      MMMM M.      `YM M  MMMMM  M M\'        .M M\'      MMMM ',
-      'M  MMMMMMMM M  MMMMM  M M  MMMMM  M MM  MMMMMMMM MMMMMMM.  M M  MMMMM  M MM  MMMb. "M MM  MMMMMMMM ',
-      'M. `MMM\' .M M. `MMM\' .M M  MMMM\' .M MM  MMMMMMMM M. .MMM\'  M M  `MMM\'  M MM  MMMMM  M MM  MMMMMMMM ',
-      'MM.     .dM MMb     dMM M       .MM MM        .M Mb.     .dM Mb       dM MM  MMMMM  M MM  MMMMMMMM ',
-      'MMMMMMMMMMM MMMMMMMMMMM MMMMMMMMMMM MMMMMMMMMMMM MMMMMMMMMMM MMMMMMMMMMM MMMMMMMMMMMM MMMMMMMMMMMM ',
-    ],
-    [
-      '.aMMMb  .aMMMb  dMMMMb  dMMMMMP .dMMMb  dMP dMP dMMMMb  dMMMMMP ',
-      '  dMP"VMP dMP"dMP dMP VMP dMP     dMP" VP dMP dMP dMP.dMP dMP      ',
-      ' dMP     dMP dMP dMP dMP dMMMP    VMMMb  dMP dMP dMMMMK" dMMMP     ',
-      'dMP.aMP dMP.aMP dMP.aMP dMP     dP .dMP dMP.aMP dMP"AMF dMP        ',
-      'VMMMP"  VMMMP" dMMMMP" dMMMMMP  VMMMP"  VMMMP" dMP dMP dMP        ',
-    ],
-  ], [])
-  const brandPalettes = React.useMemo(() => theme.mode === 'dark'
-    ? [
-        ['#8bd5ff', '#6db8ff', '#7ee7c8', '#6db8ff', '#8bd5ff', '#7ee7c8'],
-        ['#ffd166', '#ff9f1c', '#ff6b6b', '#c77dff', '#7bdff2', '#72efdd'],
-        ['#f8fafc', '#cbd5e1', '#94a3b8', '#38bdf8', '#22c55e', '#f59e0b'],
-        ['#ffadad', '#ffd6a5', '#fdffb6', '#caffbf', '#9bf6ff', '#bdb2ff'],
-        ['#e879f9', '#a78bfa', '#60a5fa', '#34d399', '#fbbf24', '#fb7185'],
-        ['#f5f5f5', '#e5e5e5', '#d4d4d4', '#fafafa', '#e5e7eb', '#ffffff'],
-        ['#9ca3af', '#6b7280', '#4b5563', '#d1d5db', '#9ca3af', '#6b7280'],
-        ['#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff'],
-        ['#000000', '#000000', '#000000', '#000000', '#000000', '#000000'],
-      ]
-    : [
-        ['#67b8ff', '#4aa3ff', '#8bd5ff', '#4aa3ff', '#67b8ff', '#8bd5ff'],
-        ['#8a2b06', '#c2410c', '#b91c1c', '#7c3aed', '#0369a1', '#0f766e'],
-        ['#111827', '#374151', '#6b7280', '#2563eb', '#059669', '#d97706'],
-        ['#9f1239', '#c2410c', '#ca8a04', '#15803d', '#0f766e', '#4338ca'],
-        ['#be185d', '#9333ea', '#2563eb', '#0891b2', '#16a34a', '#ea580c'],
-        ['#404040', '#525252', '#737373', '#a3a3a3', '#d4d4d4', '#171717'],
-        ['#111111', '#000000', '#1f2937', '#374151', '#4b5563', '#6b7280'],
-        ['#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff'],
-        ['#000000', '#000000', '#000000', '#000000', '#000000', '#000000'],
-      ], [theme.mode])
-  const activeBrandWordmark = brandWordmarks[brandWordmarkIndex % brandWordmarks.length]
-  void brandPalettes[brandPaletteIndex % brandPalettes.length]
-  void (activeBrandWordmark[0]
-    ? Math.min(1, (32 / activeBrandWordmark[0].length) * (
-      brandWordmarkIndex === 0 ? 1 : brandWordmarkIndex === 1 ? 1.44 : 1.2
-    )) * 0.62
-    : 1)
+  useBrandWordmarkPrefs(effectiveThemeId, theme.mode)
 
   const {
     sidebarFooterBottom,
@@ -2745,11 +2509,6 @@ function App(): JSX.Element {
     return () => hideCanvasGlow()
   }, [canvasGlowEnabled, hideCanvasGlow])
 
-  useEffect(() => {
-    if (!miniChatOptions) return
-    void window.electron?.window?.setTitle?.(miniChatOptions.title)
-  }, [miniChatOptions])
-
   const miniChatTile = miniChatOptions
     ? tiles.find(tile => tile.id === miniChatOptions.tileId && tile.type === 'chat')
     : null
@@ -2768,124 +2527,20 @@ function App(): JSX.Element {
 
   if (miniChatOptions) {
     return (
-      <ThemeProvider value={theme}>
-      <FontTokenProvider value={fontTokens}>
-      <FontProvider value={appFonts}>
-      <div
-        className="cs-mini-chat-window"
-        style={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          color: theme.text.primary,
-          fontFamily: appFonts.primary,
-          fontSize: appFonts.size,
-          background: theme.surface.app,
-        }}
-      >
-        <div
-          className="cs-mini-window-titlebar"
-          style={{
-            height: 38,
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            // Leave room for the macOS traffic lights (which overlay the
-            // renderer at top-left when titleBarStyle: 'hiddenInset').
-            padding: window.electron?.platform === 'darwin'
-              ? '0 10px 0 80px'
-              : '0 10px 0 14px',
-            borderBottom: `1px solid ${theme.border.subtle}`,
-            // Use the theme's titlebar surface so contrast tracks the rest
-            // of the palette. backdrop-filter still adds vibrancy on top.
-            background: theme.surface.titlebar,
-            backdropFilter: 'blur(18px)',
-            WebkitBackdropFilter: 'blur(18px)',
-            ...({ WebkitAppRegion: 'drag' } as React.CSSProperties),
-            userSelect: 'none',
-          }}
-        >
-          <span
-            aria-hidden="true"
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: theme.accent.base,
-              boxShadow: `0 0 14px ${theme.accent.base}`,
-              flexShrink: 0,
-            }}
-          />
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {miniChatOptions.title}
-            </div>
-            <div style={{ fontSize: 10, color: theme.text.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              Floating CodeSurf chat · {workspace?.name ?? 'loading workspace'}
-            </div>
-          </div>
-          <button
-            type="button"
-            title="Close mini chat"
-            onClick={async () => {
-              try {
-                const id = await window.electron?.window?.getCurrentId?.()
-                if (id !== undefined) await window.electron?.window?.closeById?.(id)
-                else window.close()
-              } catch {
-                window.close()
-              }
-            }}
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: 999,
-              border: `1px solid ${theme.border.subtle}`,
-              background: theme.surface.panelMuted,
-              color: theme.text.secondary,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              ...({ WebkitAppRegion: 'no-drag' } as React.CSSProperties),
-            }}
-          >
-            <X size={13} />
-          </button>
-        </div>
-        <div style={{ flex: 1, minHeight: 0, background: theme.chat.background }}>
-          <Suspense fallback={<div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12 }}>Loading chat…</div>}>
-            {miniChatTile ? (
-              <LazyChatTile
-                tileId={miniChatTile.id}
-                workspaceId={workspace?.id ?? miniChatOptions.workspaceId}
-                workspaceDir={workspace?.path ?? ''}
-                width={Math.max(360, window.innerWidth)}
-                height={Math.max(360, window.innerHeight - 38)}
-                reloadToken={chatReloadTokens[miniChatTile.id] ?? 0}
-                settings={settings}
-                onChatModePreferenceChange={rememberChatProviderMode}
-                isConnected={negotiatedDiscoveryState.connectedTileIds.has(miniChatTile.id)}
-                isAutoConnected={miniChatTile.autoAgentMode && negotiatedDiscoveryState.connectedTileIds.has(miniChatTile.id)}
-                connectedPeers={miniChatPeers}
-              />
-            ) : (
-              <div style={{ height: '100%', display: 'grid', placeItems: 'center', padding: 24, textAlign: 'center', color: theme.text.secondary }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 650, color: theme.text.primary, marginBottom: 6 }}>Chat unavailable</div>
-                  <div style={{ fontSize: 12, lineHeight: 1.5 }}>The source chat tile could not be found in this workspace.</div>
-                </div>
-              </div>
-            )}
-          </Suspense>
-        </div>
-      </div>
-      </FontProvider>
-      </FontTokenProvider>
-      </ThemeProvider>
+      <MiniChatWindow
+        miniChatOptions={miniChatOptions}
+        theme={theme}
+        appFonts={appFonts}
+        fontTokens={fontTokens}
+        workspace={workspace}
+        miniChatTile={miniChatTile}
+        miniChatPeers={miniChatPeers}
+        settings={settings}
+        chatReloadToken={miniChatTile ? (chatReloadTokens[miniChatTile.id] ?? 0) : 0}
+        isConnected={miniChatTile ? negotiatedDiscoveryState.connectedTileIds.has(miniChatTile.id) : false}
+        isAutoConnected={Boolean(miniChatTile?.autoAgentMode && miniChatTile && negotiatedDiscoveryState.connectedTileIds.has(miniChatTile.id))}
+        onChatModePreferenceChange={rememberChatProviderMode}
+      />
     )
   }
 
