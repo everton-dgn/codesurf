@@ -127,29 +127,26 @@ export function getEdgeShadow(theme: Pick<AppTheme, 'mode' | 'accent'>, tone: Ed
       // brightness it shows up as a hard white halo on every accented panel.
       // Anchor the inset purely on the accent so the highlight reads as
       // "this is the active accent" not "this is a glowing outline".
-      : `inset 0 0 0 0.5px color-mix(in srgb, ${theme.accent.base} 28%, transparent), 0 0 0 0.5px rgba(0, 0, 0, 0.22)`
+      : `inset 0 0 0 0.5px color-mix(in srgb, ${theme.accent.base} 34%, transparent), 0 0 0 0.5px rgba(255, 255, 255, 0.12)`
   }
 
-  // Light mode keeps its high-alpha "paper edge" highlights — they read as
-  // the natural top-of-page lighting on a paper canvas.
-  // Dark mode used to mirror this with low-alpha white inset highlights, but
-  // those produce a visible white halo around panels in true dark themes
-  // (especially on the leftmost column of a mid-tone panel against a darker
-  // canvas). Drop the white-inset to a near-imperceptible level and let the
-  // outer dark shadow do the elevation work — that's how modern dark UIs
-  // separate layers without the "glass on glass" Tahoe look.
-  const whiteAlpha = theme.mode === 'light'
-    ? tone === 'strong' ? 0.92 : tone === 'subtle' ? 0.68 : 0.82
-    : tone === 'strong' ? 0.06 : tone === 'subtle' ? 0.02 : 0.035
-  const blackAlpha = theme.mode === 'light'
-    ? 0.04
-    : tone === 'strong' ? 0.30 : tone === 'subtle' ? 0.16 : 0.22
+  // Light mode uses a restrained paper highlight plus a darker outer keyline
+  // so panel and element borders remain visible on bright surfaces. Dark mode
+  // keeps this to a single visible 0.5px light keyline — no doubled inset/outer
+  // ring — so unfocused prompt cards and settings panels don't look chunky.
+  if (theme.mode === 'dark') {
+    const alpha = tone === 'strong' ? 0.20 : tone === 'subtle' ? 0.10 : 0.16
+    return `0 0 0 0.5px rgba(255, 255, 255, ${alpha})`
+  }
+
+  const whiteAlpha = tone === 'strong' ? 0.74 : tone === 'subtle' ? 0.52 : 0.62
+  const outerAlpha = tone === 'strong' ? 0.12 : tone === 'subtle' ? 0.08 : 0.10
 
   // 0.5px hairline reads cleaner on hidpi than a full pixel — at 1px the
   // inset highlight + outer line both grab a full device pixel and the
   // edge feels too declarative. 0.5px gives a sub-pixel rim that still
   // separates the panel from the canvas.
-  return `inset 0 0 0 0.5px rgba(255, 255, 255, ${whiteAlpha}), 0 0 0 0.5px rgba(0, 0, 0, ${blackAlpha})`
+  return `inset 0 0 0 0.5px rgba(255, 255, 255, ${whiteAlpha}), 0 0 0 0.5px rgba(0, 0, 0, ${outerAlpha})`
 }
 
 export function stackEdgeShadow(theme: Pick<AppTheme, 'mode' | 'accent'>, shadow?: string, tone: EdgeShadowTone = 'default'): string {
@@ -522,39 +519,78 @@ function hexToRgb(hex: string): string {
   return '0,0,0'
 }
 
-function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {
-  const panelBackground = theme.surface.panel
-  const overlay = theme.surface.overlay ?? theme.surface.panelMuted
-  const base = theme.surface.base ?? theme.surface.panel
+function strengthenRgbaAlpha(value: string, minAlpha: number): string {
+  const match = value.match(/^rgba\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\)$/i)
+  if (!match) return value
+  const alpha = Math.max(Number.parseFloat(match[4]), minAlpha)
+  return `rgba(${match[1]},${match[2]},${match[3]},${Number(alpha.toFixed(3))})`
+}
+
+function strengthenThemeBorders(theme: AppTheme): AppTheme {
+  const light = theme.mode === 'light'
+  const subtle = strengthenRgbaAlpha(theme.border.subtle, light ? 0.10 : 0.14)
+  const defaultBorder = strengthenRgbaAlpha(theme.border.default, light ? 0.18 : 0.24)
+  const strong = strengthenRgbaAlpha(theme.border.strong, light ? 0.28 : 0.36)
+  const chatDefault = strengthenRgbaAlpha(theme.chat.inputBorder, light ? 0.18 : 0.22)
+  const chatDivider = strengthenRgbaAlpha(theme.chat.divider, light ? 0.12 : 0.14)
+  const chatBubble = strengthenRgbaAlpha(theme.chat.assistantBubbleBorder, light ? 0.11 : 0.12)
   return {
     ...theme,
+    border: {
+      ...theme.border,
+      subtle,
+      default: defaultBorder,
+      strong,
+    },
+    chat: {
+      ...theme.chat,
+      inputBorder: chatDefault,
+      divider: chatDivider,
+      assistantBubbleBorder: chatBubble,
+      userBubbleBorder: strengthenRgbaAlpha(theme.chat.userBubbleBorder, light ? 0.11 : 0.12),
+      dropdownBorder: strengthenRgbaAlpha(theme.chat.dropdownBorder, light ? 0.18 : 0.22),
+    },
+    extension: {
+      ...theme.extension,
+      border: strengthenRgbaAlpha(theme.extension.border, light ? 0.18 : 0.24),
+    },
+  }
+}
+
+function normalizePanelSurfaceTheme(theme: AppTheme): AppTheme {
+  const strengthenedTheme = strengthenThemeBorders(theme)
+  const panelBackground = strengthenedTheme.surface.panel
+  const overlay = strengthenedTheme.surface.overlay ?? strengthenedTheme.surface.panelMuted
+  const base = strengthenedTheme.surface.base ?? strengthenedTheme.surface.panel
+  return {
+    ...strengthenedTheme,
     surface: {
-      ...theme.surface,
+      ...strengthenedTheme.surface,
       overlay,
       base,
     },
     terminal: {
-      ...theme.terminal,
+      ...strengthenedTheme.terminal,
       background: panelBackground,
       cursorAccent: panelBackground,
     },
     editor: {
-      ...theme.editor,
+      ...strengthenedTheme.editor,
       background: panelBackground,
     },
     extension: {
-      ...theme.extension,
+      ...strengthenedTheme.extension,
       background: panelBackground,
     },
     chat: {
-      ...theme.chat,
-      userBubble: theme.chat.assistantBubble,
-      userBubbleBorder: theme.chat.assistantBubbleBorder,
+      ...strengthenedTheme.chat,
+      userBubble: strengthenedTheme.chat.assistantBubble,
+      userBubbleBorder: strengthenedTheme.chat.assistantBubbleBorder,
     },
     shadow: {
-      ...theme.shadow,
-      panel: stackEdgeShadow(theme, theme.shadow.panel),
-      modal: stackEdgeShadow(theme, theme.shadow.modal, 'strong'),
+      ...strengthenedTheme.shadow,
+      panel: stackEdgeShadow(strengthenedTheme, strengthenedTheme.shadow.panel),
+      modal: stackEdgeShadow(strengthenedTheme, strengthenedTheme.shadow.modal, 'strong'),
     },
   }
 }

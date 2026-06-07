@@ -52,6 +52,7 @@ export function TextInput({ value, onChange, width = 240, placeholder }: { value
 export function ColorSwatch({ value, onChange }: { value: string; onChange: (v: string) => void }): React.JSX.Element {
   const fonts = useAppFonts()
   const theme = useTheme()
+  const swatchBorder = theme.mode === 'dark' ? theme.border.subtle : theme.border.strong
   const colorInputValue = (() => {
     if (/^#[0-9a-f]{6}$/i.test(value)) return value
     if (/^#[0-9a-f]{3}$/i.test(value)) {
@@ -67,7 +68,7 @@ export function ColorSwatch({ value, onChange }: { value: string; onChange: (v: 
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <div style={{ position: 'relative' }}>
         <div
-          style={{ width: 28, height: 28, borderRadius: 6, background: value, cursor: 'pointer', border: `1px solid ${theme.border.strong}` }}
+          style={{ width: 28, height: 28, borderRadius: 6, background: value, cursor: 'pointer', border: `1px solid ${swatchBorder}` }}
           onClick={e => (e.currentTarget.nextSibling as HTMLInputElement | null)?.click()}
         />
         <input
@@ -144,13 +145,18 @@ export const MONO_FONTS = sortFonts([
   'monospace',
 ])
 
-export function FontSelect({ value, onChange, fonts }: { value: string; onChange: (v: string) => void; fonts: string[] }): React.JSX.Element {
+export function FontSelect({ value, onChange, fonts, borderColor }: { value: string; onChange: (v: string) => void; fonts: string[]; borderColor?: string }): React.JSX.Element {
   const displayName = fontDisplayName
   return (
     <UISelect
       value={value}
       onChange={e => onChange(e.target.value)}
-      style={{ width: '100%', maxWidth: 280, fontFamily: value }}
+      style={{
+        width: '100%',
+        maxWidth: 280,
+        fontFamily: value,
+        ...(borderColor ? { border: `1px solid ${borderColor}` } : {}),
+      }}
     >
       {fonts.map(f => (
         <option key={f} value={f} style={{ fontFamily: f }}>
@@ -169,10 +175,11 @@ export function FontSelect({ value, onChange, fonts }: { value: string; onChange
 export function SettingRow({ label, description, children }: { label: string; description?: string; children: React.ReactNode }): React.JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
+  const rowBorder = theme.mode === 'dark' ? theme.border.default : theme.border.subtle
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      background: theme.surface.panelMuted, border: `1px solid ${theme.border.subtle}`, borderRadius: 10, padding: '14px 16px',
+      background: theme.surface.panelMuted, border: `1px solid ${rowBorder}`, borderRadius: 10, padding: '14px 16px',
       marginBottom: 8, gap: 16,
     }}>
       <div style={{ flex: 1 }}>
@@ -227,13 +234,16 @@ export function CompactFontRow({ label, description, token, fontOptions, onChang
 }): React.JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
+  const isDark = theme.mode === 'dark'
+  const rowBorder = isDark ? theme.border.default : theme.border.subtle
+  const fieldBorder = isDark ? theme.border.subtle : theme.border.default
 
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
 
   const microFieldStyle: React.CSSProperties = {
     width: 56, height: 28,
     padding: '0 6px', borderRadius: 6,
-    border: `1px solid ${theme.border.default}`,
+    border: `1px solid ${fieldBorder}`,
     background: theme.surface.input,
     color: theme.text.primary,
     outline: 'none',
@@ -259,7 +269,7 @@ export function CompactFontRow({ label, description, token, fontOptions, onChang
       alignItems: 'center',
       padding: '10px 12px',
       background: theme.surface.panelMuted,
-      border: `1px solid ${theme.border.subtle}`,
+      border: `1px solid ${rowBorder}`,
       borderRadius: 10,
     }}>
       <div style={{ minWidth: 0 }}>
@@ -269,7 +279,7 @@ export function CompactFontRow({ label, description, token, fontOptions, onChang
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={microLabelStyle}>Family</div>
-          <FontSelect value={token.family} onChange={family => onChange({ ...token, family })} fonts={fontOptions} />
+          <FontSelect value={token.family} onChange={family => onChange({ ...token, family })} fonts={fontOptions} borderColor={fieldBorder} />
         </div>
         <div>
           <div style={microLabelStyle}>Size</div>

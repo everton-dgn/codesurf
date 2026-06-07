@@ -321,7 +321,7 @@ export function ChatTileComposer({
     }}>
       <ChatComposerCard style={{
         minHeight: CHAT_COMPOSER_MIN_HEIGHT,
-        border: isDropTarget ? `1px solid ${theme.accent.base}` : `1px solid ${composerBorder}`,
+        border: isDropTarget ? `1px solid ${theme.accent.base}` : `0.5px solid ${composerBorder}`,
         borderRadius: 14,
         background: isDropTarget ? theme.surface.accentSoft : composerBackground,
         position: 'relative',

@@ -1338,11 +1338,11 @@ function TileChromeComponent({
   const totalActivity = pendingTasks + drawerData.tools.filter(t => t.status === 'running').length
   const tilePanelShadow = theme.mode === 'light'
     ? isSelected
-      ? `inset 0 0 0 0.5px color-mix(in srgb, ${theme.accent.base} 36%, white 16%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 17%, transparent), 0 8px 18px color-mix(in srgb, ${theme.text.primary} 11%, transparent)`
-      : `inset 0 0 0 0.5px color-mix(in srgb, ${theme.surface.app} 88%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 14%, transparent), 0 7px 16px color-mix(in srgb, ${theme.text.primary} 9%, transparent)`
+      ? `inset 0 0 0 0.5px color-mix(in srgb, ${theme.accent.base} 40%, white 10%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 24%, transparent), 0 8px 18px color-mix(in srgb, ${theme.text.primary} 13%, transparent)`
+      : `inset 0 0 0 0.5px color-mix(in srgb, ${theme.surface.app} 70%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 20%, transparent), 0 7px 16px color-mix(in srgb, ${theme.text.primary} 11%, transparent)`
     : isSelected ? getEdgeShadow(theme, 'accent') : getEdgeShadow(theme, 'strong')
   const drawerPanelShadow = theme.mode === 'light'
-    ? `inset 0 0 0 0.5px color-mix(in srgb, ${theme.surface.app} 82%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 13%, transparent), 0 7px 16px color-mix(in srgb, ${theme.text.primary} 8%, transparent)`
+    ? `inset 0 0 0 0.5px color-mix(in srgb, ${theme.surface.app} 70%, transparent), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 18%, transparent), 0 7px 16px color-mix(in srgb, ${theme.text.primary} 10%, transparent)`
     : getEdgeShadow(theme, 'strong')
 
   return (
