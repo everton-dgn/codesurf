@@ -3,7 +3,7 @@ import type {
   AppSettings,
   SkillDefinition,
 } from '../../../shared/types'
-import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
+import { basename } from '../utils/dnd'
 
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
 
@@ -48,9 +48,11 @@ import { ToolPermissionProvider } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 
 import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
-import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
+import { useChatAutocomplete, CHAT_SLASH_COMMANDS } from '../hooks/useChatAutocomplete'
 import { useChatTileDreamPolling } from '../hooks/useChatTileDreamPolling'
 import { useChatTileComposerKeys } from '../hooks/useChatTileComposerKeys'
+import { useChatTileAttachments } from '../hooks/useChatTileAttachments'
+import { useChatAutocompleteSelection } from '../hooks/useChatAutocompleteSelection'
 import { useContributions } from '../hooks/useContributions'
 import { type PaletteCommand } from '../lib/commandRegistry'
 import { type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
@@ -522,7 +524,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // expand / re-collapse via the header.
   const [queueCollapsed, setQueueCollapsed] = useState(true)
   const prevQueuedCountRef = useRef(0)
-  const [isDropTarget, setIsDropTarget] = useState(false)
   const { gitStatus, gitBranches, refreshGitState } = useChatGitState(_workspaceDir)
   const pagedLinkedHistoryEnabledRef = useRef(pagedLinkedHistoryEnabled)
   pagedLinkedHistoryEnabledRef.current = pagedLinkedHistoryEnabled
@@ -1401,40 +1402,21 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     ta.style.height = `${Math.max(CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT, Math.min(ta.scrollHeight, 134))}px`
   }, [])
 
-  const addAttachments = useCallback((paths: string[]) => {
-    if (paths.length === 0) return
-    setAttachments(prev => {
-      const seen = new Set(prev.map(item => item.path))
-      const next = [...prev]
-      for (const path of paths) {
-        if (seen.has(path)) continue
-        seen.add(path)
-        next.push({ path, kind: isImagePath(path) ? 'image' : 'file' })
-      }
-      return next
-    })
-    setAcType(null)
-    setAcQuery('')
-    requestAnimationFrame(() => {
-      syncComposerHeight()
-      const ta = textareaRef.current
-      if (!ta) return
-      ta.focus()
-      const pos = ta.value.length
-      ta.setSelectionRange(pos, pos)
-    })
-  }, [syncComposerHeight])
-
-  const openAttachmentPicker = useCallback(async () => {
-    const paths = await window.electron.chat?.selectFiles()
-    if (paths && paths.length > 0) addAttachments(paths)
-    setShowInsertMenu(false)
-  }, [addAttachments])
-
-  const removeAttachment = useCallback((path: string) => {
-    setAttachments(prev => prev.filter(item => item.path !== path))
-    requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [])
+  const {
+    isDropTarget,
+    openAttachmentPicker,
+    removeAttachment,
+    handleTileDragOver,
+    handleTileDragLeave,
+    handleTileDrop,
+  } = useChatTileAttachments({
+    textareaRef,
+    syncComposerHeight,
+    setAttachments,
+    setAcType,
+    setAcQuery,
+    setShowInsertMenu,
+  })
 
   // ── Chat-surface extensions (e.g. Sketch) ─────────────────────────────────
   // Re-query whenever extensions are enabled/disabled or the global
@@ -1794,86 +1776,16 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     return () => window.removeEventListener('message', handler)
   }, [chatSurfaceMenu, chatSurfaceThemeColors, chatSurfaceThemeVars, getChatSurfaceIframe, getChatSurfacePeerEntries, openChatSurface, postToChatSurface])
 
-  const handleTileDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    // Ignore our own internal drags (queued-turn reorder, etc.) — they
-    // advertise themselves via a custom mime type so we don't mistake the
-    // drag for a file drop and trigger the attachment overlay.
-    const dt = e.dataTransfer
-    if (dt.types.includes('application/x-codesurf-queued-turn')) return
-    const hasFiles = dt.types.includes('Files')
-    const hasUri = dt.types.includes('text/uri-list')
-    const hasPlain = dt.types.includes('text/plain')
-    const hasFileRef = dt.types.includes('application/file-reference-path')
-    if (!hasFiles && !hasUri && !hasPlain && !hasFileRef) return
-    e.preventDefault()
-    e.stopPropagation()
-    e.dataTransfer.dropEffect = 'copy'
-    setIsDropTarget(true)
-  }, [])
-
-  const handleTileDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
-    setIsDropTarget(false)
-  }, [])
-
-  const handleTileDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    // Bail out of file-attachment handling when this is an internal drag
-    // (queued-turn reorder). The inner handlers already did the work and
-    // the text/plain payload is a queue id, not a path.
-    if (e.dataTransfer.types.includes('application/x-codesurf-queued-turn')) {
-      setIsDropTarget(false)
-      return
-    }
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDropTarget(false)
-    // Check file-reference-path first (from FileTile drags), then fall back to generic extraction
-    const fileRef = e.dataTransfer.getData('application/file-reference-path')
-    const droppedPaths = fileRef ? [fileRef] : getDroppedPaths(e.dataTransfer)
-    if (droppedPaths.length === 0) return
-    addAttachments(droppedPaths)
-  }, [addAttachments])
-
-  const selectAcItem = useCallback((item: AutocompleteItem) => {
-    const ta = textareaRef.current
-    if (!ta) return
-    const pos = ta.selectionStart ?? input.length
-    const textBefore = input.slice(0, pos)
-    const textAfter = input.slice(pos)
-
-    // Find the trigger start position
-    let triggerStart = pos
-    if (acType === 'slash') {
-      const match = textBefore.match(/(^|\s)(\/\w*)$/)
-      if (match) triggerStart = pos - match[2].length
-    } else if (acType === 'mention') {
-      const match = textBefore.match(/@[\w./]*$/)
-      if (match) triggerStart = pos - match[0].length
-    }
-
-    const replacement = item.value + ' '
-    const newVal = input.slice(0, triggerStart) + replacement + textAfter
-    setInput(newVal)
-    if (item.attachPath) {
-      const attachPath = item.attachPath
-      setAttachments(prev => {
-        if (prev.some(existing => existing.path === attachPath)) return prev
-        return [...prev, { path: attachPath, kind: isImagePath(attachPath) ? 'image' : 'file' }]
-      })
-    }
-    setAcType(null)
-    setAcQuery('')
-
-    // Restore focus and cursor position after React re-render
-    requestAnimationFrame(() => {
-      syncComposerHeight()
-      if (ta) {
-        ta.focus()
-        const newPos = triggerStart + replacement.length
-        ta.setSelectionRange(newPos, newPos)
-      }
-    })
-  }, [input, acType, syncComposerHeight])
+  const { selectAcItem } = useChatAutocompleteSelection({
+    input,
+    acType,
+    textareaRef,
+    syncComposerHeight,
+    setInput,
+    setAttachments,
+    setAcType,
+    setAcQuery,
+  })
 
   const { handleKeyDown, handleKeyUp } = useChatTileComposerKeys({
     input,

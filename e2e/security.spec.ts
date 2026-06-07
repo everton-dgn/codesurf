@@ -70,6 +70,48 @@ test.describe('Security hardening probes', () => {
     }
   })
 
+  test('legacy install migrates to workspace scoping on startup', async () => {
+    const launch = await launchCodeSurfElectron({
+      seedSettings: {
+        onboardingComplete: true,
+        security: {
+          restrictFsToWorkspaceRoots: false,
+        },
+      },
+    })
+
+    try {
+      const { page } = launch
+      await waitForElectronBridge(page, 'settings.get')
+
+      const probe = await page.evaluate(async () => {
+        const settings = await window.electron.settings.get()
+        try {
+          await window.electron.fs.readFile('/etc/passwd')
+          return {
+            migrated: settings.security?.restrictFsToWorkspaceRoots === true
+              && settings.security?.fsScopingMigrated === true,
+            blocked: false,
+            message: '',
+          }
+        } catch (error) {
+          return {
+            migrated: settings.security?.restrictFsToWorkspaceRoots === true
+              && settings.security?.fsScopingMigrated === true,
+            blocked: true,
+            message: error instanceof Error ? error.message : String(error),
+          }
+        }
+      })
+
+      expect(probe.migrated).toBe(true)
+      expect(probe.blocked).toBe(true)
+      expect(probe.message).toMatch(/outside allowed workspace roots|no workspace project folders configured/i)
+    } finally {
+      await closeCodeSurfElectron(launch)
+    }
+  })
+
   test('fresh install blocks sensitive paths before user changes settings', async () => {
     const launch = await launchCodeSurfElectron()
 

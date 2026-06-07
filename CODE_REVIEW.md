@@ -45,6 +45,7 @@
 | 4 | Extension activation policy, CI build+e2e, MCP auth test expansion |
 | 5 | `useTileMounting` hook, relay in `npm test`, Electrobun security parity, audit refresh |
 | 6 | Panel tree utils, tile clipboard/shortcuts hooks, FS scoping migration, ChatTile dream/composer hooks, Electrobun extension policy bridge |
+| 7 | Group manager + canvas keyboard hooks, ChatTile attachment/autocomplete hooks, Electrobun ext:list scan, legacy FS migration E2E |
 
 ---
 

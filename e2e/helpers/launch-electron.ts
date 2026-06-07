@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
@@ -13,8 +13,20 @@ export interface LaunchedElectronApp {
   homeDir: string
 }
 
-export async function launchCodeSurfElectron(): Promise<LaunchedElectronApp> {
+export type LaunchCodeSurfOptions = {
+  seedSettings?: Record<string, unknown>
+}
+
+export async function launchCodeSurfElectron(options?: LaunchCodeSurfOptions): Promise<LaunchedElectronApp> {
   const homeDir = await mkdtemp(join(tmpdir(), 'codesurf-e2e-home-'))
+  if (options?.seedSettings) {
+    const contexHome = join(homeDir, '.codesurf')
+    await mkdir(contexHome, { recursive: true })
+    await writeFile(
+      join(contexHome, 'settings.json'),
+      JSON.stringify({ version: 1, settings: options.seedSettings }, null, 2),
+    )
+  }
 
   const app = await electron.launch({
     executablePath: resolveElectronExecutable(),
