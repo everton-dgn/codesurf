@@ -60,6 +60,8 @@ export type CanvasEnginePersistRefs = {
   activePanelIdRef: MutableRefObject<string | null>
   expandedTileIdRef: MutableRefObject<string | null>
   expandedCanvasGroupIdRef: MutableRefObject<string | null>
+  /** When true, debounced canvas persistence is deferred until drag ends. */
+  canvasPersistSuspendedRef?: MutableRefObject<boolean>
 }
 
 export type UseCanvasEngineOptions = {
@@ -73,7 +75,6 @@ export type UseCanvasEngineOptions = {
   persistRefs: CanvasEnginePersistRefs
   setTiles: Dispatch<SetStateAction<TileState[]>>
   setGroups: Dispatch<SetStateAction<GroupState[]>>
-  isEditableTarget: (target: EventTarget | null) => boolean
   /** Optional initial viewport when restoring saved canvas state. */
   initialViewport?: CanvasViewport
   initialNextZIndex?: number
@@ -257,6 +258,9 @@ export type UseCanvasEngineReturn = {
   resetViewportState: () => void
   handleWheel: (e: React.WheelEvent) => void
   scheduleViewportUpdate: (nextViewport: CanvasViewport) => void
+  undoCanvas: () => void
+  redoCanvas: () => void
+  flushDeferredCanvasPersist: () => void
 }
 
 export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngineReturn {
@@ -271,7 +275,6 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     persistRefs,
     setTiles,
     setGroups,
-    isEditableTarget,
     initialViewport,
     initialNextZIndex,
   } = options
@@ -295,6 +298,12 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
   const expandedCanvasPriorViewportRef = useRef<CanvasViewport | null>(null)
   const persistCanvasStateRef = useRef<PersistCanvasStateFn | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingPersistRef = useRef<{
+    tileList: TileState[]
+    vp: CanvasViewport
+    nz: number
+    grps: GroupState[]
+  } | null>(null)
   const persistRefsRef = useRef(persistRefs)
   persistRefsRef.current = persistRefs
 
@@ -339,11 +348,14 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     panInertiaRaf.current = requestAnimationFrame(animate)
   }, [])
 
-  const persistCanvasState = useCallback<PersistCanvasStateFn>((tileList, vp, nz, grps) => {
+  const schedulePersistWrite = useCallback((
+    tileList: TileState[],
+    vp: CanvasViewport,
+    nz: number,
+    resolvedGroups: GroupState[],
+  ) => {
     if (!workspace) return
     const refs = persistRefsRef.current
-    const resolvedGroups = grps ?? refs.groupsRef.current
-
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
       const state = buildCanvasStatePayload(
@@ -357,6 +369,26 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
       window.electron.canvas.save(workspace.id, state)
     }, CANVAS_SAVE_DEBOUNCE_MS)
   }, [workspace])
+
+  const persistCanvasState = useCallback<PersistCanvasStateFn>((tileList, vp, nz, grps) => {
+    if (!workspace) return
+    const refs = persistRefsRef.current
+    const resolvedGroups = grps ?? refs.groupsRef.current
+
+    if (refs.canvasPersistSuspendedRef?.current) {
+      pendingPersistRef.current = { tileList, vp, nz, grps: resolvedGroups }
+      return
+    }
+
+    schedulePersistWrite(tileList, vp, nz, resolvedGroups)
+  }, [workspace, schedulePersistWrite])
+
+  const flushDeferredCanvasPersist = useCallback(() => {
+    const pending = pendingPersistRef.current
+    if (!pending) return
+    pendingPersistRef.current = null
+    schedulePersistWrite(pending.tileList, pending.vp, pending.nz, pending.grps)
+  }, [schedulePersistWrite])
 
   const saveCanvas = useCallback<SaveCanvasFn>((tileList, vp, nz, grps) => {
     if (!workspace) return
@@ -508,74 +540,47 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     return () => el.removeEventListener('wheel', onWheel)
   }, [canvasRef, viewport])
 
-  // Undo / redo
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return
-      const mod = e.metaKey || e.ctrlKey
-      if (!mod) return
-
-      const isUndo = e.key === 'z' && !e.shiftKey
-      const isRedo = (e.key === 'z' && e.shiftKey) || e.key === 'y'
-      if (!isUndo && !isRedo) return
-      e.preventDefault()
-
-      if (isUndo && historyBack.current.length > 0) {
-        const prev = historyBack.current.pop()!
-        historyForward.current.push({
-          tiles: persistRefsRef.current.tilesRef.current,
-          groups: persistRefsRef.current.groupsRef.current,
-        })
-        skipHistory.current = true
-        setTiles(prev.tiles)
-        setGroups(prev.groups)
-        if (workspace) {
-          if (saveTimer.current) clearTimeout(saveTimer.current)
-          saveTimer.current = setTimeout(() => {
-            const state: CanvasState = {
-              tiles: prev.tiles,
-              groups: prev.groups,
-              viewport: viewportRef.current,
-              nextZIndex: nextZIndexRef.current,
-            }
-            window.electron.canvas.save(workspace.id, state)
-            skipHistory.current = false
-          }, CANVAS_SAVE_DEBOUNCE_MS)
-        } else {
-          skipHistory.current = false
+  const applyHistoryEntry = useCallback((entry: CanvasHistoryEntry) => {
+    skipHistory.current = true
+    setTiles(entry.tiles)
+    setGroups(entry.groups)
+    if (workspace) {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => {
+        const state: CanvasState = {
+          tiles: entry.tiles,
+          groups: entry.groups,
+          viewport: viewportRef.current,
+          nextZIndex: nextZIndexRef.current,
         }
-      }
-
-      if (isRedo && historyForward.current.length > 0) {
-        const next = historyForward.current.pop()!
-        historyBack.current.push({
-          tiles: persistRefsRef.current.tilesRef.current,
-          groups: persistRefsRef.current.groupsRef.current,
-        })
-        if (historyBack.current.length > HISTORY_MAX_ENTRIES) historyBack.current.shift()
-        skipHistory.current = true
-        setTiles(next.tiles)
-        setGroups(next.groups)
-        if (workspace) {
-          if (saveTimer.current) clearTimeout(saveTimer.current)
-          saveTimer.current = setTimeout(() => {
-            const state: CanvasState = {
-              tiles: next.tiles,
-              groups: next.groups,
-              viewport: viewportRef.current,
-              nextZIndex: nextZIndexRef.current,
-            }
-            window.electron.canvas.save(workspace.id, state)
-            skipHistory.current = false
-          }, CANVAS_SAVE_DEBOUNCE_MS)
-        } else {
-          skipHistory.current = false
-        }
-      }
+        window.electron.canvas.save(workspace.id, state)
+        skipHistory.current = false
+      }, CANVAS_SAVE_DEBOUNCE_MS)
+    } else {
+      skipHistory.current = false
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [workspace, isEditableTarget, setTiles, setGroups])
+  }, [workspace, setTiles, setGroups])
+
+  const undoCanvas = useCallback(() => {
+    if (historyBack.current.length === 0) return
+    const prev = historyBack.current.pop()!
+    historyForward.current.push({
+      tiles: persistRefsRef.current.tilesRef.current,
+      groups: persistRefsRef.current.groupsRef.current,
+    })
+    applyHistoryEntry(prev)
+  }, [applyHistoryEntry])
+
+  const redoCanvas = useCallback(() => {
+    if (historyForward.current.length === 0) return
+    const next = historyForward.current.pop()!
+    historyBack.current.push({
+      tiles: persistRefsRef.current.tilesRef.current,
+      groups: persistRefsRef.current.groupsRef.current,
+    })
+    if (historyBack.current.length > HISTORY_MAX_ENTRIES) historyBack.current.shift()
+    applyHistoryEntry(next)
+  }, [applyHistoryEntry])
 
   persistCanvasStateRef.current = persistCanvasState
 
@@ -613,6 +618,9 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     resetViewportState,
     handleWheel,
     scheduleViewportUpdate,
+    undoCanvas,
+    redoCanvas,
+    flushDeferredCanvasPersist,
   }
 }
 

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
-import { Ungroup, Grid2x2X, Scissors, ClipboardPaste, Maximize2, LayoutGrid, Plus, Package, Link2, X } from 'lucide-react'
+import { Plus, Package, Link2, X } from 'lucide-react'
+import { CanvasGroupFrames } from './components/canvas/CanvasGroupFrames'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
 import { TileColorProvider } from './TileColorContext'
@@ -27,7 +28,7 @@ import { useTileClipboard } from './hooks/useTileClipboard'
 import { useCanvasTileShortcuts } from './hooks/useCanvasTileShortcuts'
 import { useCanvasGroupManager } from './hooks/useCanvasGroupManager'
 import { useCanvasKeyboard } from './hooks/useCanvasKeyboard'
-import { isEditableTarget } from './utils/editableTarget'
+
 import { getMinTileHeight, getMinTileWidth, rectsOverlap } from './utils/tilePlacement'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
@@ -1192,6 +1193,7 @@ function App(): JSX.Element {
   const closeCtx = useCallback(() => setCtxMenu(null), [])
 
   const canvasRef = useRef<HTMLDivElement>(null)
+  const canvasPersistSuspendedRef = useRef(false)
 
   const canvasEngine = useCanvasEngine({
     workspace,
@@ -1210,10 +1212,10 @@ function App(): JSX.Element {
       activePanelIdRef,
       expandedTileIdRef,
       expandedCanvasGroupIdRef,
+      canvasPersistSuspendedRef,
     },
     setTiles,
     setGroups,
-    isEditableTarget,
   })
 
   const {
@@ -1239,6 +1241,9 @@ function App(): JSX.Element {
     restoreViewport,
     resetViewportState,
     handleWheel,
+    undoCanvas,
+    redoCanvas,
+    flushDeferredCanvasPersist,
   } = canvasEngine
 
   const dotGlowSmallRef = useRef<HTMLDivElement>(null)
@@ -1736,39 +1741,13 @@ function App(): JSX.Element {
     }
   }, [])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      // Canvas-expanded group takes precedence over panel-layout expanded mode
-      if (expandedCanvasGroupIdRef.current) {
-        exitCanvasExpandedRef.current()
-        return
-      }
-      exitExpandedMode()
+  const handleCanvasEscape = useCallback(() => {
+    if (expandedCanvasGroupIdRef.current) {
+      exitCanvasExpandedRef.current()
+      return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    exitExpandedMode()
   }, [exitExpandedMode])
-
-  // ─── Space key for pan mode ───────────────────────────────────────────────
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
-        if (isEditableTarget(e.target)) return
-        e.preventDefault()
-        spaceHeld.current = true
-      }
-    }
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceHeld.current = false
-    }
-    window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('keyup', onKeyUp)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('keyup', onKeyUp)
-    }
-  }, [])
 
   const triggerDiscoveryPulse = useCallback((tileId: string, tileList: TileState[]) => {
     if (!autoConnectionsEnabled) return
@@ -2804,7 +2783,20 @@ function App(): JSX.Element {
     selectedTileIds,
     groupSelectedTiles,
     setCommandPaletteOpen,
+    undoCanvas,
+    redoCanvas,
+    onEscape: handleCanvasEscape,
+    spaceHeldRef: spaceHeld,
   })
+
+  useEffect(() => {
+    const suspendDuringDrag = dragState.type === 'tile'
+      || dragState.type === 'resize'
+      || dragState.type === 'group'
+      || dragState.type === 'group-resize'
+    canvasPersistSuspendedRef.current = suspendDuringDrag
+    if (!suspendDuringDrag) flushDeferredCanvasPersist()
+  }, [dragState.type, flushDeferredCanvasPersist])
 
   // ─── Open a layout preset contributed by a plugin (point 10) ──
   // A plugin's contributes.layoutPresets[].layout (a LayoutTemplateNode) is applied
@@ -4982,402 +4974,43 @@ function App(): JSX.Element {
               transformOrigin: '0 0'
             }}
           >
-            {/* Group frames — sorted so parents render behind children */}
-            {[...groups]
-              .sort((a, b) => (a.parentGroupId ? 1 : 0) - (b.parentGroupId ? 1 : 0))
-              .map(g => {
-                const b = groupBounds(g.id)
-                if (!b) return null
-                // Canvas-expanded mode: hide non-member groups entirely, and
-                // hide the expanded group's OWN chrome (border + label bar)
-                // since the whole canvas now represents that group.
-                if (expandedCanvasMembership) {
-                  if (!expandedCanvasMembership.groupIds.has(g.id)) return null
-                  if (g.id === expandedCanvasGroupId) return null
-                }
-
-                // ── Layout-mode group: embedded PanelLayout ──────────────────
-                if (g.layoutMode && g.layout) {
-                  const lb = b
-                  const layout = g.layout as PanelNode
-                  const color = g.color ?? '#4a9eff'
-                  const borderColor = color + 'bb'
-                  const labelColor = color + 'ee'
-                  const isDraggingThis = dragState.type === 'group' && dragState.groupId === g.id
-                  const HEADER_H = 32  // world px — scales with canvas zoom like tile chrome
-
-                  return (
-                    <div
-                      key={g.id}
-                      style={{
-                        position: 'absolute',
-                        left: lb.x, top: lb.y, width: lb.w, height: lb.h,
-                        border: `2px solid ${borderColor}`,
-                        borderRadius: 12,
-                        background: theme.surface.panel,  // opaque — prevents grid bleed-through
-                        zIndex: isDraggingThis ? 99989 : 8,
-                        boxSizing: 'border-box',
-                        overflow: 'hidden',
-                        cursor: 'default',
-                      }}
-                      onMouseDown={e => e.stopPropagation()}
-                    >
-                      {/* Header — fixed world-px height, scales naturally with canvas zoom */}
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: 0, left: 0, right: 0,
-                          height: HEADER_H,
-                          display: 'flex', alignItems: 'center', gap: 8,
-                          padding: '0 10px',
-                          background: color + '22',
-                          borderBottom: `1px solid ${borderColor}`,
-                          cursor: isDraggingThis ? 'grabbing' : 'grab',
-                          userSelect: 'none',
-                          boxSizing: 'border-box',
-                        }}
-                        onMouseDown={e => {
-                          e.stopPropagation()
-                          setDragState({
-                            type: 'group',
-                            groupId: g.id,
-                            startX: e.clientX, startY: e.clientY,
-                            snapshots: [],
-                            initLayoutBounds: lb,
-                          })
-                        }}
-                        onDoubleClick={e => { e.stopPropagation(); expandLayoutGroup(g.id) }}
-                      >
-                        <LayoutGrid size={12} style={{ color: labelColor, flexShrink: 0, opacity: 0.7 }} />
-                        <span style={{ fontSize: appFonts.secondarySize, color: labelColor, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {g.label ?? 'layout'}
-                        </span>
-                        <div
-                          title="Expand fullscreen"
-                          onClick={e => { e.stopPropagation(); expandLayoutGroup(g.id) }}
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 4, cursor: 'pointer', color: labelColor, opacity: 0.6 }}
-                          onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
-                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.6' }}
-                        >
-                          <Maximize2 size={11} />
-                        </div>
-                        <div
-                          title="Back to blocks"
-                          onClick={e => { e.stopPropagation(); revertLayoutGroup(g.id) }}
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 4, cursor: 'pointer', color: labelColor, opacity: 0.6 }}
-                          onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
-                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.6' }}
-                        >
-                          <Ungroup size={11} />
-                        </div>
-                      </div>
-
-                      {/* Resize handles */}
-                      {([ 'n','s','e','w','ne','nw','se','sw' ] as const).map(dir => {
-                        const S = 10 / viewport.zoom
-                        const hs: React.CSSProperties = { position: 'absolute', zIndex: 20 }
-                        if (dir === 'e')  Object.assign(hs, { right: -S/2,  top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                        if (dir === 'w')  Object.assign(hs, { left: -S/2,   top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                        if (dir === 's')  Object.assign(hs, { bottom: -S/2, left: S,     right: S,       height: S, cursor: 'row-resize' })
-                        if (dir === 'n')  Object.assign(hs, { top: -S/2,    left: S,     right: S,       height: S, cursor: 'row-resize' })
-                        if (dir === 'se') Object.assign(hs, { right: -S/2,  bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'se-resize' })
-                        if (dir === 'sw') Object.assign(hs, { left: -S/2,   bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'sw-resize' })
-                        if (dir === 'ne') Object.assign(hs, { right: -S/2,  top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'ne-resize' })
-                        if (dir === 'nw') Object.assign(hs, { left: -S/2,   top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'nw-resize' })
-                        return (
-                          <div
-                            key={dir}
-                            style={hs}
-                            onMouseDown={e => {
-                              e.stopPropagation()
-                              e.preventDefault()
-                              setDragState({
-                                type: 'group-resize',
-                                groupId: g.id, dir,
-                                startX: e.clientX, startY: e.clientY,
-                                initBounds: { x: lb.x, y: lb.y, w: lb.w, h: lb.h },
-                                snapshots: [],
-                              })
-                            }}
-                          />
-                        )
-                      })}
-
-                      {/* Embedded PanelLayout */}
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: HEADER_H, left: 0, right: 0, bottom: 0,
-                          overflow: 'hidden',
-                        }}
-                      >
-                        <Suspense fallback={null}>
-                          <LazyPanelLayout
-                            root={layout}
-                            getTileLabel={getPanelTileLabel}
-                            renderTile={(tileId) => {
-                              const t = tiles.find(ti => ti.id === tileId)
-                              if (!t) return null
-                              return (
-                                <Suspense fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12 }}>Loading…</div>}>
-                                  {renderTileBody(t)}
-                                </Suspense>
-                              )
-                            }}
-                            onLayoutChange={(newLayout) => {
-                              setGroups(prev => {
-                                const updated = prev.map(gr => gr.id === g.id ? { ...gr, layout: newLayout } : gr)
-                                setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, updated), 0)
-                                return updated
-                              })
-                            }}
-                            onCloseTab={(tileId) => {
-                              setGroups(prev => {
-                                const updated = prev.map(gr => {
-                                  if (gr.id !== g.id || !gr.layout) return gr
-                                  const newLayout = removeTileFromTree(gr.layout as PanelNode, tileId)
-                                  return { ...gr, layout: newLayout ?? undefined }
-                                })
-                                return updated
-                              })
-                            }}
-                            onAddTile={() => { /* handled externally */ }}
-                            onExit={() => revertLayoutGroup(g.id)}
-                            activePanelId={null}
-                            onActivePanelChange={() => { /* no-op for embedded */ }}
-                            getTileType={(tileId) => tiles.find(t => t.id === tileId)?.type ?? 'note'}
-                            getTileIcon={getPanelTileIcon}
-                            onSplitNew={(panelId, tileType, zone) => {
-                              const { w, h } = getInitialTileSize(tileType as TileState['type'])
-                              const newTile: TileState = {
-                                id: `tile-${Date.now()}`,
-                                type: tileType as TileState['type'],
-                                x: 0, y: 0,
-                                width: w, height: h, zIndex: nextZIndex,
-                                groupId: g.id,
-                              }
-                              setTiles(prev => [...prev, newTile])
-                              setNextZIndex(prev => prev + 1)
-                              setGroups(prev => {
-                                const updated = prev.map(gr => gr.id === g.id && gr.layout
-                                  ? { ...gr, layout: splitLeaf(gr.layout as PanelNode, panelId, newTile.id, zone) }
-                                  : gr)
-                                return updated
-                              })
-                            }}
-                            onCloseOthers={(panelId, tileId) => {
-                              setGroups(prev => prev.map(gr => gr.id === g.id && gr.layout
-                                ? { ...gr, layout: closeOthersInLeaf(gr.layout as PanelNode, panelId, tileId) }
-                                : gr))
-                            }}
-                            onCloseToRight={(panelId, tileId) => {
-                              setGroups(prev => prev.map(gr => gr.id === g.id && gr.layout
-                                ? { ...gr, layout: closeToRightInLeaf(gr.layout as PanelNode, panelId, tileId) }
-                                : gr))
-                            }}
-                            onLaunchTemplate={() => { /* no-op in embedded mode */ }}
-                          />
-                        </Suspense>
-                      </div>
-                    </div>
-                  )
-                }
-
-                const isNested = !!g.parentGroupId
-                const defaultColor = isNested ? '#ffb432' : '#4a9eff'
-                const color = g.color ?? defaultColor
-                const borderColor = color + 'cc'
-                const bgColor = color + '14'
-                const labelColor = color + 'ee'
-                const isDraggingThis = (dragState.type === 'group' || dragState.type === 'group-resize') && dragState.groupId === g.id
-                return (
-                  <div
-                    key={g.id}
-                    style={{
-                      position: 'absolute',
-                      left: b.x, top: b.y, width: b.w, height: b.h,
-                      border: `2px dashed ${borderColor}`,
-                      borderRadius: 12,
-                      background: bgColor,
-                      // Drop the resting zIndex to 'auto' so the group div
-                      // doesn't create a stacking context. That lets the label
-                      // bar inside use a high zIndex to render ABOVE tiles
-                      // (which is what the user wants). Nested vs outer order
-                      // is preserved by DOM order (sort above renders parents
-                      // first). Dragging still pops to a very high zIndex.
-                      zIndex: isDraggingThis ? 99989 : ('auto' as React.CSSProperties['zIndex']),
-                      boxSizing: 'border-box',
-                      cursor: isDraggingThis ? 'grabbing' : 'grab',
-                    }}
-                    onMouseDown={e => {
-                      if ((e.target as HTMLElement) !== e.currentTarget) return
-                      e.stopPropagation()
-                      const ids = collectGroupTileIds(g.id)
-                      const snapshots = tiles
-                        .filter(t => ids.includes(t.id))
-                        .map(t => ({ id: t.id, x: t.x, y: t.y }))
-                      setDragState({ type: 'group', groupId: g.id, startX: e.clientX, startY: e.clientY, snapshots })
-                    }}
-                  >
-                    {/* Label bar */}
-                    <div
-                      draggable
-                      onMouseDown={e => e.stopPropagation()}
-                      onDragStart={e => {
-                        e.stopPropagation()
-                        const memberTiles = tiles.filter(t => t.groupId === g.id)
-                        e.dataTransfer.setData('application/group-id', g.id)
-                        e.dataTransfer.setData('application/group-label', g.label ?? 'group')
-                        e.dataTransfer.setData('application/group-tile-ids', JSON.stringify(memberTiles.map(t => t.id)))
-                        e.dataTransfer.setData('application/group-tile-types', JSON.stringify(memberTiles.map(t => t.type)))
-                        e.dataTransfer.effectAllowed = 'link'
-                        const ghost = document.createElement('div')
-                        ghost.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px'
-                        document.body.appendChild(ghost)
-                        e.dataTransfer.setDragImage(ghost, 0, 0)
-                        setTimeout(() => ghost.remove(), 0)
-                      }}
-                      style={{
-                        // Sits just above the dashed group border with a
-                        // small breathing-room gap.
-                        position: 'absolute', top: -36 / viewport.zoom, left: 0,
-                        display: 'flex', gap: 6, alignItems: 'center',
-                        userSelect: 'none', pointerEvents: 'all',
-                        background: 'none',
-                        border: 'none',
-                        padding: '3px 0',
-                        cursor: 'grab',
-                        transform: `scale(${1 / viewport.zoom})`,
-                        transformOrigin: 'left top',
-                        // Lift the toolbar above tiles AND the per-tile link
-                        // sensors (zIndex 99991), which otherwise eat clicks
-                        // when they reach above their tile into the toolbar's
-                        // area. Group div uses zIndex 'auto' so this value
-                        // participates in the world container's stacking
-                        // context directly.
-                        zIndex: 99995,
-                      }}>
-                      {/* Color swatch / picker */}
-                      <div style={{ position: 'relative' }}>
-                        <div
-                          style={{
-                            width: 12, height: 12, borderRadius: '50%',
-                            background: color, cursor: 'pointer', flexShrink: 0,
-                            border: `1px solid ${theme.border.default}`
-                          }}
-                          onClick={e => {
-                            e.stopPropagation()
-                            const input = e.currentTarget.nextSibling as HTMLInputElement
-                            input?.click()
-                          }}
-                        />
-                        <input
-                          type="color"
-                          value={color}
-                          onChange={e => {
-                            const newColor = e.target.value
-                            setGroups(prev => {
-                              const updated = prev.map(gr => gr.id === g.id ? { ...gr, color: newColor } : gr)
-                              setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-                              return updated
-                            })
-                          }}
-                          style={{
-                            position: 'absolute', opacity: 0, width: 0, height: 0,
-                            top: 0, left: 0, pointerEvents: 'none'
-                          }}
-                        />
-                      </div>
-
-                      {/* Editable label */}
-                      <span
-                        contentEditable
-                        suppressContentEditableWarning
-                        onBlur={e => {
-                          const newLabel = e.currentTarget.textContent?.trim() || 'group'
-                          setGroups(prev => {
-                            const updated = prev.map(gr => gr.id === g.id ? { ...gr, label: newLabel } : gr)
-                            setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-                            return updated
-                          })
-                        }}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLElement).blur() } e.stopPropagation() }}
-                        onClick={e => e.stopPropagation()}
-                        style={{ fontSize: appFonts.secondarySize, color: labelColor, fontWeight: 500, minWidth: 30, outline: 'none', cursor: 'text', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                        {g.label ?? 'group'}
-                      </span>
-
-                      <span style={{ width: 1, height: 12, background: color, opacity: 0.3 }} />
-
-                      {([
-                        { icon: <LayoutGrid size={14} />, label: 'Make layout', action: () => convertGroupToLayout(g.id) },
-                        { icon: <Ungroup size={14} />, label: 'Ungroup', action: () => ungroupTilesRef.current(g.id) },
-                        { icon: <Grid2x2X size={14} />, label: 'Ungroup all', action: () => ungroupAllRef.current(g.id) },
-                        { icon: <Scissors size={14} />, label: 'Cut', action: () => {
-                          const ids = collectGroupTileIds(g.id)
-                          setSelectedTileIds(new Set(ids))
-                          setSelectedTileId(null)
-                          setTimeout(() => copyTilesRef.current(true), 0)
-                        }},
-                        ...(clipboardRef.current.length > 0 ? [{ icon: <ClipboardPaste size={14} />, label: 'Paste in', action: () => pasteTilesRef.current(undefined, g.id) }] : []),
-                        // Expand this group as a fullscreen sub-canvas (tiles remain freely positioned)
-                        { icon: <Maximize2 size={14} />, label: 'Expand as canvas', action: () => enterCanvasExpanded(g.id) },
-                      ] as { icon: React.ReactNode; label: string; action: () => void }[]).map(btn => (
-                        <div
-                          key={btn.label}
-                          title={btn.label}
-                          onClick={e => { e.stopPropagation(); btn.action() }}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            width: 24, height: 24, borderRadius: 4, cursor: 'pointer',
-                            color: labelColor, opacity: 0.6,
-                          }}
-                          onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
-                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.6' }}
-                        >
-                          {btn.icon}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Resize handles */}
-                    {([ 'n','s','e','w','ne','nw','se','sw' ] as const).map(dir => {
-                      const S = 10
-                      const hs: React.CSSProperties = { position: 'absolute', zIndex: 20 }
-                      if (dir === 'e')  Object.assign(hs, { right: -S/2,  top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                      if (dir === 'w')  Object.assign(hs, { left: -S/2,   top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                      if (dir === 's')  Object.assign(hs, { bottom: -S/2, left: S,     right: S,       height: S, cursor: 'row-resize' })
-                      if (dir === 'n')  Object.assign(hs, { top: -S/2,    left: S,     right: S,       height: S, cursor: 'row-resize' })
-                      if (dir === 'se') Object.assign(hs, { right: -S/2,  bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'se-resize' })
-                      if (dir === 'sw') Object.assign(hs, { left: -S/2,   bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'sw-resize' })
-                      if (dir === 'ne') Object.assign(hs, { right: -S/2,  top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'ne-resize' })
-                      if (dir === 'nw') Object.assign(hs, { left: -S/2,   top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'nw-resize' })
-                      return (
-                        <div
-                          key={dir}
-                          style={hs}
-                          onMouseDown={e => {
-                            e.stopPropagation()
-                            e.preventDefault()
-                            const ids = collectGroupTileIds(g.id)
-                            const snapshots = tiles
-                              .filter(t => ids.includes(t.id))
-                              .map(t => ({ id: t.id, x: t.x, y: t.y, width: t.width, height: t.height }))
-                            setDragState({
-                              type: 'group-resize',
-                              groupId: g.id, dir,
-                              startX: e.clientX, startY: e.clientY,
-                              initBounds: { x: b.x + 20, y: b.y + 20, w: b.w - 40, h: b.h - 40 }, // strip PAD
-                              snapshots
-                            })
-                          }}
-                        />
-                      )
-                    })}
-                  </div>
-                )
-              })
-            }
+            <CanvasGroupFrames
+              groups={groups}
+              tiles={tiles}
+              viewport={viewport}
+              dragState={dragState}
+              setDragState={setDragState}
+              expandedCanvasGroupId={expandedCanvasGroupId}
+              expandedCanvasMembership={expandedCanvasMembership}
+              theme={theme}
+              appFonts={appFonts}
+              nextZIndex={nextZIndex}
+              setNextZIndex={setNextZIndex}
+              clipboardLength={clipboardRef.current.length}
+              groupBounds={groupBounds}
+              collectGroupTileIds={collectGroupTileIds}
+              convertGroupToLayout={convertGroupToLayout}
+              revertLayoutGroup={revertLayoutGroup}
+              expandLayoutGroup={expandLayoutGroup}
+              enterCanvasExpanded={enterCanvasExpanded}
+              ungroupTiles={ungroupTiles}
+              ungroupAll={ungroupAll}
+              copyTiles={copyTiles}
+              pasteTiles={pasteTiles}
+              setGroups={setGroups}
+              setTiles={setTiles}
+              setSelectedTileId={setSelectedTileId}
+              setSelectedTileIds={setSelectedTileIds}
+              saveCanvas={saveCanvas}
+              persistCanvasState={persistCanvasState}
+              tilesRef={tilesRef}
+              viewportRef={viewportRef}
+              nextZIndexRef={nextZIndexRef}
+              getPanelTileLabel={getPanelTileLabel}
+              getPanelTileIcon={getPanelTileIcon}
+              getInitialTileSize={getInitialTileSize}
+              renderTileBody={renderTileBody}
+            />
 
             {/* Rubber-band selection rect */}
             {dragState.type === 'select' && (() => {
