@@ -52,8 +52,9 @@
     "smoke:electrobun": "npm run build:electrobun && node scripts/smoke-electrobun.mjs",
     "acceptance:electrobun": "npm run build:electrobun && node scripts/accept-electrobun.mjs",
     "validate-extension": "node scripts/validate-extension.mjs",
+    "ensure-electron": "node scripts/ensure-electron.js",
     "rebuild": "node scripts/patch-node-pty-win.js && electron-rebuild -f -o better-sqlite3 && electron-rebuild -f -o node-pty",
-    "postinstall": "node scripts/patch-node-pty-win.js && electron-rebuild -f -o better-sqlite3 && electron-rebuild -f -o node-pty"
+    "postinstall": "node scripts/ensure-electron.js && node scripts/patch-node-pty-win.js && electron-rebuild -f -o better-sqlite3 && electron-rebuild -f -o node-pty"
   },
   "keywords": [],
   "author": "Jason",
