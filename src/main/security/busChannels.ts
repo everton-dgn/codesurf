@@ -1,18 +1,8 @@
+import { isSafeBusEventType as isSharedSafeBusEventType } from '../../shared/busEventTypes.ts'
 import type { BusEventType } from '../../shared/types.ts'
 
 const MAX_LEN = 160
 const SAFE_TOKEN = /^[a-zA-Z0-9:_*-]+$/
-
-const BUS_EVENT_TYPES = new Set<BusEventType>([
-  'progress',
-  'activity',
-  'task',
-  'notification',
-  'ask',
-  'answer',
-  'data',
-  'system',
-])
 
 export function assertSafeBusToken(value: string, label: string): string {
   const token = String(value ?? '').trim()
@@ -30,10 +20,14 @@ export function assertSafeBusChannel(channel: string, options?: { allowWildcard?
   return safe
 }
 
+export function isSafeBusEventType(type: string): type is BusEventType {
+  return isSharedSafeBusEventType(type)
+}
+
 export function assertSafeBusEventType(type: string): BusEventType {
-  const safe = String(type ?? '').trim() as BusEventType
-  if (!BUS_EVENT_TYPES.has(safe)) throw new Error('Invalid bus event type')
-  return safe
+  const safe = String(type ?? '').trim()
+  if (!isSharedSafeBusEventType(safe)) throw new Error('Invalid bus event type')
+  return safe as BusEventType
 }
 
 function extractScopedId(source: string): string | null {

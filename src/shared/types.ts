@@ -1071,7 +1071,7 @@ export interface CanvasState {
 
 // ─── Event Bus Types ────────────────────────────────────────────────────────
 
-/** Event severity / category */
+/** Event severity / category, plus domain-specific tile event names */
 export type BusEventType =
   | 'progress'    // task progress update (percent, status text)
   | 'activity'    // log entry (terminal output, agent action)
@@ -1081,6 +1081,16 @@ export type BusEventType =
   | 'answer'      // human responding to an ask
   | 'data'        // arbitrary structured data payload
   | 'system'      // internal bus events (subscribe, unsubscribe, error)
+  | 'tool_inventory'   // chat tile tool catalog snapshot
+  | 'skill_inventory'  // chat tile skill catalog snapshot
+  | 'tool_start'       // tool invocation started
+  | 'tool'             // tool invocation finished
+  | 'file'             // file reference / open
+  | 'file_activity'    // file edit activity
+  | 'note'             // contextual note
+  | 'browser.evidence.snapshot'
+  | 'browser.page_health'
+  | 'browser.evidence'
 
 /** A single event on the bus */
 export interface BusEvent {

@@ -13,6 +13,7 @@ import {
   assertBusPublishScope,
   assertBusSubscribeAllowed,
   assertSafeBusChannel,
+  isSafeBusEventType,
 } from '../src/main/security/busChannels.ts'
 import { ensureWorkspaceSecretsGitignored } from '../src/main/security/workspaceSecrets.ts'
 
@@ -51,6 +52,19 @@ describe('bus channel authorization', () => {
       () => assertBusPublishAllowed('tile:abc', 'browser:abc', 'bogus'),
       /Invalid bus event type/,
     )
+  })
+
+  test('allows domain bus event types used by tiles', () => {
+    for (const type of [
+      'tool_inventory',
+      'skill_inventory',
+      'browser.evidence',
+      'browser.page_health',
+    ] as const) {
+      assert.equal(isSafeBusEventType(type), true)
+      const validated = assertBusPublishAllowed(`tile:abc`, `chat:abc`, type)
+      assert.equal(validated.type, type)
+    }
   })
 
   test('allows scoped publish for matching browser tile', () => {

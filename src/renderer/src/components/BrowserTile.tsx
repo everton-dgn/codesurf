@@ -15,6 +15,7 @@ import {
   type BrowserEvidenceInput,
   type BrowserEvidenceViewport,
 } from '../../../shared/browserEvidence'
+import { coerceBusEventType } from '../../../shared/busEventTypes'
 import { formatGuestWebviewTagPreferences } from '../../../shared/guest-webview-preferences'
 import clusoEmbedJs from '../assets/cluso/cluso-embed.js?raw'
 import clusoEmbedCss from '../assets/cluso/cluso-embed.css?raw'
@@ -1356,11 +1357,15 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
             && data.token === bridgeTokenRef.current
             && (data.channel === `browser:${tileId}` || data.channel === `tile:${tileId}`)
           ) {
+            const eventType = coerceBusEventType(data.type)
+            const payload = data.payload && typeof data.payload === 'object' ? data.payload : {}
             window.electron?.bus?.publish(
               `browser:${tileId}`,
-              data.type || 'data',
+              eventType,
               `browser:${tileId}`,
-              data.payload || {}
+              eventType === 'data' && data.type && data.type !== 'data'
+                ? { ...payload, eventType: data.type }
+                : payload,
             )
           }
         } catch { /* not valid JSON — ignore */ }
