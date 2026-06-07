@@ -13,7 +13,7 @@ interface Props {
   dscLine: string
 }
 
-export function ConnectionPill({ x, y, zoom, isLocked, onToggleLock, onDelete: _onDelete, dscLine }: Props): JSX.Element {
+export function ConnectionPill({ x, y, zoom: _zoom, isLocked, onToggleLock, onDelete: _onDelete, dscLine }: Props): JSX.Element {
   const theme = useTheme()
   const [expanded, setExpanded] = useState(false)
   const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)

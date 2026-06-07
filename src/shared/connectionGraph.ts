@@ -116,7 +116,7 @@ export function cascadeConnectionGraph<TType extends string = string>(
   return { connectedTileIds, byTile }
 }
 
-export type AssociatedConnectionGroupOptions<TType extends string = string> = {
+export type AssociatedConnectionGroupOptions = {
   resolveCapabilities: (sourceTileId: string, targetTileId: string) => string[]
   resolveRoute?: (sourceTileId: string, targetTileId: string) => {
     route: { x: number; y: number }[]
@@ -129,7 +129,7 @@ export function addAssociatedConnectionGroups<TType extends string = string>(
   graph: ConnectionGraphState<TType>,
   tileList: ConnectionGraphTile<TType>[],
   associatedTileGroups: string[][],
-  options: AssociatedConnectionGroupOptions<TType>,
+  options: AssociatedConnectionGroupOptions,
 ): ConnectionGraphState<TType> {
   const tileMap = new Map(tileList.map(tile => [tile.id, tile]))
   const connectedTileIds = new Set(graph.connectedTileIds)

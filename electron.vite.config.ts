@@ -88,7 +88,6 @@ export default defineConfig({
               'micromark',
               'unified',
               'extend',
-              'react-jsx-parser',
               '@ricky0123/vad-web',
               'onnxruntime-web',
             ],

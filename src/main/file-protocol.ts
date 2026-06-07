@@ -1,7 +1,7 @@
 import { net, protocol } from 'electron'
-import { extname, resolve } from 'path'
 import { pathToFileURL } from 'url'
 import { homedir } from 'os'
+import { authorizeRequestPath, inferMimeType } from './file-protocol-auth'
 
 // Renderer-safe scheme for loading arbitrary local files as <img>/<video>/<audio>
 // sources. The dev renderer origin is http://localhost:..., which means direct
@@ -16,62 +16,6 @@ import { homedir } from 'os'
 // loading work correctly for large media files.
 
 const SCHEME = 'contex-file'
-const SENSITIVE_HOME_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.config'])
-
-const MIME_TYPES: Record<string, string> = {
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.avif': 'image/avif',
-  '.heic': 'image/heic',
-  '.heif': 'image/heif',
-  '.mp4': 'video/mp4',
-  '.mov': 'video/quicktime',
-  '.m4v': 'video/x-m4v',
-  '.webm': 'video/webm',
-  '.ogv': 'video/ogg',
-  '.avi': 'video/x-msvideo',
-  '.mkv': 'video/x-matroska',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.m4a': 'audio/mp4',
-  '.aac': 'audio/aac',
-  '.ogg': 'audio/ogg',
-  '.flac': 'audio/flac',
-  '.pdf': 'application/pdf',
-}
-
-function inferMimeType(filePath: string): string {
-  return MIME_TYPES[extname(filePath).toLowerCase()] || 'application/octet-stream'
-}
-
-function isSensitiveHomePath(filePath: string): boolean {
-  const home = resolve(homedir())
-  const resolved = resolve(filePath)
-  if (resolved === home) return false
-  if (!resolved.startsWith(`${home}/`)) return false
-  const firstSegment = resolved.slice(home.length + 1).split(/[\/]/)[0]
-  return SENSITIVE_HOME_DIRS.has(firstSegment)
-}
-
-function validateRequestPath(filePath: string): string {
-  const resolved = resolve(filePath)
-  const mimeType = inferMimeType(resolved)
-
-  if (mimeType === 'application/octet-stream') {
-    throw new Error(`Unsupported contex-file type: ${extname(resolved) || '(none)'}`)
-  }
-
-  if (isSensitiveHomePath(resolved)) {
-    throw new Error('Access denied: sensitive home directory')
-  }
-
-  return resolved
-}
 
 function decodeRequestPath(url: URL): string {
   const host = decodeURIComponent(url.host || '')
@@ -103,7 +47,7 @@ export function registerFileProtocol(): void {
   protocol.handle(SCHEME, async (request) => {
     try {
       const url = new URL(request.url)
-      const filePath = validateRequestPath(decodeRequestPath(url))
+      const filePath = authorizeRequestPath(decodeRequestPath(url), homedir())
 
       // Forward range headers so video seeking works without loading the whole file
       const rangeHeader = request.headers.get('range')
@@ -115,7 +59,11 @@ export function registerFileProtocol(): void {
         headers.set('content-type', inferMimeType(filePath))
       }
       headers.set('cache-control', 'no-store, no-cache, must-revalidate')
-      headers.set('access-control-allow-origin', '*')
+      // risk-04: do NOT advertise wildcard CORS on a local-file scheme. Media
+      // tiles load via <img>/<video>/<audio> src (no-cors) and never needed it;
+      // removing it blocks cross-origin fetch()/canvas reads from webview-tile
+      // pages that could otherwise exfiltrate local files.
+      headers.delete('access-control-allow-origin')
 
       return new Response(resp.body, {
         status: resp.status,

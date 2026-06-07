@@ -1,21 +1,61 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
-import { Ungroup, Grid2x2X, Scissors, ClipboardPaste, Maximize2, LayoutGrid, Plus, Package, Link2, X } from 'lucide-react'
+import { Plus, Package, Link2, X } from 'lucide-react'
+import { CanvasGroupFrames } from './components/canvas/CanvasGroupFrames'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
 import { TileColorProvider } from './TileColorContext'
 import { withDefaultSettings, DEFAULT_SETTINGS, getCurvierBlockRadius } from '../../shared/types'
 import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
+import { useLayoutTemplates } from './hooks/useLayoutTemplates'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
 import { useDiscoveryGraph } from './hooks/useDiscoveryGraph'
+import {
+  useCanvasEngine,
+  useCanvasDragSync,
+  useCanvasPointerHandlers,
+  useCanvasExpandedGroup,
+  useConnectionHandleHover,
+  useCanvasContextMenu,
+  useTileContextMenu,
+  useLockConnection,
+  useEnforceTileMinimumSizes,
+  useLockedConnectionHelpers,
+  type CanvasDragState,
+} from './hooks/useCanvasEngine'
+import { useTileMounting } from './hooks/useTileMounting'
+import { useTileClipboard } from './hooks/useTileClipboard'
+import { useCanvasTileShortcuts } from './hooks/useCanvasTileShortcuts'
+import { useCanvasGroupManager } from './hooks/useCanvasGroupManager'
+import { useCanvasKeyboard } from './hooks/useCanvasKeyboard'
+import { useCanvasGlow } from './hooks/useCanvasGlow'
+
+import { getMinTileHeight, getMinTileWidth, rectsOverlap } from './utils/tilePlacement'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
 import { applyContrast, DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
-import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf, replaceTabInLeaf } from './components/panelLayoutTree'
-import { basename, getDroppedPaths, toFileUrl, isMediaFile } from './utils/dnd'
+import {
+  createLeaf,
+  removeTileFromTree,
+  addTabToLeaf,
+  getAllTileIds,
+  splitLeaf,
+  closeOthersInLeaf,
+  closeToRightInLeaf,
+  findLeafById,
+  setActiveTab,
+  pinTabInLeaf,
+  findFirstLeafId,
+  findLeafIdContainingTile,
+  collectPanelLeaves,
+  replaceLeafInPanelTree,
+  sanitizePanelLayout,
+} from './components/panelLayoutTree'
+import { panelTreeHasSplit } from './lib/layoutSnap'
+import { basename, getDroppedPaths, toFileUrl } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
 import {
   CODESURF_CREATE_TILE_EVENT,
@@ -24,9 +64,9 @@ import {
   normalizeOpenChatSurfaceDetail,
   resolveChatSurfaceTargetTile,
 } from './utils/appLaunchRequests'
-import { disposeChatTileRuntimeState, getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
-import { disposeMediaTile } from './components/mediaTileRegistry'
+import { getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
 import { MainStatusBar } from './components/MainStatusBar'
+import { DevSandboxFrame } from './components/DevSandboxFrame'
 import { resolveProviderModeId } from './config/providers'
 
 const LazyPanelLayout = React.lazy(() => import('./components/PanelLayout').then(m => ({ default: m.PanelLayout })))
@@ -101,74 +141,15 @@ const LazyExtensionTile = React.lazy(() => import('./components/ExtensionTile').
 const LazyClusoWidgetMount = React.lazy(() =>
   import('./components/ClusoWidgetMount')
     .then(m => ({ default: m.ClusoWidgetMount }))
-    .catch(() => ({ default: () => null as React.ReactNode }))
+    .catch(() => ({ default: () => null }))
 )
 const LazyAgentSetup = React.lazy(() => import('./components/AgentSetup').then(m => ({ default: m.AgentSetup })))
 const LazySkillInstallModal = React.lazy(() => import('./components/SkillInstallModal').then(m => ({ default: m.SkillInstallModal })))
-
-type DragState =
-  | { type: null }
-  | { type: 'pan'; startX: number; startY: number; initTx: number; initTy: number }
-  | { type: 'tile'; tileId: string; startX: number; startY: number; initX: number; initY: number; groupSnapshots: { id: string; x: number; y: number }[] }
-  | { type: 'resize'; tileId: string; dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw'; startX: number; startY: number; initX: number; initY: number; initW: number; initH: number }
-  | { type: 'select'; startWx: number; startWy: number; curWx: number; curWy: number }
-  | { type: 'group'; groupId: string; startX: number; startY: number; snapshots: { id: string; x: number; y: number }[]; initLayoutBounds?: { x: number; y: number; w: number; h: number } }
-  | { type: 'group-resize'; groupId: string; dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw'; startX: number; startY: number; initBounds: { x: number; y: number; w: number; h: number }; snapshots: { id: string; x: number; y: number; width: number; height: number }[] }
-  | { type: 'connection'; sourceTileId: string; startX: number; startY: number; side: AnchorPoint['side']; anchor: AnchorPoint; current: { x: number; y: number }; targetTileId: string | null }
+const LazyCommandPalette = React.lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
+const LazyOnboardingOverlay = React.lazy(() => import('./components/OnboardingOverlay').then(m => ({ default: m.OnboardingOverlay })))
 
 const GRID = 20 // default, overridden by settings at runtime
 const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
-
-function findFirstLeafId(node: PanelNode): string | null {
-  if (node.type === 'leaf') return node.id
-  for (const child of node.children) {
-    const found = findFirstLeafId(child)
-    if (found) return found
-  }
-  return null
-}
-
-function sanitizePanelLayout(root: PanelNode | null | undefined, tileIds: string[]): { layout: PanelNode | null; fallbackActivePanelId: string | null } {
-  if (!root) return { layout: null, fallbackActivePanelId: null }
-
-  const validTileIds = new Set(tileIds)
-  let next: PanelNode | null = root
-
-  for (const tileId of getAllTileIds(root)) {
-    if (!validTileIds.has(tileId)) {
-      next = next ? (removeTileFromTree(next, tileId) ?? createLeaf([])) : createLeaf([])
-    }
-  }
-
-  return {
-    layout: next,
-    fallbackActivePanelId: next ? findFirstLeafId(next) : null,
-  }
-}
-
-function findLeafIdContainingTile(root: PanelNode, tileId: string): string | null {
-  if (root.type === 'leaf') return root.tabs.includes(tileId) ? root.id : null
-  for (const child of root.children) {
-    const found = findLeafIdContainingTile(child, tileId)
-    if (found) return found
-  }
-  return null
-}
-
-function collectPanelLeaves(root: PanelNode): PanelLeaf[] {
-  if (root.type === 'leaf') return [root]
-  return root.children.flatMap(collectPanelLeaves)
-}
-
-function replaceLeafInPanelTree(root: PanelNode, targetPanelId: string, replacement: PanelNode): PanelNode {
-  if (root.type === 'leaf') {
-    return root.id === targetPanelId ? replacement : root
-  }
-  return {
-    ...root,
-    children: root.children.map(child => replaceLeafInPanelTree(child, targetPanelId, replacement)),
-  }
-}
 
 function normalizeWorkspacePath(path: string | null | undefined): string {
   return String(path ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
@@ -392,33 +373,6 @@ function withAlpha(color: string, alpha: number): string {
   return color
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null
-  if (!el) return false
-  const tag = el.tagName
-  return tag === 'INPUT'
-    || tag === 'TEXTAREA'
-    || el.isContentEditable
-    || !!el.closest('.monaco-editor')
-}
-
-function getMinTileWidth(tileOrType: TileState | TileState['type']): number {
-  const type = typeof tileOrType === 'string' ? tileOrType : tileOrType.type
-  if (type === 'chat') return 450
-  if (type === 'files') return 250
-  if (type === 'file') return 200
-  if (type.startsWith('ext:')) return 150
-  return 200
-}
-
-function getMinTileHeight(tileOrType: TileState | TileState['type']): number {
-  const type = typeof tileOrType === 'string' ? tileOrType : tileOrType.type
-  if (type === 'files') return 300
-  if (type === 'file') return 200
-  if (type.startsWith('ext:')) return 100
-  return 150
-}
-
 type AnchorSide = 'top' | 'right' | 'bottom' | 'left'
 
 type TileCapabilitySet = {
@@ -627,70 +581,6 @@ function getCapabilityMatches(source: TileCapabilitySet, target: TileCapabilityS
   ])
 }
 
-function findDiscoveryConnections(
-  tileList: TileState[],
-  hiddenTileIds: Set<string>,
-  gridStep: number,
-  maxDistance: number
-): DiscoveryState {
-  const connectedTileIds = new Set<string>()
-  const byTile = new Map<string, DiscoveryCapabilityLink[]>()
-  const refs = tileList
-    .filter(tile => !hiddenTileIds.has(tile.id))
-    .map(tile => ({ tile, ref: getTileSpatialReference(tile, gridStep) }))
-
-  for (let i = 0; i < refs.length; i += 1) {
-    const source = refs[i]
-    for (let j = i + 1; j < refs.length; j += 1) {
-      const target = refs[j]
-
-      if (source.tile.id === target.tile.id) continue
-
-      const sourceRect = { x: source.tile.x, y: source.tile.y, w: source.tile.width, h: source.tile.height }
-      const targetRect = { x: target.tile.x, y: target.tile.y, w: target.tile.width, h: target.tile.height }
-      if (rectsOverlap(sourceRect, targetRect)) continue
-
-      const anchorPair = findBestAnchorPair(source.ref.anchors, target.ref.anchors)
-      if (!anchorPair || anchorPair.distance > maxDistance) continue
-
-      const sharedCaps = getCapabilityMatches(source.ref.capabilities, target.ref.capabilities)
-      const route = getOrthogonalRoute(anchorPair.source, anchorPair.target, gridStep)
-      const sourceTools = source.ref.capabilities.tools ?? []
-      const targetTools = target.ref.capabilities.tools ?? []
-
-      if (sharedCaps.length > 0) {
-        const sourceLink: DiscoveryCapabilityLink = {
-          peerId: target.tile.id,
-          peerType: target.tile.type,
-          distance: anchorPair.distance,
-          route,
-          capabilities: uniq([...targetTools, ...sharedCaps]),
-          lastSeen: Date.now(),
-        }
-        const targetLink: DiscoveryCapabilityLink = {
-          peerId: source.tile.id,
-          peerType: source.tile.type,
-          distance: anchorPair.distance,
-          route: route.slice().reverse(),
-          capabilities: uniq([...sourceTools, ...sharedCaps]),
-          lastSeen: Date.now(),
-        }
-
-        const nextSource = byTile.get(source.tile.id) ?? []
-        const nextTarget = byTile.get(target.tile.id) ?? []
-        nextSource.push(sourceLink)
-        nextTarget.push(targetLink)
-        byTile.set(source.tile.id, nextSource)
-        byTile.set(target.tile.id, nextTarget)
-        connectedTileIds.add(source.tile.id)
-        connectedTileIds.add(target.tile.id)
-      }
-    }
-  }
-
-  return { connectedTileIds, byTile }
-}
-
 function cascadeDiscoveryConnections(
   graph: DiscoveryState,
   tileList: TileState[],
@@ -796,10 +686,10 @@ function routeToSvgPath(points: { x: number; y: number }[]): string {
 }
 
 function getConnectionHandlePoint(tile: TileState, side: AnchorPoint['side'] = 'right'): AnchorPoint {
-  if (side === 'left') return { x: tile.x - 18, y: tile.y + tile.height / 2, side }
-  if (side === 'top') return { x: tile.x + tile.width / 2, y: tile.y - 18, side }
-  if (side === 'bottom') return { x: tile.x + tile.width / 2, y: tile.y + tile.height + 18, side }
-  return { x: tile.x + tile.width + 18, y: tile.y + tile.height / 2, side }
+  if (side === 'left') return makeAnchor(side, tile.x - 18, tile.y + tile.height / 2, GRID)
+  if (side === 'top') return makeAnchor(side, tile.x + tile.width / 2, tile.y - 18, GRID)
+  if (side === 'bottom') return makeAnchor(side, tile.x + tile.width / 2, tile.y + tile.height + 18, GRID)
+  return makeAnchor(side, tile.x + tile.width + 18, tile.y + tile.height / 2, GRID)
 }
 
 function getNearestTileSide(tile: TileState, point: { x: number; y: number }): AnchorPoint['side'] {
@@ -848,49 +738,6 @@ function getBezierConnectionMidpoint(source: { x: number; y: number }, target: {
     x: source.x + dx * 0.5,
     y: source.y + (target.y - source.y) * 0.5 + Math.min(72, Math.max(18, distance * 0.10)),
   }
-}
-
-function rectsOverlap(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
-}
-
-function findClearPosition(
-  preferredX: number,
-  preferredY: number,
-  width: number,
-  height: number,
-  tiles: TileState[],
-  blockedTileIds: Set<string>,
-  step: number
-): { x: number; y: number } {
-  const overlapsExisting = (x: number, y: number) => {
-    const candidate = { x, y, w: width, h: height }
-    return tiles.some(tile => !blockedTileIds.has(tile.id) && rectsOverlap(candidate, { x: tile.x, y: tile.y, w: tile.width, h: tile.height }))
-  }
-
-  let x = preferredX
-  let y = preferredY
-  if (!overlapsExisting(x, y)) return { x, y }
-
-  const maxRings = 120
-  for (let ring = 1; ring <= maxRings; ring += 1) {
-    for (let dx = -ring; dx <= ring; dx += 1) {
-      const dy = ring - Math.abs(dx)
-      const candidates = dy === 0
-        ? [{ dx: dx * step, dy: 0 }]
-        : [{ dx: dx * step, dy: dy * step }, { dx: dx * step, dy: -dy * step }]
-
-      for (const cand of candidates) {
-        x = preferredX + cand.dx
-        y = preferredY + cand.dy
-        if (!overlapsExisting(x, y)) {
-          return { x, y }
-        }
-      }
-    }
-  }
-
-  return { x, y }
 }
 
 function getRouteSegments(points: { x: number; y: number }[], thickness = 3): Array<{ left: number; top: number; width: number; height: number; horizontal: boolean }> {
@@ -1037,37 +884,33 @@ function App(): JSX.Element {
   const [tiles, setTiles] = useState<TileState[]>([])
   const [groups, setGroups] = useState<GroupState[]>([])
   const [lockedConnections, setLockedConnections] = useState<Array<{ sourceTileId: string; targetTileId: string }>>([])
-  const [viewport, setViewport] = useState({ tx: 0, ty: 0, zoom: 1 })
-  const prevZoomRef = React.useRef(1)
-  const panVelocityRef = useRef({ vx: 0, vy: 0 })
-  const panLastPos = useRef({ x: 0, y: 0, t: 0 })
-  const panInertiaRaf = useRef<number>(0)
-  const [nextZIndex, setNextZIndex] = useState(1)
   const [selectedTileId, setSelectedTileId] = useState<string | null>(null)
   const [selectedTileIds, setSelectedTileIds] = useState<Set<string>>(new Set())
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  const [dragState, setDragState] = useState<DragState>({ type: null })
+  const [dragState, setDragState] = useState<CanvasDragState>({ type: null })
   const [showMCP, setShowMCP] = useState(false)
   const [showSettings, setShowSettings] = useState<string | false>(false)
   const [showExtensionsGallery, setShowExtensionsGallery] = useState(false)
-  const [showMinimap, setShowMinimap] = useState(false)
+  // First-run onboarding (P9): gate on a real disk load so returning users
+  // (whose persisted settings already have the flag) never see a flash.
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+  const [showMinimap] = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const { addTemplate: addLayoutTemplate } = useLayoutTemplates()
   const [expandedTileId, setExpandedTileId] = useState<string | null>(null)
   const [panelLayout, setPanelLayout] = useState<PanelNode | null>(null)
   const [chatReloadTokens, setChatReloadTokens] = useState<Record<string, number>>({})
   const [extActionsVersion, setExtActionsVersion] = useState(0)
   const [activePanelId, setActivePanelId] = useState<string | null>(null)
-  const [expandLayoutGroupId, setExpandLayoutGroupId] = useState<string | null>(null)
+  const [, setExpandLayoutGroupId] = useState<string | null>(null)
   const expandLayoutGroupIdRef = useRef<string | null>(null)
   // Non-layout group expanded as a fullscreen sub-canvas. Members stay free-floating.
   const [expandedCanvasGroupId, setExpandedCanvasGroupId] = useState<string | null>(null)
   const expandedCanvasGroupIdRef = useRef<string | null>(null)
-  const expandedCanvasPriorViewportRef = useRef<{ tx: number; ty: number; zoom: number } | null>(null)
   // Forward ref so early-defined effects (e.g. Esc handler) can call the
   // canvas-expand exit before its useCallback is declared further down.
   const exitCanvasExpandedRef = useRef<() => void>(() => {})
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const persistCanvasStateRef = useRef<((...args: any[]) => void) | null>(null)
   const savedLayoutRef = useRef<PanelNode | null>(null)
   const panelLayoutRef = useRef<PanelNode | null>(null)
   const activePanelIdRef = useRef<string | null>(null)
@@ -1083,7 +926,6 @@ function App(): JSX.Element {
   const [autoConnectionsEnabled] = useState(false)
   const [canvasPointerWorld, setCanvasPointerWorld] = useState<{ x: number; y: number } | null>(null)
   const [hoveredConnectionHandle, setHoveredConnectionHandle] = useState<{ tileId: string; side: AnchorPoint['side'] } | null>(null)
-  const connectionHandleHideTimerRef = useRef<number | null>(null)
   const [showAgentSetup, setShowAgentSetup] = useState(false)
   // .skill install dialog — populated when user drops a .skill file on the
   // canvas or double-clicks one in Finder (forwarded via `skill:file-opened`
@@ -1247,7 +1089,7 @@ function App(): JSX.Element {
       if (!hasCompatibleMatch) {
         chatTileProximities.set(tile.id, { hasMatch: false, distance: Infinity })
       } else {
-        chatTileProximities.set(tile.id, { hasMatch: true, distance: discovery.match.distance })
+        chatTileProximities.set(tile.id, { hasMatch: true, distance: discovery!.match!.distance })
       }
     }
 
@@ -1325,11 +1167,6 @@ function App(): JSX.Element {
     }
   }, [autoConnectionsEnabled, tiles, dragState.type, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, workspace?.id, miniChatOptions])
 
-  // Internal clipboard — stores tile snapshots (not OS clipboard)
-  const clipboard = useRef<TileState[]>([])
-  const isCut = useRef(false)
-  const pasteOffset = useRef(0)
-  const pasteTargetGroupId = useRef<string | undefined>(undefined)
   const pasteTilesRef = useRef<(pos?: { x: number; y: number }, intoGroupId?: string) => void>(() => {})
   const duplicateTilesRef = useRef<(ids?: string[]) => void>(() => {})
   const copyTilesRef = useRef<(cut?: boolean) => void>(() => {})
@@ -1338,10 +1175,6 @@ function App(): JSX.Element {
   const ungroupTilesRef = useRef<(groupId: string) => void>(() => {})
   const ungroupAllRef = useRef<(groupId: string) => void>(() => {})
 
-  // Undo/redo history stacks — each entry is a full canvas snapshot
-  type HistoryEntry = { tiles: TileState[]; groups: GroupState[] }
-  const historyBack = useRef<HistoryEntry[]>([])
-  const historyForward = useRef<HistoryEntry[]>([])
   // Refs that always reflect the latest tiles/groups state (for use in keyboard handlers)
   const tilesRef = useRef<TileState[]>(tiles)
   const groupsRef = useRef<GroupState[]>(groups)
@@ -1351,33 +1184,9 @@ function App(): JSX.Element {
   const suppressedConnectionsRef = useRef(suppressedConnections)
   useEffect(() => { suppressedConnectionsRef.current = suppressedConnections }, [suppressedConnections])
 
-  const viewportRef = useRef(viewport)
-  const nextZIndexRef = useRef(nextZIndex)
-  const viewportAnimationFrameRef = useRef<number | null>(null)
-  const pendingViewportRef = useRef(viewport)
-
-  // Keep tilesRef / groupsRef / viewportRef / nextZIndexRef in sync with state
+  // Keep tilesRef / groupsRef in sync with state
   tilesRef.current = tiles
   groupsRef.current = groups
-  viewportRef.current = viewport
-  pendingViewportRef.current = viewport
-  nextZIndexRef.current = nextZIndex
-
-  const scheduleViewportUpdate = useCallback((nextViewport: typeof viewport) => {
-    pendingViewportRef.current = nextViewport
-    if (viewportAnimationFrameRef.current !== null) return
-    viewportAnimationFrameRef.current = requestAnimationFrame(() => {
-      viewportAnimationFrameRef.current = null
-      setViewport(pendingViewportRef.current)
-    })
-  }, [])
-
-  useEffect(() => () => {
-    if (viewportAnimationFrameRef.current !== null) {
-      cancelAnimationFrame(viewportAnimationFrameRef.current)
-      viewportAnimationFrameRef.current = null
-    }
-  }, [])
 
   // Context menus
   type CtxMenu = { x: number; y: number; items: MenuItem[] }
@@ -1385,9 +1194,59 @@ function App(): JSX.Element {
   const closeCtx = useCallback(() => setCtxMenu(null), [])
 
   const canvasRef = useRef<HTMLDivElement>(null)
-  const dotGlowSmallRef = useRef<HTMLDivElement>(null)
-  const dotGlowLargeRef = useRef<HTMLDivElement>(null)
-  const discoveryGlowRef = useRef<HTMLDivElement>(null)
+  const canvasPersistSuspendedRef = useRef(false)
+
+  const canvasEngine = useCanvasEngine({
+    workspace,
+    canvasRef,
+    tiles,
+    groups,
+    panelLayout,
+    activePanelId,
+    expandedTileId,
+    persistRefs: {
+      tilesRef,
+      groupsRef,
+      lockedConnectionsRef,
+      panelLayoutRef,
+      savedLayoutRef,
+      activePanelIdRef,
+      expandedTileIdRef,
+      expandedCanvasGroupIdRef,
+      canvasPersistSuspendedRef,
+    },
+    setTiles,
+    setGroups,
+  })
+
+  const {
+    viewport,
+    setViewport,
+    viewportRef,
+    nextZIndex,
+    setNextZIndex,
+    nextZIndexRef,
+    expandedCanvasPriorViewportRef,
+    persistCanvasStateRef,
+    panLastPos,
+    screenToWorld,
+    worldToScreen: worldToScreenPoint,
+    viewportCenter,
+    saveCanvas,
+    persistCanvasState,
+    zoomToFitArrangedTiles,
+    panToTile,
+    toggleZoomOne,
+    cancelPanInertia,
+    findManualConnectionTarget,
+    restoreViewport,
+    resetViewportState,
+    handleWheel,
+    undoCanvas,
+    redoCanvas,
+    flushDeferredCanvasPersist,
+  } = canvasEngine
+
   const discoveryTimeoutsRef = useRef<number[]>([])
 
   // ─── Auto Agent Mode (proximity-based tile discovery) ─────────────────────
@@ -1402,70 +1261,24 @@ function App(): JSX.Element {
   const PROXIMITY_DISABLE_DISTANCE = 1.0 // 100% of max distance
   const PROXIMITY_DEBOUNCE_MS = 300
   const panelTileIdsRef = useRef<Set<string>>(new Set())
-  const canvasGlowRafRef = useRef<number | null>(null)
-  const canvasGlowPointRef = useRef<{ clientX: number; clientY: number } | null>(null)
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const spaceHeld = useRef(false)
-  const skipHistory = useRef(false)
   const canvasGlowEnabled = settings.canvasGlowEnabled
   const canvasGlowRadius = Math.max(50, Math.min(200, settings.canvasGlowRadius ?? 120))
-  const cursorGlowBrightnessScale = 1 + ((viewport.zoom - 1) / 0.2) * 0.1
-  const cursorGlowOpacity = Math.max(0, Math.min(1, cursorGlowBrightnessScale))
-  const cursorGlowFilterBrightness = Math.max(1, cursorGlowBrightnessScale)
+  const {
+    dotGlowSmallRef,
+    dotGlowLargeRef,
+    discoveryGlowRef,
+    hideCanvasGlow,
+    updateCanvasGlow,
+  } = useCanvasGlow({
+    canvasRef,
+    canvasGlowEnabled,
+    canvasGlowRadius,
+    viewportZoom: viewport.zoom,
+  })
   const snapValue = React.useCallback((value: number) => (
     settings.snapToGrid ? snap(value, settings.gridSize) : value
   ), [settings.snapToGrid, settings.gridSize])
-
-  const hideCanvasGlow = React.useCallback(() => {
-    if (canvasGlowRafRef.current !== null) {
-      cancelAnimationFrame(canvasGlowRafRef.current)
-      canvasGlowRafRef.current = null
-    }
-    canvasGlowPointRef.current = null
-    if (dotGlowSmallRef.current) {
-      dotGlowSmallRef.current.style.opacity = '0'
-      dotGlowSmallRef.current.style.filter = 'brightness(1)'
-    }
-    if (dotGlowLargeRef.current) {
-      dotGlowLargeRef.current.style.opacity = '0'
-      dotGlowLargeRef.current.style.filter = 'brightness(1)'
-    }
-    if (discoveryGlowRef.current) discoveryGlowRef.current.style.opacity = '0'
-  }, [])
-
-  const updateCanvasGlow = React.useCallback((clientX: number, clientY: number) => {
-    if (!canvasGlowEnabled) return
-    canvasGlowPointRef.current = { clientX, clientY }
-    if (canvasGlowRafRef.current !== null) return
-    canvasGlowRafRef.current = requestAnimationFrame(() => {
-      canvasGlowRafRef.current = null
-      const rect = canvasRef.current?.getBoundingClientRect()
-      const point = canvasGlowPointRef.current
-      if (!rect || !point || !dotGlowSmallRef.current || !dotGlowLargeRef.current) return
-      const x = point.clientX - rect.left
-      const y = point.clientY - rect.top
-      const visible = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height
-      if (!visible) {
-        hideCanvasGlow()
-        return
-      }
-      const innerGlowRadius = Math.round(canvasGlowRadius * 0.5)
-      const mask = `radial-gradient(circle at ${x}px ${y}px, rgba(0,0,0,1) 0px, rgba(0,0,0,1) ${innerGlowRadius}px, rgba(0,0,0,0) ${canvasGlowRadius}px)`
-      dotGlowSmallRef.current.style.opacity = String(cursorGlowOpacity)
-      dotGlowLargeRef.current.style.opacity = String(cursorGlowOpacity)
-      dotGlowSmallRef.current.style.filter = `brightness(${cursorGlowFilterBrightness})`
-      dotGlowLargeRef.current.style.filter = `brightness(${cursorGlowFilterBrightness})`
-      dotGlowSmallRef.current.style.maskImage = mask
-      dotGlowSmallRef.current.style.webkitMaskImage = mask
-      dotGlowLargeRef.current.style.maskImage = mask
-      dotGlowLargeRef.current.style.webkitMaskImage = mask
-      if (discoveryGlowRef.current) {
-        discoveryGlowRef.current.style.opacity = '1'
-        discoveryGlowRef.current.style.maskImage = mask
-        discoveryGlowRef.current.style.webkitMaskImage = mask
-      }
-    })
-  }, [canvasGlowEnabled, canvasGlowRadius, cursorGlowFilterBrightness, cursorGlowOpacity, hideCanvasGlow])
 
   const showEmptyLayoutPage = useCallback((options?: { preserveOpenTabs?: boolean }) => {
     const preserveOpenTabs = options?.preserveOpenTabs ?? false
@@ -1477,13 +1290,12 @@ function App(): JSX.Element {
     setTiles([])
     setGroups([])
     setLockedConnections([])
-    setViewport({ tx: 0, ty: 0, zoom: 1 })
-    setNextZIndex(1)
+    resetViewportState()
     savedLayoutRef.current = emptyPanel
     setPanelLayout(emptyPanel)
     setActivePanelId(emptyPanel.id)
     setExpandedTileId(null)
-  }, [])
+  }, [resetViewportState])
 
   // ─── Load workspace + canvas state on mount ───────────────────────────────
   useEffect(() => {
@@ -1603,25 +1415,26 @@ function App(): JSX.Element {
       ])
       const persistedWorkspaceTabs = readPersistedWorkspaceTabState()
       if (savedSettings) setSettings(withDefaultSettings(savedSettings))
+      setSettingsLoaded(true)
       setWorkspaces(wsList)
       const workspaceById = new Map(wsList.map(entry => [entry.id, entry]))
-      const miniWorkspaceId = getCanonicalWorkspaceId(wsList, miniChatOptions?.workspaceId ?? null)
       const restoredWorkspaceId = getCanonicalWorkspaceId(wsList, persistedWorkspaceTabs.currentWorkspaceId)
       const activeWorkspaceId = getCanonicalWorkspaceId(wsList, active?.id ?? null)
       const fallbackWorkspaceId = getCanonicalWorkspaceId(wsList, wsList[0]?.id ?? null)
-      const miniWorkspace = miniWorkspaceId
-        ? (workspaceById.get(miniWorkspaceId) ?? null)
-        : null
-      const restoredWorkspace = restoredWorkspaceId
-        ? (workspaceById.get(restoredWorkspaceId) ?? null)
-        : null
-      const targetWorkspace = miniWorkspace
-        ?? restoredWorkspace
-        ?? (activeWorkspaceId ? (workspaceById.get(activeWorkspaceId) ?? null) : null)
-        ?? (fallbackWorkspaceId ? (workspaceById.get(fallbackWorkspaceId) ?? null) : null)
+      let targetWorkspace: Workspace | null =
+        (restoredWorkspaceId ? workspaceById.get(restoredWorkspaceId) : undefined)
+        ?? (activeWorkspaceId ? workspaceById.get(activeWorkspaceId) : undefined)
+        ?? (fallbackWorkspaceId ? workspaceById.get(fallbackWorkspaceId) : undefined)
+        ?? null
+      if (miniChatOptions) {
+        const miniId = getCanonicalWorkspaceId(wsList, miniChatOptions.workspaceId)
+        if (miniId) {
+          targetWorkspace = workspaceById.get(miniId) ?? targetWorkspace
+        }
+      }
       const restoredOpenWorkspaceIds = persistedWorkspaceTabs.openWorkspaceIds
         .map(id => getCanonicalWorkspaceId(wsList, id))
-        .filter((id): id is string => Boolean(id) && workspaceById.has(id))
+        .filter((id): id is string => id != null && workspaceById.has(id))
 
       if (targetWorkspace && !restoredOpenWorkspaceIds.includes(targetWorkspace.id)) {
         restoredOpenWorkspaceIds.push(targetWorkspace.id)
@@ -1651,9 +1464,7 @@ function App(): JSX.Element {
           setTiles(savedTiles)
           setGroups(saved.groups ?? [])
           setLockedConnections(saved.lockedConnections ?? [])
-          setViewport(saved.viewport
-            ? { tx: saved.viewport.tx, ty: saved.viewport.ty, zoom: saved.viewport.zoom }
-            : { tx: 0, ty: 0, zoom: 1 })
+          restoreViewport(saved.viewport)
           setNextZIndex(saved.nextZIndex ?? 1)
           savedLayoutRef.current = sanitizedPanel.layout
           setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
@@ -1728,9 +1539,10 @@ function App(): JSX.Element {
     if (!anchorTileId) return
     const layout = panelLayoutRef.current
     if (!layout) return
+    // tabs != layout: a single leaf full of tabs is just "siblings reachable as
+    // tabs" and must stay transient. Only a real spatial split promotes.
+    if (!panelTreeHasSplit(layout)) return
     const tileIds = getAllTileIds(layout)
-    // Single tile = not a layout yet, no promotion
-    if (tileIds.length < 2) return
 
     const groupId = `group-${Date.now()}`
     const anchor = tilesRef.current.find(t => t.id === anchorTileId)
@@ -1783,8 +1595,7 @@ function App(): JSX.Element {
     if (!panelLayout) return
     if (expandLayoutGroupIdRef.current) return  // already a group
     if (!expandedTileIdRef.current) return       // not path-2
-    const ids = getAllTileIds(panelLayout)
-    if (ids.length >= 2) {
+    if (panelTreeHasSplit(panelLayout)) {
       promoteExpandedTileToLayoutGroup()
     }
   }, [panelLayout, promoteExpandedTileToLayoutGroup])
@@ -1822,11 +1633,22 @@ function App(): JSX.Element {
   }, [promoteExpandedTileToLayoutGroup])
 
   const enterExpandedMode = useCallback((tileId: string) => {
-    // Single-tile expand: only the double-clicked tile becomes the panel content.
-    // Other canvas tiles stay on canvas. If the user adds more tiles via
-    // splits/tabs in fullscreen, exitExpandedMode() will auto-group them
-    // into a persistent layout-group so the arrangement survives back to canvas.
-    const leaf = createLeaf([tileId], tileId)
+    // Fullscreen the clicked tile; its SAME-GROUP siblings become tabs in the same
+    // leaf (PanelLayout's existing tab strip renders them). Deliberately scoped to
+    // group siblings (not ALL canvas tiles): seeding every tile would, once one tab
+    // is dragged into a split, vacuum the whole canvas into one persistent layout
+    // group on exit. Tabs alone never promote (panelTreeHasSplit gate); only a real
+    // split does. Other canvas tiles stay on canvas.
+    const SIBLING_CAP = 8
+    const clicked = tilesRef.current.find(t => t.id === tileId)
+    const siblingIds = clicked?.groupId
+      ? tilesRef.current
+          .filter(t => t.id !== tileId && t.groupId === clicked.groupId && !panelTileIdsRef.current.has(t.id))
+          .map(t => t.id)
+          .slice(0, SIBLING_CAP - 1)
+      : []
+    const ordered = [tileId, ...siblingIds]
+    const leaf = createLeaf(ordered, tileId)
     setExpandedTileId(tileId)
     setPanelLayout(leaf)
     setActivePanelId(leaf.id)
@@ -1873,136 +1695,13 @@ function App(): JSX.Element {
     }
   }, [])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      // Canvas-expanded group takes precedence over panel-layout expanded mode
-      if (expandedCanvasGroupIdRef.current) {
-        exitCanvasExpandedRef.current()
-        return
-      }
-      exitExpandedMode()
+  const handleCanvasEscape = useCallback(() => {
+    if (expandedCanvasGroupIdRef.current) {
+      exitCanvasExpandedRef.current()
+      return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    exitExpandedMode()
   }, [exitExpandedMode])
-
-  // ─── Space key for pan mode ───────────────────────────────────────────────
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
-        if (isEditableTarget(e.target)) return
-        e.preventDefault()
-        spaceHeld.current = true
-      }
-    }
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceHeld.current = false
-    }
-    window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('keyup', onKeyUp)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('keyup', onKeyUp)
-    }
-  }, [])
-
-  // ─── Cmd+0 reset zoom, Cmd+=/- UI zoom ─────────────────────────────────────
-  // We drive UI zoom via webFrame directly (exposed in preload) because
-  // Electron's menu-role accelerators for zoomIn/zoomOut/resetZoom don't
-  // fire reliably on macOS under our key listener setup — Cmd+Minus in
-  // particular was a no-op, and resetZoom only cleared the canvas viewport
-  // without touching the window UI zoom level.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return
-      if (e.key === '0') {
-        e.preventDefault()
-        setViewport(prev => ({ ...prev, zoom: 1 }))
-        window.electron.zoom.setLevel(0)
-      } else if (e.key === '=' || e.key === '+') {
-        e.preventDefault()
-        window.electron.zoom.setLevel(window.electron.zoom.getLevel() + 0.5)
-      } else if (e.key === '-') {
-        e.preventDefault()
-        window.electron.zoom.setLevel(window.electron.zoom.getLevel() - 0.5)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  // ─── Auto-save canvas state ───────────────────────────────────────────────
-  const persistCanvasState = useCallback((tileList: TileState[], vp: { tx: number; ty: number; zoom: number }, nz: number, grps?: GroupState[]) => {
-    if (!workspace) return
-    const resolvedGroups = grps ?? groupsRef.current
-
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      const state: CanvasState = {
-        tiles: tileList,
-        groups: resolvedGroups,
-        viewport: vp,
-        nextZIndex: nz,
-        panelLayout: panelLayoutRef.current ?? savedLayoutRef.current,
-        activePanelId: activePanelIdRef.current,
-        tabViewActive: Boolean(panelLayoutRef.current),
-        expandedTileId: expandedTileIdRef.current,
-        expandedCanvasGroupId: expandedCanvasGroupIdRef.current,
-        expandedCanvasPriorViewport: expandedCanvasPriorViewportRef.current,
-        lockedConnections: lockedConnectionsRef.current.length > 0 ? lockedConnectionsRef.current : undefined,
-      }
-      window.electron.canvas.save(workspace.id, state)
-    }, 500)
-  }, [workspace])
-
-  const saveCanvas = useCallback((tileList: TileState[], vp: { tx: number; ty: number; zoom: number }, nz: number, grps?: GroupState[]) => {
-    if (!workspace) return
-    // Use explicitly passed groups, or fall back to current groups state
-    const resolvedGroups = grps ?? groupsRef.current
-
-    // Push to undo history unless this save was triggered by undo/redo itself
-    if (!skipHistory.current) {
-      historyBack.current.push({ tiles: tilesRef.current, groups: groupsRef.current })
-      if (historyBack.current.length > 50) historyBack.current.shift()
-      historyForward.current = []
-    }
-
-    persistCanvasState(tileList, vp, nz, resolvedGroups)
-  }, [workspace, persistCanvasState])
-
-  // ─── Coordinate helpers ───────────────────────────────────────────────────
-  useEffect(() => {
-    if (!workspace) return
-    persistCanvasState(tiles, viewport, nextZIndex, groups)
-  }, [workspace, panelLayout, activePanelId, expandedTileId, persistCanvasState, tiles, viewport, nextZIndex, groups])
-
-  const screenToWorld = useCallback((sx: number, sy: number) => {
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
-    return {
-      x: (sx - rect.left - viewport.tx) / viewport.zoom,
-      y: (sy - rect.top - viewport.ty) / viewport.zoom
-    }
-  }, [viewport])
-
-  const viewportCenter = useCallback(() => {
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 200, y: 100 }
-    return screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2)
-  }, [screenToWorld])
-
-  const worldToScreenPoint = useCallback((point: { x: number; y: number }) => ({
-    x: point.x * viewport.zoom + viewport.tx,
-    y: point.y * viewport.zoom + viewport.ty,
-  }), [viewport])
-
-  const worldToScreenRect = useCallback((tile: TileState) => ({
-    left: tile.x * viewport.zoom + viewport.tx,
-    top: tile.y * viewport.zoom + viewport.ty,
-    width: tile.width * viewport.zoom,
-    height: tile.height * viewport.zoom,
-  }), [viewport])
 
   const triggerDiscoveryPulse = useCallback((tileId: string, tileList: TileState[]) => {
     if (!autoConnectionsEnabled) return
@@ -2037,44 +1736,16 @@ function App(): JSX.Element {
     discoveryTimeoutsRef.current.push(timeout)
   }, [autoConnectionsEnabled, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge])
 
-  const findManualConnectionTarget = useCallback((sourceTileId: string, point: { x: number; y: number }): string | null => {
-    const snapPadding = 34 / Math.max(0.25, viewportRef.current.zoom)
-    const candidates = tilesRef.current
-      .filter(tile => tile.id !== sourceTileId && !panelTileIdsRef.current.has(tile.id))
-      .filter(tile => (
-        point.x >= tile.x - snapPadding
-        && point.x <= tile.x + tile.width + snapPadding
-        && point.y >= tile.y - snapPadding
-        && point.y <= tile.y + tile.height + snapPadding
-      ))
-      .map(tile => ({
-        tile,
-        distance: Math.hypot(point.x - getTileCenter(tile).x, point.y - getTileCenter(tile).y),
-      }))
-      .sort((a, b) => a.distance - b.distance)
-    return candidates[0]?.tile.id ?? null
-  }, [])
-
-  const lockConnection = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    if (a === b) return
-    setSuppressedConnections(prev => {
-      const next = new Set(prev)
-      next.delete(`${a}::${b}`)
-      return next
-    })
-    setLockedConnections(prev => {
-      const alreadyLocked = prev.some(lc => {
-        const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-        return la === a && lb === b
-      })
-      if (alreadyLocked) return prev
-      const next = [...prev, { sourceTileId: a, targetTileId: b }]
-      lockedConnectionsRef.current = next
-      setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, groupsRef.current), 0)
-      return next
-    })
-  }, [persistCanvasState])
+  const lockConnection = useLockConnection({
+    persistCanvasState,
+    tilesRef,
+    groupsRef,
+    viewportRef,
+    nextZIndexRef,
+    lockedConnectionsRef,
+    setLockedConnections,
+    setSuppressedConnections,
+  })
 
   const getInitialTileSize = useCallback((type: TileState['type']) => {
     const configured = settings.defaultTileSizes[type]
@@ -2143,43 +1814,36 @@ function App(): JSX.Element {
   }, [activeChatTileId, chatTileSessionMatches])
   const preferredBrowserOpenTargetRef = useRef<string | null>(null)
 
-  // ─── Tile creation ────────────────────────────────────────────────────────
-  const buildTileState = useCallback((type: TileState['type'], filePath?: string, pos?: { x: number; y: number }, initialOptions?: { hideTitlebar?: boolean; hideNavbar?: boolean; launchBin?: string; launchArgs?: string[] }) => {
-    const center = pos ?? viewportCenter()
-    const { w, h } = getInitialTileSize(type)
-    const minW = getMinTileWidth(type)
-    const minH = getMinTileHeight(type)
-    const width = Math.max(w, minW)
-    const height = Math.max(h, minH)
-    const placementStep = Math.max(16, settings.gridSize || settings.gridSpacingSmall || GRID)
-    const preferred = {
-      x: snapValue(center.x - width / 2),
-      y: snapValue(center.y - height / 2),
-    }
-    const position = findClearPosition(preferred.x, preferred.y, width, height, tilesRef.current, panelTileIdsRef.current, placementStep)
-
-    // Media files (image/video/audio/PDF) open chromeless by default — hides
-    // both the tile titlebar and the browser navbar so the content fills the
-    // block. User can right-click to restore controls. Caller can override.
-    const isMedia = !!filePath && isMediaFile(filePath)
-    const defaultHideTitlebar = isMedia ? true : undefined
-    const defaultHideNavbar = isMedia ? true : undefined
-
-    return {
-      id: `tile-${Date.now()}`,
-      type,
-      x: position.x,
-      y: position.y,
-      width,
-      height,
-      zIndex: nextZIndexRef.current,
-      filePath,
-      hideTitlebar: initialOptions?.hideTitlebar ?? defaultHideTitlebar,
-      hideNavbar: initialOptions?.hideNavbar ?? defaultHideNavbar,
-      launchBin: initialOptions?.launchBin,
-      launchArgs: initialOptions?.launchArgs,
-    }
-  }, [viewportCenter, getInitialTileSize, snapValue, settings.gridSize, settings.gridSpacingSmall])
+  const {
+    buildTileState,
+    mountTile,
+    replacePreviewTile,
+    pinPreviewTab,
+    addTile,
+    closeTile,
+  } = useTileMounting({
+    workspace,
+    gridSize: settings.gridSize,
+    gridSpacingSmall: settings.gridSpacingSmall,
+    tilesRef,
+    panelTileIdsRef,
+    panelLayoutRef,
+    activePanelIdRef,
+    viewportRef,
+    nextZIndexRef,
+    selectedTileId,
+    setTiles,
+    setNextZIndex,
+    setSelectedTileId,
+    setPanelLayout,
+    setActivePanelId,
+    setChatTileSessionMatches,
+    saveCanvas,
+    viewportCenter,
+    snapValue,
+    getInitialTileSize,
+    triggerDiscoveryPulse,
+  })
 
   const getNavigationLeaf = useCallback((): PanelLeaf | null => {
     const layout = panelLayoutRef.current
@@ -2238,88 +1902,6 @@ function App(): JSX.Element {
     return associatedEditorLeaf ?? fallbackLeaf
   }, [getNavigationLeaf, isPreviewTabReplaceable])
 
-  const cleanupTileResources = useCallback((tileId: string) => {
-    const tile = tilesRef.current.find(t => t.id === tileId)
-    if (tile?.type === 'terminal') {
-      window.electron.terminal.destroy(tileId)
-    }
-    if (tile?.type === 'chat') {
-      disposeChatTileRuntimeState(tileId)
-    }
-    if (tile?.type === 'media') {
-      disposeMediaTile(tileId)
-    }
-    void window.electron.system.cleanupTile(tileId)
-    if (workspace?.id) {
-      void Promise.allSettled([
-        window.electron.canvas.deleteTileArtifacts(workspace.id, tileId),
-        window.electron.activity.clearTile(workspace.id, tileId),
-        workspace.path ? window.electron.collab.removeTileDir(workspace.path, tileId) : Promise.resolve(true),
-      ])
-    }
-  }, [workspace?.id, workspace?.path])
-
-  const mountTile = useCallback((
-    newTile: TileState,
-    options?: { panelId?: string | null; preview?: boolean },
-  ): string => {
-    const panelId = options?.panelId ?? activePanelIdRef.current
-    const updatedTiles = [...tilesRef.current, newTile]
-    const newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
-    setTiles(updatedTiles)
-    setNextZIndex(newNZ)
-    setSelectedTileId(newTile.id)
-    saveCanvas(updatedTiles, viewportRef.current, newNZ)
-    if (panelLayoutRef.current && panelId) {
-      setPanelLayout(prev => prev ? addTabToLeaf(prev, panelId, newTile.id, { preview: options?.preview }) : prev)
-      setActivePanelId(panelId)
-    }
-    window.setTimeout(() => triggerDiscoveryPulse(newTile.id, updatedTiles), 40)
-    return newTile.id
-  }, [saveCanvas, triggerDiscoveryPulse])
-
-  const replacePreviewTile = useCallback((
-    currentTileId: string,
-    newTile: TileState,
-    panelId: string,
-    options?: { preview?: boolean },
-  ): string => {
-    cleanupTileResources(currentTileId)
-    const updatedTiles = [...tilesRef.current.filter(tile => tile.id !== currentTileId), newTile]
-    const newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
-    setTiles(updatedTiles)
-    setNextZIndex(newNZ)
-    setSelectedTileId(newTile.id)
-    saveCanvas(updatedTiles, viewportRef.current, newNZ)
-    setPanelLayout(prev => prev
-      ? setActiveTab(replaceTabInLeaf(prev, panelId, currentTileId, newTile.id, { preview: options?.preview }), panelId, newTile.id)
-      : prev)
-    setActivePanelId(panelId)
-    setChatTileSessionMatches(prev => {
-      if (!(currentTileId in prev)) return prev
-      const next = { ...prev }
-      delete next[currentTileId]
-      return next
-    })
-    window.setTimeout(() => triggerDiscoveryPulse(newTile.id, updatedTiles), 40)
-    return newTile.id
-  }, [cleanupTileResources, saveCanvas, triggerDiscoveryPulse])
-
-  const pinPreviewTab = useCallback((tileId: string) => {
-    const layout = panelLayoutRef.current
-    if (!layout) return
-    const leafId = findLeafIdContainingTile(layout, tileId)
-    if (!leafId) return
-    const leaf = findLeafById(layout, leafId)
-    if (!leaf || leaf.previewTabId !== tileId) return
-    setPanelLayout(prev => prev ? pinTabInLeaf(prev, leafId, tileId) : prev)
-  }, [])
-
-  const addTile = useCallback((type: TileState['type'], filePath?: string, pos?: { x: number; y: number }, initialOptions?: { hideTitlebar?: boolean; hideNavbar?: boolean; launchBin?: string; launchArgs?: string[] }) => {
-    const newTile = buildTileState(type, filePath, pos, initialOptions)
-    return mountTile(newTile, { panelId: panelLayoutRef.current ? activePanelIdRef.current : null, preview: false })
-  }, [buildTileState, mountTile])
-
   useEffect(() => {
     const handleOpenLink = (event: Event) => {
       const customEvent = event as CustomEvent<CodeSurfOpenLinkDetail>
@@ -2355,26 +1937,15 @@ function App(): JSX.Element {
     return () => window.removeEventListener(CODESURF_OPEN_LINK_EVENT, handleOpenLink as EventListener)
   }, [addTile, settings.linkOpenMode])
 
-  useEffect(() => {
-    if (!tiles.some(tile => tile.width < getMinTileWidth(tile) || tile.height < getMinTileHeight(tile))) return
-    setTiles(prev => {
-      let changed = false
-      const updated = prev.map(tile => {
-        const minW = getMinTileWidth(tile)
-        const minH = getMinTileHeight(tile)
-        if (tile.width >= minW && tile.height >= minH) return tile
-        changed = true
-        return {
-          ...tile,
-          width: Math.max(tile.width, minW),
-          height: Math.max(tile.height, minH),
-        }
-      })
-      if (!changed) return prev
-      saveCanvas(updated, viewport, nextZIndex)
-      return updated
-    })
-  }, [tiles, viewport, nextZIndex, saveCanvas])
+  useEnforceTileMinimumSizes({
+    tiles,
+    viewport,
+    nextZIndex,
+    saveCanvas,
+    setTiles,
+    getMinTileWidth,
+    getMinTileHeight,
+  })
 
   // ─── MCP canvas tool handlers (must be after addTile) ────────────────────
   useEffect(() => {
@@ -2392,52 +1963,54 @@ function App(): JSX.Element {
       }
       if (event === 'canvas_list_tiles') {
         const tileList = tiles.map(t => ({ id: t.id, type: t.type, filePath: t.filePath, x: t.x, y: t.y }))
-        ;(window as any).electron?.mcp?.getPort?.().then((port: number | null) => {
+        void (async () => {
+          const port = await (window as any).electron?.mcp?.getPort?.()
           if (!port) return
-          fetch(`http://127.0.0.1:${port}/push`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ card_id: 'global', event: 'canvas_tiles_response', data: { tiles: tileList } })
+          const { postMcpEndpoint } = await import('./utils/mcpHttp')
+          await postMcpEndpoint(port, '/push', {
+            card_id: 'global',
+            event: 'canvas_tiles_response',
+            data: { tiles: tileList },
           }).catch(() => {})
-        })
+        })()
       }
     })
     return cleanup
   }, [tiles, addTile])
 
-  const closeTile = useCallback((id: string) => {
-    cleanupTileResources(id)
-    setTiles(prev => {
-      const updated = prev.filter(t => t.id !== id)
-      saveCanvas(updated, viewport, nextZIndex)
-      return updated
-    })
-    setPanelLayout(prev => {
-      if (!prev) return prev
-      const next = removeTileFromTree(prev, id)
-      if (next) return next
-      const emptyLeaf = createLeaf([])
-      setActivePanelId(emptyLeaf.id)
-      return emptyLeaf
-    })
-    setChatTileSessionMatches(prev => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    if (selectedTileId === id) setSelectedTileId(null)
-  }, [cleanupTileResources, selectedTileId, viewport, nextZIndex, saveCanvas])
+  const {
+    clipboardRef,
+    pasteTargetGroupIdRef,
+    copyTiles,
+    pasteTiles,
+    duplicateTiles,
+  } = useTileClipboard({
+    tiles,
+    groups,
+    selectedTileId,
+    selectedTileIds,
+    viewport,
+    nextZIndex,
+    setTiles,
+    setNextZIndex,
+    setSelectedTileId,
+    setSelectedTileIds,
+    saveCanvas,
+    viewportCenter,
+    snapValue,
+    groupBoundsRef,
+  })
 
   const bringToFront = useCallback((id: string) => {
     const nz = nextZIndex
     setTiles(prev => {
       const tile = prev.find(t => t.id === id)
-      pasteTargetGroupId.current = tile?.groupId
+      pasteTargetGroupIdRef.current = tile?.groupId
       return prev.map(t => t.id === id ? { ...t, zIndex: nz } : t)
     })
     setNextZIndex(n => n + 1)
     setSelectedTileId(id)
-  }, [nextZIndex])
+  }, [nextZIndex, pasteTargetGroupIdRef])
 
   useEffect(() => {
     const handleCreateTileRequest = (event: Event) => {
@@ -2496,502 +2069,66 @@ function App(): JSX.Element {
     return () => window.removeEventListener(CODESURF_OPEN_CHAT_SURFACE_EVENT, handleOpenChatSurfaceRequest as EventListener)
   }, [activeChatTileId, addTile, bringToFront, tiles])
 
-  // ─── Canvas mouse handlers ────────────────────────────────────────────────
-  const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
-    // Block if click originated from a tile or UI element (they stopPropagation — so anything
-    // that reaches here is either the canvas bg, world container, or group frames)
-    const t = e.target as HTMLElement
-    // If the target has a tile chrome ancestor, ignore (tiles call stopPropagation on titlebar)
-    if (t.closest('[data-tile-chrome]')) return
-    e.preventDefault()
-    const isPan = e.button === 1 || (e.button === 0 && (e.metaKey || spaceHeld.current))
-    if (isPan) {
-      cancelAnimationFrame(panInertiaRaf.current)
-      panVelocityRef.current = { vx: 0, vy: 0 }
-      panLastPos.current = { x: e.clientX, y: e.clientY, t: performance.now() }
-      setDragState({ type: 'pan', startX: e.clientX, startY: e.clientY, initTx: viewport.tx, initTy: viewport.ty })
-      setSelectedTileId(null)
-      return
-    }
-    if (e.button === 0) {
-      // Start rubber-band select on empty canvas
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (!rect) return
-      const wx = (e.clientX - rect.left - viewport.tx) / viewport.zoom
-      const wy = (e.clientY - rect.top - viewport.ty) / viewport.zoom
-      setDragState({ type: 'select', startWx: wx, startWy: wy, curWx: wx, curWy: wy })
-      setSelectedTileIds(new Set())
-      setSelectedTileId(null)
-    }
-  }, [viewport])
+  const { handleCanvasMouseDown, handleConnectionMouseDown, handleResizeMouseDown, handleCanvasDoubleClick, handleTileMouseDown } = useCanvasPointerHandlers({
+    canvasRef,
+    viewport,
+    setDragState,
+    setSelectedTileId,
+    setSelectedTileIds,
+    panLastPos,
+    cancelPanInertia,
+    screenToWorld,
+    spaceHeld,
+    bringToFront,
+    getConnectionHandlePoint: (tile, side) => getConnectionHandlePoint(tile, side),
+    panelLayout,
+    addTile,
+  })
 
-  // Double-click on blank canvas creates a terminal (not in tab view, not over a tile)
-  const handleCanvasDoubleClick = useCallback((e: React.MouseEvent) => {
-    if (panelLayout) return
-    if (e.target !== e.currentTarget) return
-    const world = screenToWorld(e.clientX, e.clientY)
-    addTile('terminal', undefined, world)
-  }, [screenToWorld, addTile, panelLayout])
+  const { showConnectionHandleForSide, scheduleConnectionHandleHide } = useConnectionHandleHover({
+    setHoveredConnectionHandle,
+  })
 
-  // Right-click on empty canvas
-  const handleCanvasContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    if (panelLayout) return
-    const world = screenToWorld(e.clientX, e.clientY)
-    const hitGroup = groups.find(g => {
-      const b = groupBoundsRef.current(g.id)
-      return b && world.x >= b.x && world.x <= b.x + b.w && world.y >= b.y && world.y <= b.y + b.h
-    })
-    const items: MenuItem[] = [
-      { label: 'New Terminal', action: () => addTile('terminal', undefined, world) },
-      { label: 'New Note',     action: () => addTile('note',     undefined, world) },
-      { label: 'New Browser',  action: () => addTile('browser',  undefined, world) },
-      { label: 'New Board',    action: () => addTile('kanban',   undefined, world) },
-    ]
-    // Extension tile types
-    if (pinnedCanvasExtensionTiles.length > 0) {
-      items.push({ label: '', action: () => {}, divider: true })
-      for (const ext of pinnedCanvasExtensionTiles) {
-        items.push({
-          label: ext.label,
-          action: () => addTile(ext.type as TileType, undefined, world),
-        })
-      }
-    }
-    if (clipboard.current.length > 0) {
-      items.push({ label: '', action: () => {}, divider: true })
-      items.push({ label: 'Paste', action: () => pasteTilesRef.current(world) })
-      if (hitGroup) {
-        items.push({ label: 'Paste into group', action: () => pasteTilesRef.current(world, hitGroup.id) })
-      }
-    }
-    if (selectedTileIds.size >= 2) {
-      items.push({ label: '', action: () => {}, divider: true })
-      items.push({ label: `Group ${selectedTileIds.size} blocks`, action: () => groupSelectedTilesRef.current() })
-    }
-    setCtxMenu({ x: e.clientX, y: e.clientY, items })
-  }, [screenToWorld, addTile, selectedTileIds, groups, panelLayout, pinnedCanvasExtensionTiles])
+  const handleCanvasContextMenu = useCanvasContextMenu({
+    screenToWorld,
+    panelLayout,
+    groups,
+    groupBoundsRef,
+    addTile,
+    pinnedCanvasExtensionTiles,
+    clipboardRef,
+    pasteAt: (pos, groupId) => pasteTilesRef.current(pos, groupId),
+    selectedTileIds,
+    groupSelectedTiles: () => groupSelectedTilesRef.current(),
+    setCtxMenu,
+  })
 
-  // Right-click on a tile titlebar
-  const handleTileContextMenu = useCallback((e: React.MouseEvent, tile: TileState) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const items: MenuItem[] = [
-      { label: 'Duplicate', action: () => duplicateTilesRef.current([tile.id]) },
-      { label: 'Copy',      action: () => { setSelectedTileId(tile.id); setSelectedTileIds(new Set()); copyTilesRef.current(false) } },
-      { label: 'Cut',       action: () => { setSelectedTileId(tile.id); setSelectedTileIds(new Set()); copyTilesRef.current(true) } },
-    ]
-    // Paste options
-    if (clipboard.current.length > 0) {
-      items.push({ label: '', action: () => {}, divider: true })
-      items.push({ label: 'Paste', action: () => pasteTilesRef.current() })
-      if (tile.groupId) {
-        items.push({ label: 'Paste into this group', action: () => pasteTilesRef.current(undefined, tile.groupId) })
-      }
-    }
-    items.push({ label: '', action: () => {}, divider: true })
-    // Group membership
-    if (tile.groupId) {
-      items.push({ label: 'Remove from group', action: () => {
-        setTiles(prev => {
-          const updated = prev.map(t => t.id === tile.id ? { ...t, groupId: undefined } : t)
-          saveCanvas(updated, viewport, nextZIndex)
-          return updated
-        })
-      }})
-      items.push({ label: 'Ungroup',     action: () => ungroupTilesRef.current(tile.groupId!) })
-      items.push({ label: 'Ungroup All', action: () => ungroupAllRef.current(tile.groupId!) })
-      items.push({ label: '', action: () => {}, divider: true })
-    }
-    // Add to group options — show available groups this tile isn't already in
-    const availableGroups = groups.filter(g => g.id !== tile.groupId)
-    if (availableGroups.length > 0) {
-      availableGroups.forEach(g => {
-        items.push({
-          label: `Add to ${g.label ?? g.id.slice(-6)}`,
-          action: () => {
-            setTiles(prev => {
-              const updated = prev.map(t => t.id === tile.id ? { ...t, groupId: g.id } : t)
-              saveCanvas(updated, viewport, nextZIndex)
-              return updated
-            })
-          }
-        })
-      })
-      items.push({ label: '', action: () => {}, divider: true })
-    }
-    if (tile.type === 'file' && tile.filePath && workspace?.path && !tile.filePath.startsWith(workspace.path)) {
-      items.push({
-        label: 'Add to workspace',
-        action: () => { void importFileToWorkspace(tile.filePath!, tile.id) }
-      })
-      items.push({ label: '', action: () => {}, divider: true })
-    }
-    // Chrome toggle — media files open chromeless; this restores titlebar +
-    // browser navbar (for browser tiles). Toggling them together keeps the
-    // two states coherent.
-    const currentlyChromeless = !!tile.hideTitlebar || !!tile.hideNavbar
-    items.push({
-      label: currentlyChromeless ? 'Show Controls' : 'Hide Controls',
-      action: () => {
-        setTiles(prev => {
-          const updated = prev.map(t => t.id === tile.id
-            ? { ...t, hideTitlebar: !currentlyChromeless, hideNavbar: !currentlyChromeless }
-            : t)
-          saveCanvas(updated, viewport, nextZIndex)
-          return updated
-        })
-      }
-    })
-    items.push({ label: '', action: () => {}, divider: true })
-    items.push({ label: 'Close', action: () => closeTile(tile.id), danger: true })
-    setCtxMenu({ x: e.clientX, y: e.clientY, items })
-  }, [closeTile, groups, viewport, nextZIndex, saveCanvas])
-
-  const handleTileMouseDown = useCallback((e: React.MouseEvent, tile: TileState) => {
-    e.stopPropagation()
-    bringToFront(tile.id)
-    // Tiles drag individually — even when grouped. The group itself can be
-    // dragged via its label bar or background. The group's bounds are
-    // computed from member positions, so moving a tile inside (or outside)
-    // its group's previous bounds expands/contracts the dashed frame.
-    setDragState({
-      type: 'tile',
-      tileId: tile.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      initX: tile.x,
-      initY: tile.y,
-      groupSnapshots: [],
-    })
-  }, [bringToFront])
-
-  const handleConnectionMouseDown = useCallback((e: React.MouseEvent, tile: TileState, side: AnchorPoint['side']) => {
-    e.stopPropagation()
-    e.preventDefault()
-    bringToFront(tile.id)
-    const anchor = getConnectionHandlePoint(tile, side)
-    setDragState({
-      type: 'connection',
-      sourceTileId: tile.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      side,
-      anchor,
-      current: screenToWorld(e.clientX, e.clientY),
-      targetTileId: null,
-    })
-  }, [bringToFront, screenToWorld])
-
-  const showConnectionHandleForSide = useCallback((tileId: string, side: AnchorPoint['side']) => {
-    if (connectionHandleHideTimerRef.current !== null) {
-      window.clearTimeout(connectionHandleHideTimerRef.current)
-      connectionHandleHideTimerRef.current = null
-    }
-    setHoveredConnectionHandle({ tileId, side })
-  }, [])
-
-  const scheduleConnectionHandleHide = useCallback((tileId: string, side: AnchorPoint['side']) => {
-    if (connectionHandleHideTimerRef.current !== null) {
-      window.clearTimeout(connectionHandleHideTimerRef.current)
-    }
-    connectionHandleHideTimerRef.current = window.setTimeout(() => {
-      connectionHandleHideTimerRef.current = null
-      setHoveredConnectionHandle(prev => prev?.tileId === tileId && prev.side === side ? null : prev)
-    }, 140)
-  }, [])
-
-  useEffect(() => () => {
-    if (connectionHandleHideTimerRef.current !== null) {
-      window.clearTimeout(connectionHandleHideTimerRef.current)
-      connectionHandleHideTimerRef.current = null
-    }
-  }, [])
-
-  const handleResizeMouseDown = useCallback((e: React.MouseEvent, tile: TileState, dir: 'e' | 's' | 'se' | 'w' | 'n' | 'nw' | 'ne' | 'sw') => {
-    e.stopPropagation()
-    e.preventDefault()
-    setDragState({
-      type: 'resize', tileId: tile.id, dir,
-      startX: e.clientX, startY: e.clientY,
-      initX: tile.x, initY: tile.y,
-      initW: tile.width, initH: tile.height
-    })
-  }, [])
-
-  // ─── Global mouse move/up ─────────────────────────────────────────────────
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (dragState.type === null) return
-      const dx = e.clientX - dragState.startX
-      const dy = e.clientY - dragState.startY
-
-      if (dragState.type === 'pan') {
-        const now = performance.now()
-        const dt = now - panLastPos.current.t
-        if (dt > 0) {
-          const decay = 0.4
-          panVelocityRef.current = {
-            vx: decay * panVelocityRef.current.vx + (1 - decay) * (e.clientX - panLastPos.current.x) / dt * 16,
-            vy: decay * panVelocityRef.current.vy + (1 - decay) * (e.clientY - panLastPos.current.y) / dt * 16,
-          }
-        }
-        panLastPos.current = { x: e.clientX, y: e.clientY, t: now }
-        setViewport(prev => ({ ...prev, tx: dragState.initTx + dx, ty: dragState.initTy + dy }))
-      } else if (dragState.type === 'group-resize') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        const { dir, initBounds: ib, snapshots: snaps } = dragState
-
-        // Compute new bounds
-        let nx = ib.x, ny = ib.y, nw = ib.w, nh = ib.h
-        if (dir.includes('e'))  nw = Math.max(100, ib.w + wdx)
-        if (dir.includes('s'))  nh = Math.max(100, ib.h + wdy)
-        if (dir.includes('w')) { nw = Math.max(100, ib.w - wdx); nx = ib.x + ib.w - nw }
-        if (dir.includes('n')) { nh = Math.max(100, ib.h - wdy); ny = ib.y + ib.h - nh }
-
-        // For layout groups, just update layoutBounds directly — no tile scaling
-        const resizingGroup = groupsRef.current.find(g => g.id === dragState.groupId)
-        if (resizingGroup?.layoutMode) {
-          setGroups(prev => prev.map(g => g.id === dragState.groupId
-            ? { ...g, layoutBounds: { x: snapValue(nx), y: snapValue(ny), w: snapValue(nw), h: snapValue(nh) } }
-            : g))
-        } else {
-          const scaleX = nw / ib.w
-          const scaleY = nh / ib.h
-          setTiles(prev => prev.map(t => {
-            const s = snaps.find(s2 => s2.id === t.id)
-            if (!s) return t
-            const minW = getMinTileWidth(t)
-            const minH = getMinTileHeight(t)
-            // Scale position relative to group origin
-            const relX = s.x - ib.x
-            const relY = s.y - ib.y
-            return {
-              ...t,
-              x: snapValue(nx + relX * scaleX),
-              y: snapValue(ny + relY * scaleY),
-              width: Math.max(minW, snapValue(s.width * scaleX)),
-              height: Math.max(minH, snapValue(s.height * scaleY)),
-            }
-          }))
-        }
-      } else if (dragState.type === 'group') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        if (dragState.initLayoutBounds) {
-          // Layout group — move the stored bounds, not individual tiles
-          const lb = dragState.initLayoutBounds
-          setGroups(prev => prev.map(g => g.id === dragState.groupId ? {
-            ...g,
-            layoutBounds: { ...lb, x: snapValue(lb.x + wdx), y: snapValue(lb.y + wdy) }
-          } : g))
-        } else {
-          setTiles(prev => prev.map(t => {
-            const snap2 = dragState.snapshots.find(s => s.id === t.id)
-            if (!snap2) return t
-            return { ...t, x: snapValue(snap2.x + wdx), y: snapValue(snap2.y + wdy) }
-          }))
-        }
-      } else if (dragState.type === 'select') {
-        const rect = canvasRef.current?.getBoundingClientRect()
-        if (!rect) return
-        const curWx = (e.clientX - rect.left - viewport.tx) / viewport.zoom
-        const curWy = (e.clientY - rect.top - viewport.ty) / viewport.zoom
-        setDragState(prev => prev.type === 'select' ? { ...prev, curWx, curWy } : prev)
-      } else if (dragState.type === 'connection') {
-        const current = screenToWorld(e.clientX, e.clientY)
-        const targetTileId = findManualConnectionTarget(dragState.sourceTileId, current)
-        setCanvasPointerWorld(current)
-        setDragState(prev => prev.type === 'connection' ? { ...prev, current, targetTileId } : prev)
-      } else if (dragState.type === 'tile') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        const newX = snapValue(dragState.initX + wdx)
-        const newY = snapValue(dragState.initY + wdy)
-        const ddx = newX - dragState.initX
-        const ddy = newY - dragState.initY
-        setTiles(prev => {
-          const dragging = prev.find(t => t.id === dragState.tileId)
-          if (!dragging) return prev
-          const others = prev.filter(t => t.id !== dragState.tileId && !dragState.groupSnapshots.find(g => g.id === t.id))
-          const w = dragging.width
-          const h = dragging.height
-          const THRESH = 6
-          const newGuides: { x?: number; y?: number }[] = []
-          for (const o of others) {
-            const dx_checks: [number, number][] = [
-              [newX, o.x], [newX, o.x + o.width / 2 - w / 2], [newX, o.x + o.width - w],
-              [newX + w / 2, o.x + o.width / 2], [newX + w, o.x], [newX + w, o.x + o.width],
-            ]
-            for (const [a, b] of dx_checks) {
-              if (Math.abs(a - b) < THRESH) newGuides.push({ x: b })
-            }
-            const dy_checks: [number, number][] = [
-              [newY, o.y], [newY, o.y + o.height / 2 - h / 2], [newY, o.y + o.height - h],
-              [newY + h / 2, o.y + o.height / 2], [newY + h, o.y], [newY + h, o.y + o.height],
-            ]
-            for (const [a, b] of dy_checks) {
-              if (Math.abs(a - b) < THRESH) newGuides.push({ y: b })
-            }
-          }
-          const seen = new Set<string>()
-          const dedupedGuides = newGuides.filter(g => {
-            const k = g.x !== undefined ? `x:${g.x}` : `y:${g.y}`
-            if (seen.has(k)) return false
-            seen.add(k); return true
-          })
-          setGuides(dedupedGuides)
-          return prev.map(t => {
-            if (t.id === dragState.tileId) return { ...t, x: newX, y: newY }
-            const snap2 = dragState.groupSnapshots.find(g => g.id === t.id)
-            if (snap2) return { ...t, x: snapValue(snap2.x + ddx), y: snapValue(snap2.y + ddy) }
-            return t
-          })
-        })
-      } else if (dragState.type === 'resize') {
-        const wdx = dx / viewport.zoom
-        const wdy = dy / viewport.zoom
-        const dir = dragState.dir
-        setTiles(prev => prev.map(t => {
-          if (t.id !== dragState.tileId) return t
-          const minW = getMinTileWidth(t)
-          const minH = getMinTileHeight(t)
-          let { x, y, width: w, height: h } = t
-          if (dir.includes('e'))  w = Math.max(minW, snapValue(dragState.initW + wdx))
-          if (dir.includes('s'))  h = Math.max(minH, snapValue(dragState.initH + wdy))
-          if (dir.includes('w')) { w = Math.max(minW, snapValue(dragState.initW - wdx)); x = snapValue(dragState.initX + wdx) }
-          if (dir.includes('n')) { h = Math.max(minH, snapValue(dragState.initH - wdy)); y = snapValue(dragState.initY + wdy) }
-          return { ...t, x, y, width: w, height: h }
-        }))
-      }
-    }
-
-    const onUp = () => {
-      if (dragState.type === 'connection') {
-        if (dragState.targetTileId) {
-          lockConnection(dragState.sourceTileId, dragState.targetTileId)
-        }
-      } else if (dragState.type === 'tile') {
-        setTiles(prev => {
-          const tile = prev.find(t => t.id === dragState.tileId)
-          if (!tile) { saveCanvas(prev, viewport, nextZIndex); return prev }
-
-          // If tile didn't actually move, don't touch group membership
-          const didMove = tile.x !== dragState.initX || tile.y !== dragState.initY
-          // Clear suppressed connections for this tile when it moves
-          if (didMove && suppressedConnectionsRef.current.size > 0) {
-            setSuppressedConnections(prev => {
-              const next = new Set(prev)
-              for (const key of prev) {
-                if (key.includes(tile.id)) next.delete(key)
-              }
-              return next.size === prev.size ? prev : next
-            })
-          }
-          if (!didMove) { saveCanvas(prev, viewport, nextZIndex); return prev }
-
-          const tileCx = tile.x + tile.width / 2
-          const tileCy = tile.y + tile.height / 2
-
-          // Check if dropped inside a different group's bounds
-          let newGroupId: string | undefined = tile.groupId
-          for (const g of groups) {
-            if (g.id === tile.groupId) continue // already in this group
-            const b = groupBoundsRef.current(g.id)
-            if (b && tileCx >= b.x && tileCx <= b.x + b.w && tileCy >= b.y && tileCy <= b.y + b.h) {
-              newGroupId = g.id
-              break
-            }
-          }
-
-          // Tiles dragged outside their group's bounds STAY in the group —
-          // the group frame expands to include the tile's new position. Only
-          // moving a tile into a DIFFERENT group's bounds (handled above)
-          // changes its groupId. This matches the user's expectation that a
-          // group is a logical container, not a physical cage.
-
-          if (newGroupId !== tile.groupId) {
-            const updated = prev.map(t => t.id === tile.id ? { ...t, groupId: newGroupId } : t)
-            saveCanvas(updated, viewport, nextZIndex)
-            window.setTimeout(() => triggerDiscoveryPulse(tile.id, updated), 40)
-            return updated
-          }
-          saveCanvas(prev, viewport, nextZIndex)
-          window.setTimeout(() => triggerDiscoveryPulse(tile.id, prev), 40)
-          return prev
-        })
-      } else if (dragState.type === 'resize' || dragState.type === 'group' || dragState.type === 'group-resize') {
-        setTiles(prev => { saveCanvas(prev, viewport, nextZIndex, groupsRef.current); return prev })
-      }
-      if (dragState.type === 'select') {
-        const minX = Math.min(dragState.startWx, dragState.curWx)
-        const maxX = Math.max(dragState.startWx, dragState.curWx)
-        const minY = Math.min(dragState.startWy, dragState.curWy)
-        const maxY = Math.max(dragState.startWy, dragState.curWy)
-        const size = Math.max(maxX - minX, maxY - minY)
-        if (size > 10) {
-          setTiles(prev => {
-            const hit = new Set(
-              prev
-                .filter(t => !panelTileIdsRef.current.has(t.id))  // exclude layout-group / panel tiles
-                .filter(t => t.x < maxX && t.x + t.width > minX && t.y < maxY && t.y + t.height > minY)
-                .map(t => t.id)
-            )
-            setSelectedTileIds(hit)
-            return prev
-          })
-        }
-      }
-      // Kick off inertia when releasing a pan
-      if (dragState.type === 'pan') {
-        const { vx, vy } = panVelocityRef.current
-        if (Math.abs(vx) > 0.5 || Math.abs(vy) > 0.5) {
-          const friction = 0.92
-          const animate = () => {
-            const v = panVelocityRef.current
-            if (Math.abs(v.vx) < 0.5 && Math.abs(v.vy) < 0.5) return
-            setViewport(prev => ({ ...prev, tx: prev.tx + v.vx, ty: prev.ty + v.vy }))
-            panVelocityRef.current = { vx: v.vx * friction, vy: v.vy * friction }
-            panInertiaRaf.current = requestAnimationFrame(animate)
-          }
-          panInertiaRaf.current = requestAnimationFrame(animate)
-        }
-      }
-      setGuides([])
-      setDragState({ type: null })
-    }
-
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [dragState, findManualConnectionTarget, groups, lockConnection, nextZIndex, saveCanvas, screenToWorld, triggerDiscoveryPulse, viewport])
-
-  // ─── Zoom — native listener needed for { passive: false } ────────────────
-  useEffect(() => {
-    const el = canvasRef.current
-    if (!el) return
-    const onWheel = (e: WheelEvent) => {
-      if (!e.metaKey && !e.ctrlKey) return
-      e.preventDefault()
-      const factor = e.deltaY < 0 ? 1.08 : 0.92
-      const newZoom = Math.max(0.25, Math.min(2, viewport.zoom * factor))
-      const rect = el.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
-      const wx = (mx - viewport.tx) / viewport.zoom
-      const wy = (my - viewport.ty) / viewport.zoom
-      setViewport({ tx: mx - wx * newZoom, ty: my - wy * newZoom, zoom: newZoom })
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [viewport])
-
-  // Keep as no-op for JSX prop (wheel handled natively above)
-  const handleWheel = useCallback((_e: React.WheelEvent) => {}, [])
+  useCanvasDragSync({
+    canvasRef,
+    dragState,
+    setDragState,
+    engine: canvasEngine,
+    tilesRef,
+    groupsRef,
+    groups,
+    setTiles,
+    setGroups,
+    setGuides,
+    setCanvasPointerWorld,
+    setSelectedTileIds,
+    setSuppressedConnections,
+    suppressedConnectionsRef,
+    panelTileIdsRef,
+    groupBoundsRef,
+    snapValue,
+    resolveManualConnectionTarget: (sourceTileId, point) => (
+      findManualConnectionTarget(sourceTileId, point, tilesRef.current, panelTileIdsRef.current, getTileCenter)
+    ),
+    lockConnection,
+    triggerDiscoveryPulse,
+    getMinTileWidth,
+    getMinTileHeight,
+  })
 
   // ─── Workspace switching ──────────────────────────────────────────────────
   const handleSwitchWorkspace = useCallback(async (id: string) => {
@@ -3022,7 +2159,7 @@ function App(): JSX.Element {
           : sanitizedPanel.fallbackActivePanelId
         setTiles(savedTiles)
         setGroups(saved.groups ?? [])
-        setViewport(saved.viewport ? { tx: saved.viewport.tx, ty: saved.viewport.ty, zoom: saved.viewport.zoom } : { tx: 0, ty: 0, zoom: 1 })
+        restoreViewport(saved.viewport)
         setNextZIndex(saved.nextZIndex ?? 1)
         savedLayoutRef.current = sanitizedPanel.layout
         setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
@@ -3034,15 +2171,14 @@ function App(): JSX.Element {
       } else {
         setTiles([])
         setGroups([])
-        setViewport({ tx: 0, ty: 0, zoom: 1 })
-        setNextZIndex(1)
+        resetViewportState()
         savedLayoutRef.current = null
         setPanelLayout(null)
         setActivePanelId(null)
         setExpandedTileId(null)
       }
     }
-  }, [workspaces])
+  }, [workspaces, restoreViewport, resetViewportState])
 
   const handleDeleteWorkspace = useCallback(async (id: string) => {
     const wasActive = workspace?.id === id
@@ -3577,262 +2713,134 @@ function App(): JSX.Element {
     }
   }, [workspace?.id])
 
-  // ─── Group selected tiles (supports nesting — wraps existing groups too) ──
-  const groupSelectedTiles = useCallback(() => {
-    if (selectedTileIds.size < 2) return
-    const groupId = `group-${Date.now()}`
+  const {
+    groupSelectedTiles,
+    ungroupTiles,
+    ungroupAll,
+    groupBounds,
+    collectGroupTileIds,
+    convertGroupToLayout,
+    revertLayoutGroup,
+  } = useCanvasGroupManager({
+    tiles,
+    groups,
+    selectedTileIds,
+    viewport,
+    nextZIndex,
+    setTiles,
+    setGroups,
+    setSelectedTileIds,
+    saveCanvas,
+  })
 
-    setGroups(prevGroups => {
-      // Find any existing groups whose member tiles are all selected — those groups become children
-      const childGroupIds = new Set(
-        prevGroups
-          .filter(g => {
-            const members = tiles.filter(t => t.groupId === g.id)
-            return members.length > 0 && members.every(t => selectedTileIds.has(t.id))
-          })
-          .map(g => g.id)
-      )
+  useCanvasKeyboard({
+    selectedTileIds,
+    groupSelectedTiles,
+    setCommandPaletteOpen,
+    undoCanvas,
+    redoCanvas,
+    onEscape: handleCanvasEscape,
+    spaceHeldRef: spaceHeld,
+  })
 
-      // Reparent child groups into the new group
-      const updatedGroups = prevGroups.map(g =>
-        childGroupIds.has(g.id) ? { ...g, parentGroupId: groupId } : g
-      )
-      const newGroup: GroupState = { id: groupId }
-      const finalGroups = [...updatedGroups, newGroup]
-
-      setTiles(tPrev => {
-        // Assign groupId to selected tiles that aren't already in a child group
-        const updated = tPrev.map(t =>
-          selectedTileIds.has(t.id) && !childGroupIds.has(t.groupId ?? '')
-            ? { ...t, groupId }
-            : t
-        )
-        saveCanvas(updated, viewport, nextZIndex, finalGroups)
-        return updated
-      })
-      return finalGroups
-    })
-    setSelectedTileIds(new Set())
-  }, [selectedTileIds, tiles, viewport, nextZIndex, saveCanvas])
-
-  // ─── Cmd+G to group ───────────────────────────────────────────────────────
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return
-      if ((e.metaKey || e.ctrlKey) && e.key === 'g') {
-        e.preventDefault()
-        if (selectedTileIds.size >= 2) groupSelectedTiles()
-      }
+    const suspendDuringDrag = dragState.type === 'tile'
+      || dragState.type === 'resize'
+      || dragState.type === 'group'
+      || dragState.type === 'group-resize'
+    canvasPersistSuspendedRef.current = suspendDuringDrag
+    if (!suspendDuringDrag) flushDeferredCanvasPersist()
+  }, [dragState.type, flushDeferredCanvasPersist])
+
+  // ─── Open a layout preset contributed by a plugin (point 10) ──
+  // A plugin's contributes.layoutPresets[].layout (a LayoutTemplateNode) is applied
+  // through the existing template-launch path — so "AI Chat" (sessions | chat | git)
+  // and any other reusable arrangement become one-click, registerable layouts.
+  useEffect(() => {
+    const onPreset = (e: Event) => {
+      const preset = (e as CustomEvent).detail as
+        | { id: string; title?: string; layout: import('../../shared/types').LayoutTemplateNode }
+        | undefined
+      if (!preset?.layout) return
+      void handleLaunchTemplate({ id: preset.id, name: preset.title ?? preset.id, created_at: '', tree: preset.layout })
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [selectedTileIds, groupSelectedTiles])
+    window.addEventListener('codesurf:open-layout-preset', onPreset as EventListener)
+    return () => window.removeEventListener('codesurf:open-layout-preset', onPreset as EventListener)
+  }, [handleLaunchTemplate])
 
-  // Ungroup one level — tiles revert to parentGroupId if present
-  const ungroupTiles = useCallback((groupId: string) => {
-    setGroups(prevGroups => {
-      const group = prevGroups.find(g => g.id === groupId)
-      const parentId = group?.parentGroupId
-
-      // Child groups that had this as parent get reparented up
-      const updatedGroups = prevGroups
-        .filter(g => g.id !== groupId)
-        .map(g => g.parentGroupId === groupId
-          ? { ...g, parentGroupId: parentId }
-          : g
-        )
-
-      setTiles(prev => {
-        const updated = prev.map(t =>
-          t.groupId === groupId ? { ...t, groupId: parentId } : t
-        )
-        saveCanvas(updated, viewport, nextZIndex, updatedGroups)
-        return updated
-      })
-      return updatedGroups
-    })
-  }, [viewport, nextZIndex, saveCanvas])
-
-  // Ungroup all — recursively strip every groupId from tiles in this group tree
-  const ungroupAll = useCallback((groupId: string) => {
-    setGroups(prevGroups => {
-      // Collect all group ids in this subtree
-      const toRemove = new Set<string>()
-      const collect = (id: string) => {
-        toRemove.add(id)
-        prevGroups.filter(g => g.parentGroupId === id).forEach(g => collect(g.id))
-      }
-      collect(groupId)
-
-      const updatedGroups = prevGroups.filter(g => !toRemove.has(g.id))
-
-      setTiles(prev => {
-        const updated = prev.map(t =>
-          toRemove.has(t.groupId ?? '') ? { ...t, groupId: undefined } : t
-        )
-        saveCanvas(updated, viewport, nextZIndex, updatedGroups)
-        return updated
-      })
-      return updatedGroups
-    })
-  }, [viewport, nextZIndex, saveCanvas])
-
-  // ─── Clipboard ───────────────────────────────────────────────────────────
-  const getActiveTiles = useCallback((): TileState[] => {
-    // Multi-select takes priority, then single selected, then nothing
-    return tiles.filter(t =>
-      selectedTileIds.size > 0 ? selectedTileIds.has(t.id) : t.id === selectedTileId
-    )
-  }, [tiles, selectedTileIds, selectedTileId])
-
-  const copyTiles = useCallback((cut = false) => {
-    const active = getActiveTiles()
-    if (active.length === 0) return
-    clipboard.current = active
-    isCut.current = cut
-    pasteOffset.current = 0
-    // For cut: remember source group so Cmd+V pastes back in by default
-    // For copy: clear target so Cmd+V pastes freely (use "paste in" label to target a group)
-    pasteTargetGroupId.current = cut ? active[0]?.groupId : undefined
-    if (cut) {
-      const ids = new Set(active.map(t => t.id))
-      setTiles(prev => {
-        const updated = prev.filter(t => !ids.has(t.id))
-        saveCanvas(updated, viewport, nextZIndex)
-        return updated
-      })
-      setSelectedTileId(null)
-      setSelectedTileIds(new Set())
+  // ─── Create a tile by type (built-in views surfaced via the command palette) ──
+  useEffect(() => {
+    const onNewTile = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { type?: string } | undefined
+      if (detail?.type) addTile(detail.type as TileState['type'])
     }
-  }, [getActiveTiles, viewport, nextZIndex, saveCanvas])
+    window.addEventListener('codesurf:new-tile', onNewTile as EventListener)
+    return () => window.removeEventListener('codesurf:new-tile', onNewTile as EventListener)
+  }, [addTile])
 
-  const pasteTiles = useCallback((pos?: { x: number; y: number }, intoGroupId?: string) => {
-    if (clipboard.current.length === 0) return
-    if (pasteOffset.current > 10) pasteOffset.current = 0
-    pasteOffset.current += 1
-    const OFFSET = pasteOffset.current * 30
-    const srcMinX = Math.min(...clipboard.current.map(t => t.x))
-    const srcMinY = Math.min(...clipboard.current.map(t => t.y))
-    const center = pos ?? viewportCenter()
-    const newNZ = nextZIndex + clipboard.current.length
-    // Resolve target group: explicit > position-based > ref > none
-    let targetGroup = intoGroupId ?? pasteTargetGroupId.current
-    if (!targetGroup && pos) {
-      // Check if paste position is inside a group frame
-      for (const g of groups) {
-        const b = groupBoundsRef.current(g.id)
-        if (b && pos.x >= b.x && pos.x <= b.x + b.w && pos.y >= b.y && pos.y <= b.y + b.h) {
-          targetGroup = g.id
-          break
+  // ─── A plugin footer chip was clicked → open that plugin's tile (point 3 loop) ──
+  // Reuses the exact tile-type form the canvas context menu uses, so the open path
+  // is identical to the proven one.
+  useEffect(() => {
+    const onFooterActivate = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { extId?: string } | undefined
+      if (!detail?.extId) return
+      try {
+        const tiles = await window.electron.extensions?.listTiles?.()
+        const tile = tiles?.find(t => t.extId === detail.extId)
+        if (tile?.type) addTile(tile.type as TileState['type'])
+      } catch { /* noop */ }
+    }
+    window.addEventListener('codesurf:footer-activate', onFooterActivate as EventListener)
+    return () => window.removeEventListener('codesurf:footer-activate', onFooterActivate as EventListener)
+  }, [addTile])
+
+  // ─── Save the current panel arrangement as a reusable Layout preset (point 10) ──
+  // Captures the live panel layout (PanelNode) into a LayoutTemplate; it then appears
+  // in the palette under "Layout:" via the saved-layouts integration. PanelNode sizes
+  // share the template's percentage scale (handleLaunchTemplate copies them 1:1), so
+  // no conversion is needed beyond mapping tabs → tile-type slots.
+  useEffect(() => {
+    const onSave = () => {
+      const layout = panelLayoutRef.current
+      if (!layout) { window.alert('Snap views into a panel layout first, then save it.'); return }
+      const toNode = (node: PanelNode): import('../../shared/types').LayoutTemplateNode => {
+        if (node.type === 'leaf') {
+          const slots = node.tabs.map(id => {
+            const t = tilesRef.current.find(x => x.id === id)
+            return { tileType: (t?.type ?? 'note') as TileType }
+          })
+          return { type: 'leaf', slots: slots.length ? slots : [{ tileType: 'note' as TileType }] }
         }
+        return { type: 'split', direction: node.direction, children: node.children.map(toNode), sizes: node.sizes }
       }
+      const name = window.prompt('Name this layout', 'My Layout')
+      if (!name) return
+      void addLayoutTemplate({ id: `saved-${Date.now()}`, name, created_at: new Date().toISOString(), tree: toNode(layout) })
     }
-    const newTiles = clipboard.current.map((t, i) => ({
-      ...t,
-      id: `tile-${Date.now()}-${i}`,
-      x: pos
-        ? snapValue(center.x + (t.x - srcMinX) - (Math.max(...clipboard.current.map(t2 => t2.x + t2.width)) - srcMinX) / 2)
-        : snapValue(t.x + OFFSET),
-      y: pos
-        ? snapValue(center.y + (t.y - srcMinY) - (Math.max(...clipboard.current.map(t2 => t2.y + t2.height)) - srcMinY) / 2)
-        : snapValue(t.y + OFFSET),
-      zIndex: nextZIndex + i,
-      groupId: targetGroup
-    }))
-    setTiles(prev => {
-      const updated = [...prev, ...newTiles]
-      saveCanvas(updated, viewport, newNZ)
-      return updated
-    })
-    setNextZIndex(newNZ)
-    setSelectedTileIds(new Set(newTiles.map(t => t.id)))
-    setSelectedTileId(null)
-  }, [viewport, nextZIndex, viewportCenter, saveCanvas, groups, snapValue])
+    window.addEventListener('codesurf:save-layout', onSave as EventListener)
+    return () => window.removeEventListener('codesurf:save-layout', onSave as EventListener)
+  }, [addLayoutTemplate])
 
-  const duplicateTiles = useCallback((ids?: string[]) => {
-    const targets = ids
-      ? tiles.filter(t => ids.includes(t.id))
-      : getActiveTiles()
-    if (targets.length === 0) return
-    const newNZ = nextZIndex + targets.length
-    const newTiles = targets.map((t, i) => ({
-      ...t,
-      id: `tile-${Date.now()}-${i}`,
-      x: snapValue(t.x + 40),
-      y: snapValue(t.y + 40),
-      zIndex: nextZIndex + i,
-      groupId: undefined
-    }))
-    setTiles(prev => {
-      const updated = [...prev, ...newTiles]
-      saveCanvas(updated, viewport, newNZ)
-      return updated
-    })
-    setNextZIndex(newNZ)
-    setSelectedTileIds(new Set(newTiles.map(t => t.id)))
-    setSelectedTileId(null)
-  }, [tiles, getActiveTiles, viewport, nextZIndex, saveCanvas, snapValue])
-
-  // ─── Group frame bounds (recursive — includes child group tiles) ─────────
-  const groupBounds = useCallback((groupId: string): { x: number; y: number; w: number; h: number } | null => {
-    const group = groups.find(g => g.id === groupId)
-    // Layout-mode groups use stored fixed bounds
-    if (group?.layoutMode && group.layoutBounds) {
-      return group.layoutBounds as { x: number; y: number; w: number; h: number }
-    }
-    const collectTileIds = (gid: string): string[] => {
-      const direct = tiles.filter(t => t.groupId === gid).map(t => t.id)
-      const childGroups = groups.filter(g => g.parentGroupId === gid)
-      return [...direct, ...childGroups.flatMap(g => collectTileIds(g.id))]
-    }
-    const ids = new Set(collectTileIds(groupId))
-    const members = tiles.filter(t => ids.has(t.id))
-    if (members.length === 0) return null
-    const PAD = 20
-    const minX = Math.min(...members.map(t => t.x)) - PAD
-    const minY = Math.min(...members.map(t => t.y)) - PAD
-    const maxX = Math.max(...members.map(t => t.x + t.width)) + PAD
-    const maxY = Math.max(...members.map(t => t.y + t.height)) + PAD
-    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
-  }, [tiles, groups])
-
-  // Collect all tile ids in a group tree (for drag)
-  const collectGroupTileIds = useCallback((groupId: string): string[] => {
-    const direct = tiles.filter(t => t.groupId === groupId).map(t => t.id)
-    const childGroups = groups.filter(g => g.parentGroupId === groupId)
-    return [...direct, ...childGroups.flatMap(g => collectGroupTileIds(g.id))]
-  }, [tiles, groups])
-
-  const convertGroupToLayout = useCallback((groupId: string) => {
-    const memberTileIds = tiles.filter(t => t.groupId === groupId).map(t => t.id)
-    if (memberTileIds.length === 0) return
-    const bounds = groupBounds(groupId)
-    if (!bounds) return
-    const leaf = createLeaf(memberTileIds, memberTileIds[0])
-    setGroups(prev => {
-      const updated = prev.map(g => g.id === groupId ? {
-        ...g,
-        layoutMode: true,
-        layout: leaf,
-        layoutBounds: bounds,
-      } : g)
-      setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-      return updated
-    })
-  }, [tiles, groupBounds, viewport, nextZIndex, saveCanvas])
-
-  const revertLayoutGroup = useCallback((groupId: string) => {
-    setGroups(prev => {
-      const updated = prev.map(g => g.id === groupId ? {
-        ...g,
-        layoutMode: false,
-        layout: undefined,
-        layoutBounds: undefined,
-      } : g)
-      setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-      return updated
-    })
-  }, [viewport, nextZIndex, saveCanvas])
+  const handleTileContextMenu = useTileContextMenu({
+    viewport,
+    nextZIndex,
+    groups,
+    workspacePath: workspace?.path,
+    saveCanvas,
+    setTiles,
+    setSelectedTileId,
+    setSelectedTileIds,
+    setCtxMenu,
+    clipboardRef,
+    duplicateTiles,
+    copyTiles,
+    pasteTiles,
+    ungroupTiles,
+    ungroupAll,
+    closeTile,
+    importFileToWorkspace,
+  })
 
   const expandLayoutGroup = useCallback((groupId: string) => {
     const g = groupsRef.current.find(gr => gr.id === groupId)
@@ -3846,58 +2854,17 @@ function App(): JSX.Element {
     setExpandedTileId(null)
   }, [])
 
-  // ─── Canvas-expand a non-layout group ────────────────────────────────────
-  // Collect the recursive set of group ids (the expanded group + every descendant).
-  const collectGroupIdsRecursive = useCallback((groupId: string): string[] => {
-    const childGroups = groupsRef.current.filter(g => g.parentGroupId === groupId)
-    return [groupId, ...childGroups.flatMap(g => collectGroupIdsRecursive(g.id))]
-  }, [])
-
-  /**
-   * Compute the viewport that fits the expanded group's bounds to the canvas
-   * area. Returns { tx, ty, zoom }.
-   *
-   * USER-AUTHORED DECISION POINT — see request below.
-   */
-  const computeFitViewport = useCallback((bounds: { x: number; y: number; w: number; h: number }, screen: { w: number; h: number }): { tx: number; ty: number; zoom: number } => {
-    // TODO(user): tune feel. See request in chat.
-    const PAD_PX = 48              // screen-space padding around the group
-    const MAX_ZOOM = 1.5            // never zoom in past this
-    const availW = Math.max(1, screen.w - PAD_PX * 2)
-    const availH = Math.max(1, screen.h - PAD_PX * 2)
-    const zoom = Math.min(MAX_ZOOM, availW / bounds.w, availH / bounds.h)
-    const tx = (screen.w - bounds.w * zoom) / 2 - bounds.x * zoom
-    const ty = (screen.h - bounds.h * zoom) / 2 - bounds.y * zoom
-    return { tx, ty, zoom }
-  }, [])
-
-  const enterCanvasExpanded = useCallback((groupId: string) => {
-    const g = groupsRef.current.find(gr => gr.id === groupId)
-    if (!g || g.layoutMode) return
-    const bounds = groupBounds(groupId)
-    if (!bounds) return
-    const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return
-    expandedCanvasPriorViewportRef.current = { ...viewportRef.current }
-    const fit = computeFitViewport(bounds, { w: rect.width, h: rect.height })
-    setViewport(fit)
-    viewportRef.current = fit
-    setExpandedCanvasGroupId(groupId)
-    expandedCanvasGroupIdRef.current = groupId
-    // Mutually exclusive with single-tile expand
-    setExpandedTileId(null)
-  }, [groupBounds, computeFitViewport])
-
-  const exitCanvasExpanded = useCallback(() => {
-    const prior = expandedCanvasPriorViewportRef.current
-    setExpandedCanvasGroupId(null)
-    expandedCanvasGroupIdRef.current = null
-    if (prior) {
-      setViewport(prior)
-      viewportRef.current = prior
-    }
-    expandedCanvasPriorViewportRef.current = null
-  }, [])
+  const { enterCanvasExpanded, exitCanvasExpanded } = useCanvasExpandedGroup({
+    canvasRef,
+    viewportRef,
+    expandedCanvasPriorViewportRef,
+    expandedCanvasGroupIdRef,
+    groupsRef,
+    setViewport,
+    setExpandedCanvasGroupId,
+    setExpandedTileId,
+    groupBounds,
+  })
   exitCanvasExpandedRef.current = exitCanvasExpanded
 
   // Keep action refs in sync so early-defined callbacks can call them safely
@@ -3906,92 +2873,22 @@ function App(): JSX.Element {
   copyTilesRef.current = copyTiles
   groupSelectedTilesRef.current = groupSelectedTiles
   groupBoundsRef.current = groupBounds
-  persistCanvasStateRef.current = persistCanvasState
   ungroupTilesRef.current = ungroupTiles
   ungroupAllRef.current = ungroupAll
 
-  // ─── Copy / Cut / Paste / Duplicate / Delete shortcuts ───────────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return
-      const mod = e.metaKey || e.ctrlKey
-      if (mod && e.key === 'c') { e.preventDefault(); copyTiles(false) }
-      if (mod && e.key === 'x') { e.preventDefault(); copyTiles(true) }
-      if (mod && e.key === 'v') { e.preventDefault(); pasteTiles() }
-      if (mod && e.key === 'd') { e.preventDefault(); duplicateTiles() }
-      if ((e.key === 'Backspace' || e.key === 'Delete') && !mod) {
-        const active = selectedTileIds.size > 0
-          ? [...selectedTileIds]
-          : selectedTileId ? [selectedTileId] : []
-        if (active.length > 0) {
-          const ids = new Set(active)
-          setTiles(prev => {
-            const updated = prev.filter(t => !ids.has(t.id))
-            saveCanvas(updated, viewport, nextZIndex)
-            return updated
-          })
-          setSelectedTileId(null)
-          setSelectedTileIds(new Set())
-        }
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [copyTiles, pasteTiles, duplicateTiles, selectedTileId, selectedTileIds, viewport, nextZIndex, saveCanvas])
-
-  // ─── Undo / redo ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return
-      const mod = e.metaKey || e.ctrlKey
-      if (!mod) return
-
-      const isUndo = e.key === 'z' && !e.shiftKey
-      const isRedo = (e.key === 'z' && e.shiftKey) || e.key === 'y'
-      if (!isUndo && !isRedo) return
-      e.preventDefault()
-
-      if (isUndo && historyBack.current.length > 0) {
-        const prev = historyBack.current.pop()!
-        historyForward.current.push({ tiles: tilesRef.current, groups: groupsRef.current })
-        skipHistory.current = true
-        setTiles(prev.tiles)
-        setGroups(prev.groups)
-        // Persist the restored state without adding another history entry
-        if (workspace) {
-          if (saveTimer.current) clearTimeout(saveTimer.current)
-          saveTimer.current = setTimeout(() => {
-            const state: CanvasState = { tiles: prev.tiles, groups: prev.groups, viewport: viewportRef.current, nextZIndex: nextZIndexRef.current }
-            window.electron.canvas.save(workspace.id, state)
-            skipHistory.current = false
-          }, 500)
-        } else {
-          skipHistory.current = false
-        }
-      }
-
-      if (isRedo && historyForward.current.length > 0) {
-        const next = historyForward.current.pop()!
-        historyBack.current.push({ tiles: tilesRef.current, groups: groupsRef.current })
-        if (historyBack.current.length > 50) historyBack.current.shift()
-        skipHistory.current = true
-        setTiles(next.tiles)
-        setGroups(next.groups)
-        if (workspace) {
-          if (saveTimer.current) clearTimeout(saveTimer.current)
-          saveTimer.current = setTimeout(() => {
-            const state: CanvasState = { tiles: next.tiles, groups: next.groups, viewport: viewportRef.current, nextZIndex: nextZIndexRef.current }
-            window.electron.canvas.save(workspace.id, state)
-            skipHistory.current = false
-          }, 500)
-        } else {
-          skipHistory.current = false
-        }
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [workspace, viewport, nextZIndex])
+  useCanvasTileShortcuts({
+    selectedTileId,
+    selectedTileIds,
+    viewport,
+    nextZIndex,
+    setTiles,
+    setSelectedTileId,
+    setSelectedTileIds,
+    saveCanvas,
+    copyTiles,
+    pasteTiles,
+    duplicateTiles,
+  })
 
   // ─── Arrange handler ──────────────────────────────────────────────────────
   const handleArrange = useCallback((updated: TileState[]) => {
@@ -4013,33 +2910,12 @@ function App(): JSX.Element {
         }
       })
       saveCanvas(merged, viewport, nextZIndex)
-
-      // Zoom to fit — compensate for sidebar width if open
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (rect && merged.length > 0) {
-        const sidebarOffset = sidebarCollapsed ? 0 : sidebarWidth + 8
-        const availableWidth = rect.width - sidebarOffset
-        const minX = Math.min(...merged.map(t => t.x))
-        const minY = Math.min(...merged.map(t => t.y))
-        const maxX = Math.max(...merged.map(t => t.x + getArrangeWidth(t)))
-        const maxY = Math.max(...merged.map(t => t.y + t.height))
-        const PAD = 60
-        const fitZoom = Math.min(
-          availableWidth / (maxX - minX + PAD * 2),
-          rect.height   / (maxY - minY + PAD * 2),
-          2
-        )
-        const newZoom = fitZoom * 0.9
-        // Center within the available area (shifted right by sidebar)
-        const centerX = sidebarOffset + availableWidth / 2
-        const tx = centerX - ((minX + maxX) / 2) * newZoom
-        const ty = rect.height / 2 - ((minY + maxY) / 2) * newZoom
-        setViewport({ tx, ty, zoom: newZoom })
-      }
+      const sidebarOffset = sidebarCollapsed ? 0 : sidebarWidth + 8
+      zoomToFitArrangedTiles(merged, getArrangeWidth, sidebarOffset)
 
       return merged
     })
-  }, [viewport, nextZIndex, saveCanvas, sidebarCollapsed, sidebarWidth])
+  }, [viewport, nextZIndex, saveCanvas, sidebarCollapsed, sidebarWidth, zoomToFitArrangedTiles])
 
   // ─── Render tile body ─────────────────────────────────────────────────────
   const renderTileBody = (tile: TileState, options?: { isInteracting?: boolean; isActive?: boolean; isSelected?: boolean }): React.ReactNode => {
@@ -4112,14 +2988,8 @@ function App(): JSX.Element {
             onFocusTile={(linkedId) => {
               const target = tiles.find(t => t.id === linkedId)
               if (!target) return
-              // Bring to front
               bringToFront(linkedId)
-              // Pan canvas to center the tile
-              const rect = canvasRef.current?.getBoundingClientRect()
-              if (!rect) return
-              const newTx = rect.width / 2 - (target.x + target.width / 2) * viewport.zoom
-              const newTy = rect.height / 2 - (target.y + target.height / 2) * viewport.zoom
-              setViewport(prev => ({ ...prev, tx: newTx, ty: newTy }))
+              panToTile(target)
             }}
           />
         )
@@ -4475,48 +3345,17 @@ function App(): JSX.Element {
     prevPeerLinksRef.current = newMap
   }, [negotiatedDiscoveryState.byTileConnections, tiles, workspace?.path])
 
-  // ─── Locked connection helpers ──────────────────────────────────────────────
-  const isConnectionLocked = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    return lockedConnections.some(lc => {
-      const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-      return la === a && lb === b
-    })
-  }, [lockedConnections])
-
-  const toggleConnectionLock = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    setLockedConnections(prev => {
-      const idx = prev.findIndex(lc => {
-        const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-        return la === a && lb === b
-      })
-      const next = idx >= 0
-        ? prev.filter((_, i) => i !== idx)
-        : [...prev, { sourceTileId: a, targetTileId: b }]
-      lockedConnectionsRef.current = next
-      console.log('[Lock]', idx >= 0 ? 'Unlocked' : 'Locked', a, b, 'total:', next.length)
-      setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, groupsRef.current), 0)
-      return next
-    })
-  }, [persistCanvasState])
-
-  const deleteConnection = useCallback((tileA: string, tileB: string) => {
-    const [a, b] = [tileA, tileB].sort()
-    const key = `${a}::${b}`
-    // Remove from locked connections
-    setLockedConnections(prev => {
-      const next = prev.filter(lc => {
-        const [la, lb] = [lc.sourceTileId, lc.targetTileId].sort()
-        return !(la === a && lb === b)
-      })
-      lockedConnectionsRef.current = next
-      setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, groupsRef.current), 0)
-      return next
-    })
-    // Suppress proximity auto-reconnect until tiles move
-    setSuppressedConnections(prev => new Set(prev).add(key))
-  }, [persistCanvasState])
+  const { isConnectionLocked, toggleConnectionLock, deleteConnection } = useLockedConnectionHelpers({
+    lockedConnections,
+    persistCanvasState,
+    tilesRef,
+    groupsRef,
+    viewportRef,
+    nextZIndexRef,
+    lockedConnectionsRef,
+    setLockedConnections,
+    setSuppressedConnections,
+  })
 
   const lockedConnectionKeys = React.useMemo(() => {
     return new Set(lockedConnections.map(lc => [lc.sourceTileId, lc.targetTileId].sort().join('::')))
@@ -4908,23 +3747,20 @@ function App(): JSX.Element {
         ['#000000', '#000000', '#000000', '#000000', '#000000', '#000000'],
       ], [theme.mode])
   const activeBrandWordmark = brandWordmarks[brandWordmarkIndex % brandWordmarks.length]
-  const activeBrandPalette = brandPalettes[brandPaletteIndex % brandPalettes.length]
-  const activeBrandWordmarkScale = activeBrandWordmark[0]
+  void brandPalettes[brandPaletteIndex % brandPalettes.length]
+  void (activeBrandWordmark[0]
     ? Math.min(1, (32 / activeBrandWordmark[0].length) * (
       brandWordmarkIndex === 0 ? 1 : brandWordmarkIndex === 1 ? 1.44 : 1.2
     )) * 0.62
-    : 1
+    : 1)
   const translucentBackgroundOpacity = Math.max(0.05, Math.min(1, settings.translucentBackgroundOpacity ?? 1))
   const canvasBackground = withAlpha(settings.canvasBackground, translucentBackgroundOpacity)
   const canvasLayerBackground = theme.canvas.backgroundEffect
     ? `${theme.canvas.backgroundEffect}, ${canvasBackground}`
     : canvasBackground
-  const sidebarPanelTop = 0
   const sidebarFooterBottom = 2
   const sidebarFooterLeft = 0
   const sidebarFooterHeight = 42
-  const sidebarToFooterGap = 8
-  const sidebarPanelBottomOffset = sidebarFooterBottom + sidebarFooterHeight - 12
   // 2px margin between the main panel's bottom edge and the footer top.
   const mainPanelBottomInset = sidebarFooterHeight-6
   const mainPanelTop = 39
@@ -4986,7 +3822,6 @@ function App(): JSX.Element {
   const workspaceTabInactiveHoverBackground = theme.mode === 'light'
     ? `color-mix(in srgb, ${theme.surface.panel} 78%, transparent)`
     : theme.surface.hover
-  const workspaceTabActiveBorder = `color-mix(in srgb, ${theme.accent.base} 16%, transparent)`
   const workspaceTabCloseHoverBackground = `color-mix(in srgb, ${theme.surface.selection} 70%, ${theme.surface.hover})`
   const workspaceTabMaxWidth = 'min(248px, 24vw)'
   const workspaceTabActiveHeight = 27
@@ -4995,7 +3830,6 @@ function App(): JSX.Element {
   const workspaceTabInactiveTextOffset = 0
   const workspaceTabActiveBottomGap = 3
   const workspaceTabInactiveBottomGap = workspaceTabActiveBottomGap + 3
-  const workspaceTabAttachedBottomGap = -2
   // Discovery connection colors — adapt to theme mode
   const dsc = theme.mode === 'light'
     ? { line: '53, 104, 255', dot: '53, 104, 255', bg: '255, 255, 255', text: theme.accent.base }
@@ -5874,6 +4708,7 @@ function App(): JSX.Element {
         {/* Canvas surface — inset to the same rounded content area as panel mode */}
         <div
           ref={canvasRef}
+          data-canvas-surface="true"
           className="absolute overflow-hidden"
           style={{
             top: mainPanelTop,
@@ -5916,16 +4751,7 @@ function App(): JSX.Element {
             if (linkedTileId) {
               bringToFront(linkedTileId)
               const target = tiles.find(t => t.id === linkedTileId)
-              if (target) {
-                const rect = canvasRef.current?.getBoundingClientRect()
-                if (rect) {
-                  setViewport(prev => ({
-                    ...prev,
-                    tx: rect.width / 2 - (target.x + target.width / 2) * prev.zoom,
-                    ty: rect.height / 2 - (target.y + target.height / 2) * prev.zoom
-                  }))
-                }
-              }
+              if (target) panToTile(target)
               return
             }
 
@@ -5951,11 +4777,12 @@ function App(): JSX.Element {
               // Check for .vsix first
               const vsixPath = droppedPaths.find(p => p.endsWith('.vsix'))
               if (vsixPath) {
-                window.api.extensions.installVsix(vsixPath).then((result: any) => {
+                window.electron.extensions.installVsix?.(vsixPath).then((result) => {
                   if (result?.ok) {
                     console.log('[vsix] Installed:', result.name)
-                    if (result.tiles && result.tiles.length > 0) {
-                      addTile('extension', undefined, world)
+                    const firstTile = result.tiles?.[0]
+                    if (firstTile) {
+                      addTile(firstTile.type as TileState['type'], undefined, world)
                     }
                   } else {
                     console.error('[vsix] Install failed:', result?.error)
@@ -6101,402 +4928,43 @@ function App(): JSX.Element {
               transformOrigin: '0 0'
             }}
           >
-            {/* Group frames — sorted so parents render behind children */}
-            {[...groups]
-              .sort((a, b) => (a.parentGroupId ? 1 : 0) - (b.parentGroupId ? 1 : 0))
-              .map(g => {
-                const b = groupBounds(g.id)
-                if (!b) return null
-                // Canvas-expanded mode: hide non-member groups entirely, and
-                // hide the expanded group's OWN chrome (border + label bar)
-                // since the whole canvas now represents that group.
-                if (expandedCanvasMembership) {
-                  if (!expandedCanvasMembership.groupIds.has(g.id)) return null
-                  if (g.id === expandedCanvasGroupId) return null
-                }
-
-                // ── Layout-mode group: embedded PanelLayout ──────────────────
-                if (g.layoutMode && g.layout) {
-                  const lb = b
-                  const layout = g.layout as PanelNode
-                  const color = g.color ?? '#4a9eff'
-                  const borderColor = color + 'bb'
-                  const labelColor = color + 'ee'
-                  const isDraggingThis = dragState.type === 'group' && dragState.groupId === g.id
-                  const HEADER_H = 32  // world px — scales with canvas zoom like tile chrome
-
-                  return (
-                    <div
-                      key={g.id}
-                      style={{
-                        position: 'absolute',
-                        left: lb.x, top: lb.y, width: lb.w, height: lb.h,
-                        border: `2px solid ${borderColor}`,
-                        borderRadius: 12,
-                        background: theme.surface.panel,  // opaque — prevents grid bleed-through
-                        zIndex: isDraggingThis ? 99989 : 8,
-                        boxSizing: 'border-box',
-                        overflow: 'hidden',
-                        cursor: 'default',
-                      }}
-                      onMouseDown={e => e.stopPropagation()}
-                    >
-                      {/* Header — fixed world-px height, scales naturally with canvas zoom */}
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: 0, left: 0, right: 0,
-                          height: HEADER_H,
-                          display: 'flex', alignItems: 'center', gap: 8,
-                          padding: '0 10px',
-                          background: color + '22',
-                          borderBottom: `1px solid ${borderColor}`,
-                          cursor: isDraggingThis ? 'grabbing' : 'grab',
-                          userSelect: 'none',
-                          boxSizing: 'border-box',
-                        }}
-                        onMouseDown={e => {
-                          e.stopPropagation()
-                          setDragState({
-                            type: 'group',
-                            groupId: g.id,
-                            startX: e.clientX, startY: e.clientY,
-                            snapshots: [],
-                            initLayoutBounds: lb,
-                          })
-                        }}
-                        onDoubleClick={e => { e.stopPropagation(); expandLayoutGroup(g.id) }}
-                      >
-                        <LayoutGrid size={12} style={{ color: labelColor, flexShrink: 0, opacity: 0.7 }} />
-                        <span style={{ fontSize: appFonts.secondarySize, color: labelColor, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {g.label ?? 'layout'}
-                        </span>
-                        <div
-                          title="Expand fullscreen"
-                          onClick={e => { e.stopPropagation(); expandLayoutGroup(g.id) }}
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 4, cursor: 'pointer', color: labelColor, opacity: 0.6 }}
-                          onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
-                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.6' }}
-                        >
-                          <Maximize2 size={11} />
-                        </div>
-                        <div
-                          title="Back to blocks"
-                          onClick={e => { e.stopPropagation(); revertLayoutGroup(g.id) }}
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 4, cursor: 'pointer', color: labelColor, opacity: 0.6 }}
-                          onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
-                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.6' }}
-                        >
-                          <Ungroup size={11} />
-                        </div>
-                      </div>
-
-                      {/* Resize handles */}
-                      {([ 'n','s','e','w','ne','nw','se','sw' ] as const).map(dir => {
-                        const S = 10 / viewport.zoom
-                        const hs: React.CSSProperties = { position: 'absolute', zIndex: 20 }
-                        if (dir === 'e')  Object.assign(hs, { right: -S/2,  top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                        if (dir === 'w')  Object.assign(hs, { left: -S/2,   top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                        if (dir === 's')  Object.assign(hs, { bottom: -S/2, left: S,     right: S,       height: S, cursor: 'row-resize' })
-                        if (dir === 'n')  Object.assign(hs, { top: -S/2,    left: S,     right: S,       height: S, cursor: 'row-resize' })
-                        if (dir === 'se') Object.assign(hs, { right: -S/2,  bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'se-resize' })
-                        if (dir === 'sw') Object.assign(hs, { left: -S/2,   bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'sw-resize' })
-                        if (dir === 'ne') Object.assign(hs, { right: -S/2,  top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'ne-resize' })
-                        if (dir === 'nw') Object.assign(hs, { left: -S/2,   top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'nw-resize' })
-                        return (
-                          <div
-                            key={dir}
-                            style={hs}
-                            onMouseDown={e => {
-                              e.stopPropagation()
-                              e.preventDefault()
-                              setDragState({
-                                type: 'group-resize',
-                                groupId: g.id, dir,
-                                startX: e.clientX, startY: e.clientY,
-                                initBounds: { x: lb.x, y: lb.y, w: lb.w, h: lb.h },
-                                snapshots: [],
-                              })
-                            }}
-                          />
-                        )
-                      })}
-
-                      {/* Embedded PanelLayout */}
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: HEADER_H, left: 0, right: 0, bottom: 0,
-                          overflow: 'hidden',
-                        }}
-                      >
-                        <Suspense fallback={null}>
-                          <LazyPanelLayout
-                            root={layout}
-                            getTileLabel={getPanelTileLabel}
-                            renderTile={(tileId) => {
-                              const t = tiles.find(ti => ti.id === tileId)
-                              if (!t) return null
-                              return (
-                                <Suspense fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12 }}>Loading…</div>}>
-                                  {renderTileBody(t)}
-                                </Suspense>
-                              )
-                            }}
-                            onLayoutChange={(newLayout) => {
-                              setGroups(prev => {
-                                const updated = prev.map(gr => gr.id === g.id ? { ...gr, layout: newLayout } : gr)
-                                setTimeout(() => persistCanvasState(tilesRef.current, viewportRef.current, nextZIndexRef.current, updated), 0)
-                                return updated
-                              })
-                            }}
-                            onCloseTab={(tileId) => {
-                              setGroups(prev => {
-                                const updated = prev.map(gr => {
-                                  if (gr.id !== g.id || !gr.layout) return gr
-                                  const newLayout = removeTileFromTree(gr.layout as PanelNode, tileId)
-                                  return { ...gr, layout: newLayout ?? undefined }
-                                })
-                                return updated
-                              })
-                            }}
-                            onAddTile={() => { /* handled externally */ }}
-                            onExit={() => revertLayoutGroup(g.id)}
-                            activePanelId={null}
-                            onActivePanelChange={() => { /* no-op for embedded */ }}
-                            getTileType={(tileId) => tiles.find(t => t.id === tileId)?.type ?? 'note'}
-                            getTileIcon={getPanelTileIcon}
-                            onSplitNew={(panelId, tileType, zone) => {
-                              const { w, h } = getInitialTileSize(tileType as TileState['type'])
-                              const newTile: TileState = {
-                                id: `tile-${Date.now()}`,
-                                type: tileType as TileState['type'],
-                                x: 0, y: 0,
-                                width: w, height: h, zIndex: nextZIndex,
-                                groupId: g.id,
-                              }
-                              setTiles(prev => [...prev, newTile])
-                              setNextZIndex(prev => prev + 1)
-                              setGroups(prev => {
-                                const updated = prev.map(gr => gr.id === g.id && gr.layout
-                                  ? { ...gr, layout: splitLeaf(gr.layout as PanelNode, panelId, newTile.id, zone) }
-                                  : gr)
-                                return updated
-                              })
-                            }}
-                            onCloseOthers={(panelId, tileId) => {
-                              setGroups(prev => prev.map(gr => gr.id === g.id && gr.layout
-                                ? { ...gr, layout: closeOthersInLeaf(gr.layout as PanelNode, panelId, tileId) }
-                                : gr))
-                            }}
-                            onCloseToRight={(panelId, tileId) => {
-                              setGroups(prev => prev.map(gr => gr.id === g.id && gr.layout
-                                ? { ...gr, layout: closeToRightInLeaf(gr.layout as PanelNode, panelId, tileId) }
-                                : gr))
-                            }}
-                            onLaunchTemplate={() => { /* no-op in embedded mode */ }}
-                          />
-                        </Suspense>
-                      </div>
-                    </div>
-                  )
-                }
-
-                const isNested = !!g.parentGroupId
-                const defaultColor = isNested ? '#ffb432' : '#4a9eff'
-                const color = g.color ?? defaultColor
-                const borderColor = color + 'cc'
-                const bgColor = color + '14'
-                const labelColor = color + 'ee'
-                const isDraggingThis = (dragState.type === 'group' || dragState.type === 'group-resize') && dragState.groupId === g.id
-                return (
-                  <div
-                    key={g.id}
-                    style={{
-                      position: 'absolute',
-                      left: b.x, top: b.y, width: b.w, height: b.h,
-                      border: `2px dashed ${borderColor}`,
-                      borderRadius: 12,
-                      background: bgColor,
-                      // Drop the resting zIndex to 'auto' so the group div
-                      // doesn't create a stacking context. That lets the label
-                      // bar inside use a high zIndex to render ABOVE tiles
-                      // (which is what the user wants). Nested vs outer order
-                      // is preserved by DOM order (sort above renders parents
-                      // first). Dragging still pops to a very high zIndex.
-                      zIndex: isDraggingThis ? 99989 : ('auto' as React.CSSProperties['zIndex']),
-                      boxSizing: 'border-box',
-                      cursor: isDraggingThis ? 'grabbing' : 'grab',
-                    }}
-                    onMouseDown={e => {
-                      if ((e.target as HTMLElement) !== e.currentTarget) return
-                      e.stopPropagation()
-                      const ids = collectGroupTileIds(g.id)
-                      const snapshots = tiles
-                        .filter(t => ids.includes(t.id))
-                        .map(t => ({ id: t.id, x: t.x, y: t.y }))
-                      setDragState({ type: 'group', groupId: g.id, startX: e.clientX, startY: e.clientY, snapshots })
-                    }}
-                  >
-                    {/* Label bar */}
-                    <div
-                      draggable
-                      onMouseDown={e => e.stopPropagation()}
-                      onDragStart={e => {
-                        e.stopPropagation()
-                        const memberTiles = tiles.filter(t => t.groupId === g.id)
-                        e.dataTransfer.setData('application/group-id', g.id)
-                        e.dataTransfer.setData('application/group-label', g.label ?? 'group')
-                        e.dataTransfer.setData('application/group-tile-ids', JSON.stringify(memberTiles.map(t => t.id)))
-                        e.dataTransfer.setData('application/group-tile-types', JSON.stringify(memberTiles.map(t => t.type)))
-                        e.dataTransfer.effectAllowed = 'link'
-                        const ghost = document.createElement('div')
-                        ghost.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px'
-                        document.body.appendChild(ghost)
-                        e.dataTransfer.setDragImage(ghost, 0, 0)
-                        setTimeout(() => ghost.remove(), 0)
-                      }}
-                      style={{
-                        // Sits just above the dashed group border with a
-                        // small breathing-room gap.
-                        position: 'absolute', top: -36 / viewport.zoom, left: 0,
-                        display: 'flex', gap: 6, alignItems: 'center',
-                        userSelect: 'none', pointerEvents: 'all',
-                        background: 'none',
-                        border: 'none',
-                        padding: '3px 0',
-                        cursor: 'grab',
-                        transform: `scale(${1 / viewport.zoom})`,
-                        transformOrigin: 'left top',
-                        // Lift the toolbar above tiles AND the per-tile link
-                        // sensors (zIndex 99991), which otherwise eat clicks
-                        // when they reach above their tile into the toolbar's
-                        // area. Group div uses zIndex 'auto' so this value
-                        // participates in the world container's stacking
-                        // context directly.
-                        zIndex: 99995,
-                      }}>
-                      {/* Color swatch / picker */}
-                      <div style={{ position: 'relative' }}>
-                        <div
-                          style={{
-                            width: 12, height: 12, borderRadius: '50%',
-                            background: color, cursor: 'pointer', flexShrink: 0,
-                            border: `1px solid ${theme.border.default}`
-                          }}
-                          onClick={e => {
-                            e.stopPropagation()
-                            const input = e.currentTarget.nextSibling as HTMLInputElement
-                            input?.click()
-                          }}
-                        />
-                        <input
-                          type="color"
-                          value={color}
-                          onChange={e => {
-                            const newColor = e.target.value
-                            setGroups(prev => {
-                              const updated = prev.map(gr => gr.id === g.id ? { ...gr, color: newColor } : gr)
-                              setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-                              return updated
-                            })
-                          }}
-                          style={{
-                            position: 'absolute', opacity: 0, width: 0, height: 0,
-                            top: 0, left: 0, pointerEvents: 'none'
-                          }}
-                        />
-                      </div>
-
-                      {/* Editable label */}
-                      <span
-                        contentEditable
-                        suppressContentEditableWarning
-                        onBlur={e => {
-                          const newLabel = e.currentTarget.textContent?.trim() || 'group'
-                          setGroups(prev => {
-                            const updated = prev.map(gr => gr.id === g.id ? { ...gr, label: newLabel } : gr)
-                            setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-                            return updated
-                          })
-                        }}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLElement).blur() } e.stopPropagation() }}
-                        onClick={e => e.stopPropagation()}
-                        style={{ fontSize: appFonts.secondarySize, color: labelColor, fontWeight: 500, minWidth: 30, outline: 'none', cursor: 'text', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                        {g.label ?? 'group'}
-                      </span>
-
-                      <span style={{ width: 1, height: 12, background: color, opacity: 0.3 }} />
-
-                      {([
-                        { icon: <LayoutGrid size={14} />, label: 'Make layout', action: () => convertGroupToLayout(g.id) },
-                        { icon: <Ungroup size={14} />, label: 'Ungroup', action: () => ungroupTilesRef.current(g.id) },
-                        { icon: <Grid2x2X size={14} />, label: 'Ungroup all', action: () => ungroupAllRef.current(g.id) },
-                        { icon: <Scissors size={14} />, label: 'Cut', action: () => {
-                          const ids = collectGroupTileIds(g.id)
-                          setSelectedTileIds(new Set(ids))
-                          setSelectedTileId(null)
-                          setTimeout(() => copyTilesRef.current(true), 0)
-                        }},
-                        ...(clipboard.current.length > 0 ? [{ icon: <ClipboardPaste size={14} />, label: 'Paste in', action: () => pasteTilesRef.current(undefined, g.id) }] : []),
-                        // Expand this group as a fullscreen sub-canvas (tiles remain freely positioned)
-                        { icon: <Maximize2 size={14} />, label: 'Expand as canvas', action: () => enterCanvasExpanded(g.id) },
-                      ] as { icon: React.ReactNode; label: string; action: () => void }[]).map(btn => (
-                        <div
-                          key={btn.label}
-                          title={btn.label}
-                          onClick={e => { e.stopPropagation(); btn.action() }}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            width: 24, height: 24, borderRadius: 4, cursor: 'pointer',
-                            color: labelColor, opacity: 0.6,
-                          }}
-                          onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
-                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.6' }}
-                        >
-                          {btn.icon}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Resize handles */}
-                    {([ 'n','s','e','w','ne','nw','se','sw' ] as const).map(dir => {
-                      const S = 10
-                      const hs: React.CSSProperties = { position: 'absolute', zIndex: 20 }
-                      if (dir === 'e')  Object.assign(hs, { right: -S/2,  top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                      if (dir === 'w')  Object.assign(hs, { left: -S/2,   top: S,      bottom: S,      width: S,  cursor: 'col-resize' })
-                      if (dir === 's')  Object.assign(hs, { bottom: -S/2, left: S,     right: S,       height: S, cursor: 'row-resize' })
-                      if (dir === 'n')  Object.assign(hs, { top: -S/2,    left: S,     right: S,       height: S, cursor: 'row-resize' })
-                      if (dir === 'se') Object.assign(hs, { right: -S/2,  bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'se-resize' })
-                      if (dir === 'sw') Object.assign(hs, { left: -S/2,   bottom: -S/2, width: S*1.5, height: S*1.5, cursor: 'sw-resize' })
-                      if (dir === 'ne') Object.assign(hs, { right: -S/2,  top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'ne-resize' })
-                      if (dir === 'nw') Object.assign(hs, { left: -S/2,   top: -S/2,    width: S*1.5, height: S*1.5, cursor: 'nw-resize' })
-                      return (
-                        <div
-                          key={dir}
-                          style={hs}
-                          onMouseDown={e => {
-                            e.stopPropagation()
-                            e.preventDefault()
-                            const ids = collectGroupTileIds(g.id)
-                            const snapshots = tiles
-                              .filter(t => ids.includes(t.id))
-                              .map(t => ({ id: t.id, x: t.x, y: t.y, width: t.width, height: t.height }))
-                            setDragState({
-                              type: 'group-resize',
-                              groupId: g.id, dir,
-                              startX: e.clientX, startY: e.clientY,
-                              initBounds: { x: b.x + 20, y: b.y + 20, w: b.w - 40, h: b.h - 40 }, // strip PAD
-                              snapshots
-                            })
-                          }}
-                        />
-                      )
-                    })}
-                  </div>
-                )
-              })
-            }
+            <CanvasGroupFrames
+              groups={groups}
+              tiles={tiles}
+              viewport={viewport}
+              dragState={dragState}
+              setDragState={setDragState}
+              expandedCanvasGroupId={expandedCanvasGroupId}
+              expandedCanvasMembership={expandedCanvasMembership}
+              theme={theme}
+              appFonts={appFonts}
+              nextZIndex={nextZIndex}
+              setNextZIndex={setNextZIndex}
+              clipboardLength={clipboardRef.current.length}
+              groupBounds={groupBounds}
+              collectGroupTileIds={collectGroupTileIds}
+              convertGroupToLayout={convertGroupToLayout}
+              revertLayoutGroup={revertLayoutGroup}
+              expandLayoutGroup={expandLayoutGroup}
+              enterCanvasExpanded={enterCanvasExpanded}
+              ungroupTiles={ungroupTiles}
+              ungroupAll={ungroupAll}
+              copyTiles={copyTiles}
+              pasteTiles={pasteTiles}
+              setGroups={setGroups}
+              setTiles={setTiles}
+              setSelectedTileId={setSelectedTileId}
+              setSelectedTileIds={setSelectedTileIds}
+              saveCanvas={saveCanvas}
+              persistCanvasState={persistCanvasState}
+              tilesRef={tilesRef}
+              viewportRef={viewportRef}
+              nextZIndexRef={nextZIndexRef}
+              getPanelTileLabel={getPanelTileLabel}
+              getPanelTileIcon={getPanelTileIcon}
+              getInitialTileSize={getInitialTileSize}
+              renderTileBody={renderTileBody}
+            />
 
             {/* Rubber-band selection rect */}
             {dragState.type === 'select' && (() => {
@@ -6772,9 +5240,6 @@ function App(): JSX.Element {
             {!panelLayout && (manualConnectionRenderRoutes.length > 0 || ambientDiscoveryRenderRoutes.length > 0 || discoveryPreview?.match || discoveryPulses.length > 0 || dragState.type === 'connection') && (
               <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: dragState.type === 'connection' ? 99996 : discoveryHighlightZIndex }}>
                 {(() => {
-                  const previewPairKey = discoveryPreview?.match && discoveryFocusTileId
-                    ? [discoveryFocusTileId, discoveryPreview.match.tile.id].sort().join('::')
-                    : null
                   return (
                     <>
                 {ambientDiscoveryRenderRoutes.map(connection => (
@@ -6806,10 +5271,6 @@ function App(): JSX.Element {
                   const targetTile = tileByIdMap.get(discoveryPreview.match.tile.id)
                   if (!sourceTile || !targetTile) return null
                   const previewRoute = discoveryPreview.match.route
-                  const sourceRect = { left: sourceTile.x, top: sourceTile.y, width: sourceTile.width, height: sourceTile.height }
-                  const targetRect = { left: targetTile.x, top: targetTile.y, width: targetTile.width, height: targetTile.height }
-                  const labelPoint = getRouteMidpoint(discoveryPreview.match.route)
-
                   return (
                     <>
                       {getRouteSegments(previewRoute).map((segment, index) => (
@@ -6970,12 +5431,6 @@ function App(): JSX.Element {
                   const sourceTile = tileByIdMap.get(pulse.sourceTileId)
                   const targetTile = tileByIdMap.get(pulse.targetTileId)
                   if (!sourceTile || !targetTile) return null
-
-                  const pairKey = [pulse.sourceTileId, pulse.targetTileId].sort().join('::')
-                  const _hidePulsePills = previewPairKey === pairKey
-                  const sourceRect = { left: sourceTile.x, top: sourceTile.y, width: sourceTile.width, height: sourceTile.height }
-                  const targetRect = { left: targetTile.x, top: targetTile.y, width: targetTile.width, height: targetTile.height }
-                  const labelPoint = getRouteMidpoint(pulse.route)
 
                   return (
                     <React.Fragment key={pulse.id}>
@@ -7222,15 +5677,7 @@ function App(): JSX.Element {
               if (panelLayout) exitExpandedMode()
               else enterTabbedView()
             }}
-            onZoomToggle={() => {
-              setViewport(prev => {
-                if (prev.zoom === 1) {
-                  return { ...prev, zoom: prevZoomRef.current !== 1 ? prevZoomRef.current : 1 }
-                }
-                prevZoomRef.current = prev.zoom
-                return { ...prev, zoom: 1 }
-              })
-            }}
+            onZoomToggle={toggleZoomOne}
           />
         </Suspense>
       </div>
@@ -7250,6 +5697,14 @@ function App(): JSX.Element {
             onClose={() => setShowExtensionsGallery(false)}
             workspacePath={workspace?.path ?? null}
             onSettingsChange={s => setSettings(withDefaultSettings(s))}
+          />
+        </Suspense>
+      )}
+      {settingsLoaded && !settings.onboardingComplete && (
+        <Suspense fallback={null}>
+          <LazyOnboardingOverlay
+            onComplete={() => updateAppSettings({ onboardingComplete: true })}
+            onOpenPlugins={() => setShowExtensionsGallery(true)}
           />
         </Suspense>
       )}
@@ -7277,6 +5732,15 @@ function App(): JSX.Element {
           />
         </Suspense>
       )}
+      {commandPaletteOpen && (
+        <Suspense fallback={null}>
+          <LazyCommandPalette
+            open={commandPaletteOpen}
+            onOpenChange={setCommandPaletteOpen}
+          />
+        </Suspense>
+      )}
+      <DevSandboxFrame />
     </div>
     </FontProvider>
     </FontTokenProvider>

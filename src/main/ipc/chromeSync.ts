@@ -5,6 +5,7 @@ import {
   getBookmarks,
   searchHistory,
 } from '../chrome-sync'
+import { readSettingsSync } from './workspace'
 
 let lastSync: number | null = null
 
@@ -23,7 +24,10 @@ export function registerChromeSyncIPC(): void {
   })
 
   ipcMain.handle('chromeSync:syncCookies', async (_event, profileDir: string, partition: string) => {
-    const result = await syncCookiesToPartition(profileDir, partition)
+    // risk-06: scope cookie injection to the user-approved domains (empty =
+    // inject all + warn, until the approval UI populates the list).
+    const approvedDomains = readSettingsSync().chromeSyncApprovedDomains ?? []
+    const result = await syncCookiesToPartition(profileDir, partition, { approvedDomains })
     if (result.errors.length === 0) lastSync = Date.now()
     return result
   })

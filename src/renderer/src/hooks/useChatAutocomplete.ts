@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, type ChangeEvent } from 'react'
 import type { SkillDefinition } from '../../../shared/types'
 import type { ChatComposerAutocompleteItem } from '../components/chat/ChatComposer'
 
@@ -47,12 +47,37 @@ function basename(p: string): string {
   return i >= 0 ? p.slice(i + 1) : p
 }
 
+export function detectAutocompleteTrigger(
+  textBeforeCursor: string,
+): { type: 'slash' | 'mention', query: string } | null {
+  const slashMatch = textBeforeCursor.match(/(^|\s)\/(\w*)$/)
+  if (slashMatch) {
+    return { type: 'slash', query: slashMatch[2] }
+  }
+
+  const mentionMatch = textBeforeCursor.match(/@([\w./]*)$/)
+  if (mentionMatch) {
+    return { type: 'mention', query: mentionMatch[1] }
+  }
+
+  return null
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────
+
+/** A plugin-contributed command exposed as a chat slash command (point 3). */
+export interface PluginSlashCommand {
+  slash: string
+  title: string
+  description?: string
+}
 
 export interface UseChatAutocompleteOptions {
   workspaceDir: string
   connectedPeers: DiscoveryPeer[]
   workspaceSkills: SkillDefinition[]
+  /** Slash commands contributed by enabled plugins (merged into the slash menu). */
+  pluginSlashCommands?: PluginSlashCommand[]
 }
 
 export interface UseChatAutocompleteResult {
@@ -63,12 +88,18 @@ export interface UseChatAutocompleteResult {
   acIndex: number
   setAcIndex: React.Dispatch<React.SetStateAction<number>>
   acItems: AutocompleteItem[]
+  handleComposerInputChange: (
+    event: ChangeEvent<HTMLTextAreaElement>,
+    onValueChange: (value: string) => void,
+    syncComposerHeight: () => void,
+  ) => void
 }
 
 export function useChatAutocomplete({
   workspaceDir,
   connectedPeers,
   workspaceSkills,
+  pluginSlashCommands = [],
 }: UseChatAutocompleteOptions): UseChatAutocompleteResult {
   const [acType, setAcType] = useState<'slash' | 'mention' | null>(null)
   const [acQuery, setAcQuery] = useState('')
@@ -220,8 +251,23 @@ export function useChatAutocomplete({
       })
     }
 
+    // Plugin-contributed slash commands (point 3 — plugins appear in the chat area).
+    for (const cmd of pluginSlashCommands) {
+      const trigger = (cmd.slash || '').trim()
+      if (!trigger) continue
+      const value = '/' + trigger.replace(/^\/+/, '')
+      if (seen.has(value)) continue
+      if (!value.toLowerCase().startsWith('/' + q)) continue
+      seen.add(value)
+      items.push({
+        key: `plugin:${value}`,
+        value,
+        description: cmd.description?.trim() || cmd.title,
+      })
+    }
+
     return items
-  }, [acQuery, workspaceSkills])
+  }, [acQuery, workspaceSkills, pluginSlashCommands])
 
   const acItems: AutocompleteItem[] = acType === 'slash'
     ? slashItems
@@ -234,5 +280,36 @@ export function useChatAutocomplete({
     setAcIndex(i => Math.min(i, Math.max(0, acItems.length - 1)))
   }, [acItems.length])
 
-  return { acType, setAcType, acQuery, setAcQuery, acIndex, setAcIndex, acItems }
+  const handleComposerInputChange = useCallback((
+    event: ChangeEvent<HTMLTextAreaElement>,
+    onValueChange: (value: string) => void,
+    syncComposerHeight: () => void,
+  ) => {
+    const value = event.target.value
+    onValueChange(value)
+    syncComposerHeight()
+
+    const cursor = event.target.selectionStart ?? value.length
+    const trigger = detectAutocompleteTrigger(value.slice(0, cursor))
+    if (trigger) {
+      setAcType(trigger.type)
+      setAcQuery(trigger.query)
+      setAcIndex(0)
+      return
+    }
+
+    setAcType(null)
+    setAcQuery('')
+  }, [])
+
+  return {
+    acType,
+    setAcType,
+    acQuery,
+    setAcQuery,
+    acIndex,
+    setAcIndex,
+    acItems,
+    handleComposerInputChange,
+  }
 }

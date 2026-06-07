@@ -1,357 +1,97 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type {
   AppSettings,
-  ExtensionChatModel,
-  ExtensionChatProviderConfig,
-  ExtensionChatTransportConfig,
   SkillDefinition,
 } from '../../../shared/types'
-import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
-import { dispatchOpenLink, findAnchorFromEventTarget } from '../utils/links'
+import { basename } from '../utils/dnd'
+
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
-import {
-  ShieldCheck, ChevronDown, AlertTriangle,
-  Check, ArrowUp, ArrowDown, Square, MessageSquare, Bot,
-  Brain, Bug, ChevronRight, ClipboardCheck, Cog, Copy, CornerDownRight, DollarSign,
-  FileText, GripVertical, Maximize2, Mic, Pencil, Plus, Sparkles, Trash2, Wrench
-} from 'lucide-react'
+
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useMCPServers } from '../hooks/useMCPServers'
-import { useAutoSpeak, speakMessage, bargeIn } from '../hooks/useAutoSpeak'
+import { useAutoSpeak, bargeIn } from '../hooks/useAutoSpeak'
 import { ttsPlayer, type TtsPlayerState } from '../utils/ttsPlayer'
 import { useChatDictation } from '../hooks/useChatDictation'
 import { useChatExecutionHosts } from '../hooks/useChatExecutionHosts'
-import { useAppFonts } from '../FontContext'
+import { useChatTileCoreState } from '../hooks/useChatTileCoreState'
+import { useChatTileProviders } from '../hooks/useChatTileProviders'
+import { useChatTilePersistence } from '../hooks/useChatTilePersistence'
+import { useChatTileMessaging } from '../hooks/useChatTileMessaging'
+import { useChatTileTranscript } from '../hooks/useChatTileTranscript'
+import { useChatTileBlockNotes } from '../hooks/useChatTileBlockNotes'
+
 import { useTheme } from '../ThemeContext'
-import { ensureShimmerStyles, WorkingDots, ChatMarkdown } from './shared/streamdown-utils'
-import { DiffView } from './chat/DiffView'
+
+import { useChatTileLatestChangeDrawer } from '../hooks/useChatTileLatestChangeDrawer'
+import { useChatTileComposerMenus } from '../hooks/useChatTileComposerMenus'
+import { useChatTileLiveComposerActivity } from '../hooks/useChatTileLiveComposerActivity'
+import type { CheckpointRestoreContextValue } from './chat/chatTileTypes'
+import { ChatTileTranscriptColumn } from './chat/ChatTileTranscriptColumn'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
-import { CHAT_TILE_STYLES } from './chat/chatStyles'
 import {
-  type BuiltinProvider, type ModelOption, type ModeOption, type ThinkingOption,
-  DEFAULT_MODELS, DEFAULT_PROVIDER_ID, PROVIDER_MODES, EXTENSION_PROVIDER_MODE,
-  THINKING_OPTIONS, PROVIDER_LABELS, isBuiltinProvider, getApproxContextWindowTokens,
-  getApproxSystemOverheadTokens, resolveProviderModeId,
+  getApproxContextWindowTokens,
+  getApproxSystemOverheadTokens,
 } from '../config/providers'
 import { stripCapabilityPrefix, getAllNodeTools } from '../../../shared/nodeTools'
-import type { ToolBlock, ThinkingBlock, ContentBlock, ChatMessage, BlockNote, FileChange } from '../../../shared/chat-types'
+import type { ChatMessage } from '../../../shared/chat-types'
 import { useChatStreamHandler } from '../hooks/useChatStreamHandler'
-import type { SessionEntryHint } from '../../../shared/session-types'
-import { buildChatMessageHistoryFingerprint } from '../../../shared/chat-history'
-import { BlockNoteAffordance } from './chat/BlockNoteAffordance'
-import { getChatTileRuntimeState, setChatTileRuntimeState, reviveChatTileRuntimeState, isChatTileRuntimeStateDisposed } from './chatTileRuntimeState'
+
+
+
 import { setChatStreaming } from './chatStreamingStore'
-import { recordChatMessageSent } from './chatMessageSentStore'
 import { setTileTodos, clearTileTodos, useTileTodos, type TileTodoItem } from '../state/tileTodosStore'
 import { CUSTOMISATION_LOCATIONS_CHANGED_EVENT, type CustomisationLocationsChangedDetail } from './CustomisationTile'
 import { PlanPane } from './chat/PlanPane'
-import { PlanChip } from './chat/PlanChip'
-import { JSXPreview, JSXPreviewContent, JSXPreviewError } from './ai-elements/JSXPreview'
-import {
-  ToolPermissionProvider,
-  type ToolPermissionDecision,
-  type ToolPermissionRequest,
-} from './ai-elements/ToolPermission'
-import { handleBasicChatSurfaceRpc, normalizeChatSurfacePayload, type ChatSurfacePayload } from './chatSurfaceHostRpc'
-import { isCheckpointToolBlock } from './chat/checkpointToolActions'
-import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME, isDreamToolBlock } from './chat/dreamToolActions'
-import { CHAT_STREAM_FLUSH_INTERVAL_MS, isLargeArtifact, isLargeMessage, measureText, previewText, splitRawDiffText, type RawDiffFile } from './chat/largeContent'
-import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerDrawerFrame, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
-import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
-import { ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
-import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
+import { ChatTileComposer } from './chat/ChatTileComposer'
+
+import { ToolPermissionProvider } from './ai-elements/ToolPermission'
+import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
+
+import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
+import { useChatAutocomplete, CHAT_SLASH_COMMANDS } from '../hooks/useChatAutocomplete'
+import { useChatTileDreamPolling } from '../hooks/useChatTileDreamPolling'
+import { useChatTileComposerKeys } from '../hooks/useChatTileComposerKeys'
+import { useChatTileAttachments } from '../hooks/useChatTileAttachments'
+import { useChatAutocompleteSelection } from '../hooks/useChatAutocompleteSelection'
+import { useContributions } from '../hooks/useContributions'
+import { type PaletteCommand } from '../lib/commandRegistry'
+import { type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 import {
   AskUserQuestionContext,
   AskUserQuestionFontsContext,
 } from './chat/AskUserQuestionForm'
+import { parsePlanToolTodos } from './chat/ToolBlockView'
 import {
-  ThinkingBlockView,
-  WorkingChipView,
-  StreamingLivenessIndicator,
-  MixedToolGroup,
-  CollapsedToolGroup,
-  ToolBlockView,
-  parsePlanToolTodos,
-} from './chat/ToolBlockView'
+  normalizeChatSurfaceMenuEntry,
+  ensureChatMdStyle,
+} from './chat/ChatTileViews'
+import {
+  FONT_SANS,
+  FONT_MONO,
+  FONT_SIZE_DEFAULT,
+  MONO_SIZE_DEFAULT,
+  CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT,
 
+  LIVE_TOOL_COLLAPSE_GRACE_MS,
+} from './chat/chatTileLayout'
+import { FontCtx } from './chat/chatTileContexts'
+import {
+  CHAT_DEFAULT_SKILL_LOCATIONS,
+  resolveChatSkillLocations,
+  getImplicitPeerImageAttachments,
+  collectModelReadPaths,
+  canUsePagedLinkedHistory,
+  type ActiveChatSurface,
+  type DiscoveryPeer,
+} from './chat/chatTileUtils'
 
-
-const CHAT_DEFAULT_SKILL_LOCATIONS = [
-  '$HOME/.claude/commands',
-  '$WORKSPACE/.claude/commands',
-  '$HOME/.claude/skills',
-  '$WORKSPACE/.claude/skills',
-  '$HOME/.config/opencode/skills',
-  '$WORKSPACE/.opencode/skills',
-  '$WORKSPACE/.cursor/rules',
-  '$WORKSPACE/.continue/prompts',
-].join('\n')
-
-function resolveChatSkillLocations(raw: string, homePath: string, workspacePath: string | null): string[] {
-  return raw
-    .split('\n')
-    .map(line => {
-      // Strip optional surrounding quotes and convert shell-style escapes
-      // (e.g. `Application\ Support`) into literal characters. Without this
-      // a pasted shell path silently fails the `readDir` lookup.
-      let l = line.trim()
-      if (!l) return ''
-      if ((l.startsWith('"') && l.endsWith('"')) || (l.startsWith("'") && l.endsWith("'"))) l = l.slice(1, -1)
-      return l.replace(/\\([ \t()'"\\])/g, '$1')
-    })
-    .filter(Boolean)
-    .filter(line => workspacePath || !line.startsWith('$WORKSPACE'))
-    .map(line => line.replace(/^\$HOME/, homePath).replace(/^\$WORKSPACE/, workspacePath ?? ''))
-}
-
-// Provider brand icons are shared with the sidebar via ./icons/providerIcons.
-import { ClaudeIcon, CodexIcon, HermesIcon, OpenClawIcon } from './icons/providerIcons'
-
-// --- Thinking strength icon (brain + signal bars) --------------------------------
-
-const THINKING_LEVELS: Record<string, number> = { none: 0, low: 1, medium: 2, adaptive: 3, high: 4, max: 5 }
-
-function ThinkingIcon({ level }: { level: string }): JSX.Element {
-  const bars = THINKING_LEVELS[level] ?? 3
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      <Brain size={14} />
-      <svg width="12" height="14" viewBox="0 0 10 12">
-        {[0, 1, 2, 3, 4].map(i => (
-          <rect
-            key={i}
-            x={i * 2}
-            y={12 - (i + 1) * 2.2}
-            width="1.4"
-            height={(i + 1) * 2.2}
-            rx="0.4"
-            fill="currentColor"
-            opacity={i < bars ? 1 : 0.2}
-          />
-        ))}
-      </svg>
-    </div>
-  )
-}
+export {
+  hasVisibleFileChangeStats,
+  hasRenderableFileChangeDiff,
+  getToolDisplayName,
+} from './chat/chatTileUtils'
 
 // --- Types -----------------------------------------------------------------------
-
-
-function shouldRenderToolBlock(block: ToolBlock): boolean {
-  return block.status === 'running'
-    || (block.fileChanges?.length ?? 0) > 0
-    || (block.commandEntries?.length ?? 0) > 0
-    || Boolean(block.summary?.trim())
-    || Boolean(block.input?.trim())
-}
-
-/**
- * Heuristic: does a queued-message body look like pasted error output?
- *
- * Triggered when the user pastes a stack trace / console log into the
- * composer so the queue bar can flag it visually (red tint, alert icon).
- * Matches on common logger prefixes, error keywords, and file:line:col
- * patterns; requires the text to be either reasonably long OR to contain
- * an unambiguous signal like "Uncaught" so a plain message like
- * "fix the error in foo.ts" doesn't light up red.
- */
-function isUrgentQueuedContent(text: string): boolean {
-  if (!text) return false
-  const body = text.trim()
-  if (body.length < 20) return false
-  // Unambiguous error/panic markers — any one of these is enough.
-  const strongPatterns = [
-    /\buncaught\b/i,
-    /\bunhandled (?:promise )?rejection\b/i,
-    /\bstack trace\b/i,
-    /\btraceback\b/i,
-    /\bsegmentation fault\b/i,
-    /\bfatal\b/i,
-    /\bpanic:/i,
-    /\bexception\b.*\bat\b/is,
-    /^\s*at\s+\S+\s*\(.+:\d+:\d+\)/m,                  // JS stack frame
-    /\bERR_[A-Z_]+\b/,                                  // Node error codes
-    /\b(?:TypeError|ReferenceError|SyntaxError|RangeError|Error):/,
-  ]
-  for (const re of strongPatterns) {
-    if (re.test(body)) return true
-  }
-  // Weaker signals: need multiple matches or bulk size to count.
-  const weakPatterns = [
-    /\berror\b/i,
-    /\bwarning\b/i,
-    /\bfailed\b/i,
-    /\bcannot\s+(?:read|find|resolve|access)\b/i,
-    /\[Violation\]/,
-  ]
-  let weakHits = 0
-  for (const re of weakPatterns) {
-    if (re.test(body)) weakHits += 1
-    if (weakHits >= 2) return true
-  }
-  // A single weak hit plus a long body (≥300 chars) likely indicates a
-  // pasted log excerpt rather than a short imperative like "fix the error".
-  return weakHits >= 1 && body.length >= 300
-}
-
-interface PendingAttachment {
-  path: string
-  kind: 'image' | 'file'
-}
-
-/**
- * Chat-surface extension mounted above the composer (e.g. Sketch/Builder).
- * Multiple surfaces can stay resident as tabs; the host caches the latest
- * payload via RPC and flushes the active/dirty payloads to temp files on send.
- */
-interface ActiveChatSurface {
-  extId: string
-  surfaceId: string
-  label: string
-  icon?: string
-  instanceId: string
-  entryUrl: string
-  emits: 'image' | 'text'
-  height: number
-  minHeight: number
-  /** Last payload pushed up from the iframe via surface.setPayload */
-  payload: ChatSurfacePayload | null
-  /** Per-surface state exposed through window.contex.tile.getState/setState. */
-  tileState: Record<string, unknown>
-  /** Lightweight local context store for chat-surface peer coordination. */
-  context: Record<string, unknown>
-  /** Actions registered by the surface via window.contex.actions.register(). */
-  registeredActions: Array<{ name: string; description: string }>
-}
-
-interface QueuedChatTurn {
-  id: string
-  content: string
-  preview: string
-  attachmentCount: number
-  createdAt: number
-  /** Optional parent turn id — when set, this turn renders indented beneath
-   *  its parent as a sub-item, representing work the user intends to run
-   *  *as part of* the parent turn rather than as its own top-level turn. */
-  parentId?: string | null
-}
-
-type LatestChangeDrawerState = {
-  key: string
-  messageId: string
-  toolBlockId: string
-  fileChanges: FileChange[]
-  fileCount: number
-  additions: number
-  deletions: number
-  changeBlockCount: number
-}
-
-export function hasVisibleFileChangeStats(change: Pick<FileChange, 'additions' | 'deletions'>): boolean {
-  return change.additions > 0 || change.deletions > 0
-}
-
-export function hasRenderableFileChangeDiff(change: Pick<FileChange, 'diff'>): boolean {
-  return change.diff.trim().length > 0
-}
-
-interface ChatTilePersistedState {
-  messages: ChatMessage[]
-  input: string
-  attachments: PendingAttachment[]
-  queuedTurns?: QueuedChatTurn[]
-  openChatSurfaces?: ActiveChatSurface[]
-  activeChatSurfaceId?: string | null
-  provider: string
-  model: string
-  mcpEnabled: boolean
-  mode: string
-  thinking: string
-  agentMode: boolean
-  autoAgentMode: boolean
-  preserveSessionSummary?: boolean
-  linkedSessionEntryId?: string | null
-  linkedSessionHint?: SessionEntryHint | null
-  hasEarlierMessages?: boolean
-  sessionId: string | null
-  jobId?: string | null
-  jobSequence?: number
-  cloudHostId?: string | null
-  isStreaming: boolean
-  executionTarget?: 'local' | 'cloud'
-}
-
-
-interface DiscoveryPeer {
-  peerId: string
-  peerType: string
-  capabilities: string[]
-  distance: number
-  lastSeen: number
-  actions?: Array<{ name: string; description: string }>
-  filePath?: string
-  label?: string
-}
-
-function mergeAttachments(...groups: PendingAttachment[][]): PendingAttachment[] {
-  const seen = new Set<string>()
-  const merged: PendingAttachment[] = []
-  for (const group of groups) {
-    for (const item of group) {
-      const path = item.path.trim()
-      if (!path || seen.has(path)) continue
-      seen.add(path)
-      merged.push({ ...item, path })
-    }
-  }
-  return merged
-}
-
-function getImplicitPeerImageAttachments(peers: DiscoveryPeer[]): PendingAttachment[] {
-  return peers
-    .filter(peer => peer.peerType === 'image' && typeof peer.filePath === 'string' && isImagePath(peer.filePath))
-    .map(peer => ({ path: peer.filePath!.trim(), kind: 'image' as const }))
-    .filter(item => item.path.length > 0)
-}
-
-function normalizePersistedChatSurfaces(value: unknown): ActiveChatSurface[] {
-  if (!Array.isArray(value)) return []
-  return value.map((item): ActiveChatSurface | null => {
-    if (!item || typeof item !== 'object') return null
-    const surface = item as Partial<ActiveChatSurface> & Record<string, unknown>
-    const extId = typeof surface.extId === 'string' ? surface.extId : ''
-    const surfaceId = typeof surface.surfaceId === 'string' ? surface.surfaceId : ''
-    const instanceId = typeof surface.instanceId === 'string' ? surface.instanceId : ''
-    const entryUrl = typeof surface.entryUrl === 'string' ? surface.entryUrl : ''
-    if (!extId || !surfaceId || !instanceId || !entryUrl) return null
-    const tileState = surface.tileState && typeof surface.tileState === 'object' && !Array.isArray(surface.tileState)
-      ? { ...(surface.tileState as Record<string, unknown>) }
-      : {}
-    const context = surface.context && typeof surface.context === 'object' && !Array.isArray(surface.context)
-      ? { ...(surface.context as Record<string, unknown>) }
-      : {}
-    const registeredActions = Array.isArray(surface.registeredActions)
-      ? surface.registeredActions
-        .filter((action: any) => action && typeof action.name === 'string')
-        .map((action: any) => ({ name: String(action.name), description: typeof action.description === 'string' ? action.description : '' }))
-      : []
-    return {
-      extId,
-      surfaceId,
-      label: typeof surface.label === 'string' && surface.label ? surface.label : surfaceId,
-      icon: typeof surface.icon === 'string' ? surface.icon : undefined,
-      instanceId,
-      entryUrl,
-      emits: surface.emits === 'text' ? 'text' : 'image',
-      height: typeof surface.height === 'number' && Number.isFinite(surface.height) ? surface.height : 260,
-      minHeight: typeof surface.minHeight === 'number' && Number.isFinite(surface.minHeight) ? surface.minHeight : 160,
-      payload: normalizeChatSurfacePayload(surface.payload ?? null),
-      tileState,
-      context,
-      registeredActions,
-    }
-  }).filter((surface): surface is ActiveChatSurface => !!surface)
-}
 
 interface Props {
   tileId: string
@@ -367,69 +107,16 @@ interface Props {
   connectedPeers?: DiscoveryPeer[]
 }
 
-export interface CheckpointRestoreContextValue {
-  workspaceId: string | null
-  tileId: string
-  restoringCheckpointId: string | null
-  restoreCheckpoint: (checkpointId: string, sessionEntryId: string, label?: string) => Promise<void>
-}
+export type { CheckpointRestoreContextValue } from './chat/chatTileTypes'
 
 export const CheckpointRestoreContext = React.createContext<CheckpointRestoreContextValue | null>(null)
 
-// --- Font defaults (used when no settings are provided) --------------------------
-
-// Use the canonical font stacks from shared/types.ts DEFAULT_FONTS
-const FONT_SANS = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
-const FONT_MONO = '"JetBrains Mono", "Menlo", "Monaco", "SF Mono", "Fira Code", monospace'
-const FONT_SIZE_DEFAULT = 13
-const MONO_SIZE_DEFAULT = 13
-const CHAT_MESSAGE_MAX_WIDTH = 'var(--cs-thread-content-max-width)'
-const CHAT_CHIP_ROW_STYLE: React.CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 10,
-  alignItems: 'flex-start',
-  alignContent: 'flex-start',
-  width: '100%',
-  minWidth: 0,
-  maxWidth: '100%',
-  overflow: 'visible',
-  paddingTop: 1,
-}
-const CHAT_OFFSCREEN_MESSAGE_STYLE: React.CSSProperties = {
-  contentVisibility: 'auto',
-  containIntrinsicSize: '0 160px',
-}
-const CHAT_RENDER_PAGE_SIZE = 20
-const CHAT_INITIAL_RENDER_PAGES = 2
-const CHAT_INITIAL_RENDER_WINDOW = CHAT_RENDER_PAGE_SIZE * CHAT_INITIAL_RENDER_PAGES
-const LINKED_SESSION_LIVE_TAIL_LIMIT = 40
-const LINKED_SESSION_HISTORY_PAGE_SIZE = 20
-const LINKED_SESSION_HISTORY_LOAD_THRESHOLD = 32
-
-const CHAT_COMPOSER_MAX_WIDTH = CHAT_MESSAGE_MAX_WIDTH
-const CHAT_COMPOSER_MIN_WIDTH = 'var(--cs-chat-composer-min-width)'
-const CHAT_COMPOSER_SIDE_INSET = 'var(--cs-chat-composer-side-inset)'
-const CHAT_COMPOSER_WIDTH = `min(calc(100% - calc(${CHAT_COMPOSER_SIDE_INSET} * 2)), ${CHAT_COMPOSER_MAX_WIDTH})`
-const CHAT_COMPOSER_MIN_WIDTH_STYLE = `min(${CHAT_COMPOSER_MIN_WIDTH}, calc(100% - calc(${CHAT_COMPOSER_SIDE_INSET} * 2)))`
-const CHAT_COMPOSER_MIN_HEIGHT = 105
-const CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT = 56
-const CHAT_AUTO_SCROLL_THRESHOLD = 48
-const TOOLBAR_ICON_SIZE = 16
-const TOOLBAR_PILL_ICON_SIZE = 14
 export const TOOL_BLOCK_MAX_WIDTH = 420
 
-export function getToolDisplayName(name: string): string {
-  return name === 'exec_command' ? 'bash' : name
-}
-const LIVE_TOOL_COLLAPSE_GRACE_MS = 5000
 export const NON_SELECTABLE_UI_STYLE = {
   userSelect: 'none' as const,
   WebkitUserSelect: 'none' as const,
 }
-// Font context so sub-components can read settings-derived fonts without prop drilling
-export const FontCtx = React.createContext({ sans: FONT_SANS, secondary: FONT_SANS, mono: FONT_MONO, size: FONT_SIZE_DEFAULT, monoSize: MONO_SIZE_DEFAULT, lineHeight: 1.5, weight: 400, monoLineHeight: 1.5, monoWeight: 400, secondarySize: 11, secondaryLineHeight: 1.4, secondaryWeight: 400 })
-export function useFonts() { return React.useContext(FontCtx) }
 
 // Dispatch context — lets deeply-nested tool renderers (e.g. AskUserQuestion form)
 // send answers back into the chat as the next user turn.
@@ -437,1425 +124,6 @@ type ChatDispatchValue = {
   sendAnswer: (text: string) => void | Promise<void>
 }
 const ChatDispatchCtx = React.createContext<ChatDispatchValue | null>(null)
-function useChatDispatch(): ChatDispatchValue | null { return React.useContext(ChatDispatchCtx) }
-
-function buildOutgoingMessageContent(draftInput: string, draftAttachments: PendingAttachment[]): string {
-  const trimmedInput = draftInput.trim()
-  const attachmentBlock = draftAttachments.length > 0
-    ? `Attached file paths:\n${draftAttachments.map(item => item.path).join('\n')}`
-    : ''
-  return [trimmedInput, attachmentBlock].filter(Boolean).join('\n\n').trim()
-}
-
-function renderChatSurfaceIcon(icon: string | undefined, size = 14): JSX.Element {
-  const name = String(icon ?? '').toLowerCase()
-  if (name === 'sparkles' || name === 'builder') return <Sparkles size={size} />
-  if (name === 'pencil' || name === 'sketch') return <Pencil size={size} />
-  if (name === 'settings' || name === 'cog') return <Cog size={size} />
-  if (name === 'clipboard-check' || name === 'qa-report') return <ClipboardCheck size={size} />
-  if (name === 'bug' || name === 'qa-workbench') return <Bug size={size} />
-  return <Wrench size={size} />
-}
-
-function normalizeChatSurfaceMenuEntry(entry: any): ChatSurfaceMenuEntry {
-  return {
-    extId: String(entry.extId),
-    surfaceId: String(entry.id ?? entry.surfaceId),
-    label: String(entry.label ?? entry.id ?? entry.surfaceId),
-    description: entry.description ? String(entry.description) : undefined,
-    icon: entry.icon ? String(entry.icon) : undefined,
-    emits: entry.emits === 'text' ? 'text' : 'image',
-    defaultHeight: Number.isFinite(entry.defaultHeight) ? Number(entry.defaultHeight) : 260,
-    minHeight: Number.isFinite(entry.minHeight) ? Number(entry.minHeight) : 160,
-  }
-}
-
-function encodeUtf8Base64(text: string): string {
-  const bytes = new TextEncoder().encode(text)
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
-  }
-  return btoa(binary)
-}
-
-function buildQueuedTurnPreview(content: string, attachmentCount: number): string {
-  const trimmed = content.trim()
-  const attachmentMarkerIndex = trimmed.indexOf('Attached file paths:')
-  const visibleText = attachmentMarkerIndex >= 0 ? trimmed.slice(0, attachmentMarkerIndex).trim() : trimmed
-  const firstLine = visibleText.split(/\r?\n/, 1)[0]?.trim() ?? ''
-  const truncated = firstLine.length > 140 ? `${firstLine.slice(0, 139)}…` : firstLine
-  if (truncated) return truncated
-  if (attachmentCount > 0) return `Queued attachment${attachmentCount === 1 ? '' : 's'}`
-  return 'Queued follow-up'
-}
-
-const RECENT_EDIT_CONTEXT_FILE_LIMIT = 3
-const RECENT_EDIT_CONTEXT_SNIPPET_LINE_LIMIT = 24
-const RECENT_EDIT_CONTEXT_SURROUNDING_LINES = 4
-const RECENT_EDIT_CONTEXT_MAX_CHARS = 5000
-
-function shouldAttachRecentEditContext(userText: string): boolean {
-  const normalized = userText.trim()
-  if (!normalized) return false
-  if (normalized.length > 320) return false
-
-  const hasEditIntent = /\b(edit|change|adjust|tweak|move|nudge|shift|raise|lower|increase|decrease|reduce|make|set|resize|align|position|offset|widen|narrow|shorten|lengthen|bigger|smaller|higher|lower)\b/i.test(normalized)
-    || /\b\d+(?:px|rem|em|%)\b/i.test(normalized)
-  const refersToExistingThing = /\b(it|that|those|them|this|same|again|more|further|another|still|also|back|left|right|up|down|higher|lower|bigger|smaller)\b/i.test(normalized)
-  return hasEditIntent && refersToExistingThing
-}
-
-function resolveEditedFilePath(filePath: string, workspaceDir: string): string {
-  const trimmed = String(filePath ?? '').trim()
-  if (!trimmed) return trimmed
-  if (trimmed.startsWith('/')) return trimmed
-  return `${workspaceDir.replace(/\/+$/, '')}/${trimmed.replace(/^\/+/, '')}`
-}
-
-function extractChangedLineRangesFromDiff(diff: string): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = []
-  for (const line of String(diff ?? '').split('\n')) {
-    const match = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
-    if (!match) continue
-    const start = Number(match[1] ?? '0')
-    const count = Number(match[2] ?? '1')
-    if (!Number.isFinite(start) || start <= 0) continue
-    const safeCount = Number.isFinite(count) && count > 0 ? count : 1
-    ranges.push({ start, end: start + safeCount - 1 })
-  }
-  return ranges
-}
-
-function buildSnippetFromRanges(fileContent: string, ranges: Array<{ start: number; end: number }>): string {
-  const lines = String(fileContent ?? '').split(/\r?\n/)
-  if (lines.length === 0) return ''
-  const windows = ranges.length > 0
-    ? ranges.slice(0, 3)
-    : [{ start: 1, end: Math.min(lines.length, 8) }]
-
-  const merged: Array<{ start: number; end: number }> = []
-  for (const range of windows) {
-    const next = {
-      start: Math.max(1, range.start - RECENT_EDIT_CONTEXT_SURROUNDING_LINES),
-      end: Math.min(lines.length, range.end + RECENT_EDIT_CONTEXT_SURROUNDING_LINES),
-    }
-    const previous = merged[merged.length - 1]
-    if (previous && next.start <= previous.end + 2) {
-      previous.end = Math.max(previous.end, next.end)
-    } else {
-      merged.push(next)
-    }
-  }
-
-  let emittedLines = 0
-  const parts: string[] = []
-  for (const range of merged) {
-    if (emittedLines >= RECENT_EDIT_CONTEXT_SNIPPET_LINE_LIMIT) break
-    if (parts.length > 0) parts.push('...')
-    for (let lineNumber = range.start; lineNumber <= range.end; lineNumber += 1) {
-      if (emittedLines >= RECENT_EDIT_CONTEXT_SNIPPET_LINE_LIMIT) {
-        parts.push('...')
-        break
-      }
-      parts.push(`${lineNumber}: ${lines[lineNumber - 1] ?? ''}`)
-      emittedLines += 1
-    }
-  }
-  return parts.join('\n').trim()
-}
-
-async function buildRecentEditContext(messages: ChatMessage[], workspaceDir: string, userText: string): Promise<string | null> {
-  if (!shouldAttachRecentEditContext(userText) || !workspaceDir.trim() || !window.electron?.fs?.readFile) return null
-
-  const seenPaths = new Set<string>()
-  const recentChanges: Array<{ displayPath: string; resolvedPath: string; diff: string; changeType: string }> = []
-
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const message = messages[messageIndex]
-    if (message.role !== 'assistant') continue
-    const toolBlocks = message.toolBlocks ?? []
-    for (let blockIndex = toolBlocks.length - 1; blockIndex >= 0; blockIndex -= 1) {
-      const block = toolBlocks[blockIndex]
-      for (const change of [...(block.fileChanges ?? [])].reverse()) {
-        const resolvedPath = resolveEditedFilePath(change.path, workspaceDir)
-        if (!resolvedPath || seenPaths.has(resolvedPath)) continue
-        seenPaths.add(resolvedPath)
-        recentChanges.push({
-          displayPath: change.path,
-          resolvedPath,
-          diff: change.diff,
-          changeType: change.changeType,
-        })
-        if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
-      }
-      if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
-    }
-    if (recentChanges.length >= RECENT_EDIT_CONTEXT_FILE_LIMIT) break
-  }
-
-  if (recentChanges.length === 0) return null
-
-  const sections: string[] = []
-  for (const change of recentChanges) {
-    try {
-      const fileContent = await window.electron.fs.readFile(change.resolvedPath)
-      const snippet = buildSnippetFromRanges(fileContent, extractChangedLineRangesFromDiff(change.diff))
-      if (!snippet) continue
-      sections.push(
-        `File: ${change.displayPath}\n` +
-        `Recent change type: ${change.changeType}\n` +
-        `Current nearby code:\n${snippet}`,
-      )
-    } catch {
-      // If the file no longer exists or can't be read, skip it quietly.
-    }
-  }
-
-  if (sections.length === 0) return null
-
-  const combined =
-    'Recent edit context from the immediately previous implementation pass. Use this only as fast-follow context if the user is referring to the same change area.\n\n'
-    + sections.join('\n\n---\n\n')
-
-  if (combined.length <= RECENT_EDIT_CONTEXT_MAX_CHARS) return combined
-  return `${combined.slice(0, RECENT_EDIT_CONTEXT_MAX_CHARS - 1).trimEnd()}…`
-}
-
-/** Per-turn annotations ("block notes") the user has stuck onto earlier
- *  messages, tool calls, or thinking blocks are pure UI state by default —
- *  they never reach the model. This helper serialises them into a compact
- *  markdown block that we append to the newest outgoing user message so the
- *  agent can read them as guidance. Capped in size to avoid ballooning the
- *  request, and silently returns null when there's nothing to send. */
-const BLOCK_NOTES_CONTEXT_MAX_CHARS = 4000
-function buildBlockNotesContext(messages: ChatMessage[]): string | null {
-  const lines: string[] = []
-  for (let turnIdx = 0; turnIdx < messages.length; turnIdx += 1) {
-    const msg = messages[turnIdx]
-    if (msg.note?.text) {
-      const snippet = (msg.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
-      lines.push(`- [${msg.role} turn ${turnIdx + 1}${snippet ? `: "${snippet}${snippet.length >= 80 ? '…' : ''}"` : ''}] ${msg.note.text}`)
-    }
-    for (const tb of msg.toolBlocks ?? []) {
-      if (tb.note?.text) {
-        lines.push(`- [tool \`${tb.name}\`] ${tb.note.text}`)
-      }
-    }
-    for (const tk of msg.thinkingBlocks ?? []) {
-      if (tk.note?.text) {
-        const snippet = (tk.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
-        lines.push(`- [thinking${snippet ? `: "${snippet}${snippet.length >= 80 ? '…' : ''}"` : ''}] ${tk.note.text}`)
-      }
-    }
-  }
-  if (lines.length === 0) return null
-  const body = 'User annotations on earlier turns (treat as durable guidance, not fresh requests):\n' + lines.join('\n')
-  if (body.length <= BLOCK_NOTES_CONTEXT_MAX_CHARS) return body
-  return `${body.slice(0, BLOCK_NOTES_CONTEXT_MAX_CHARS - 1).trimEnd()}…`
-}
-
-function splitMessageAttachmentPaths(text: string): {
-  bodyText: string
-  attachmentPaths: string[]
-} {
-  const marker = 'Attached file paths:'
-  const normalized = String(text ?? '')
-  const attachmentMarkerIndex = normalized.indexOf(marker)
-  if (attachmentMarkerIndex < 0) {
-    return {
-      bodyText: normalized,
-      attachmentPaths: [],
-    }
-  }
-
-  const bodyText = normalized.slice(0, attachmentMarkerIndex).trim()
-  const attachmentText = normalized.slice(attachmentMarkerIndex + marker.length).trim()
-  const attachmentPaths = attachmentText
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean)
-
-  if (attachmentPaths.length === 0) {
-    return {
-      bodyText: normalized,
-      attachmentPaths: [],
-    }
-  }
-
-  return {
-    bodyText,
-    attachmentPaths,
-  }
-}
-
-/**
- * Extracts the set of absolute file paths that the model demonstrably "read"
- * across a conversation. We only consider tools that actually load file
- * bytes into the model's context:
- *   - `Read` — canonical file read (images returned as image blocks by the harness)
- *   - `NotebookEdit` / `NotebookRead` — ditto for notebooks
- *
- * Paths referenced by write/edit tools are excluded: writing to a path does
- * not guarantee the model loaded the file contents first. The output is only
- * used to drive the "image was read" tick on attachment chips, so being
- * conservative here is important — the tick must never lie.
- */
-function collectModelReadPaths(messages: ChatMessage[]): Set<string> {
-  const paths = new Set<string>()
-  for (const msg of messages) {
-    const blocks = msg.toolBlocks
-    if (!blocks || blocks.length === 0) continue
-    for (const block of blocks) {
-      if (block.name !== 'Read' && block.name !== 'NotebookRead') continue
-      // Only count a read as successful if the tool finished without error —
-      // a failed Read (e.g. file missing) did not actually load anything into
-      // context, so the tick would be misleading.
-      if (block.status !== 'done') continue
-      if (!block.input) continue
-      try {
-        const parsed = JSON.parse(block.input) as Record<string, unknown>
-        const filePath = typeof parsed.file_path === 'string' ? parsed.file_path : null
-        if (filePath) paths.add(filePath)
-      } catch {
-        // Non-JSON input — skip rather than guess.
-      }
-    }
-  }
-  return paths
-}
-
-function canUsePagedLinkedHistory(
-  linkedSessionEntryId: string | null | undefined,
-  linkedSessionHint: SessionEntryHint | null | undefined,
-  sessionId: string | null | undefined,
-): boolean {
-  if (!linkedSessionEntryId || !linkedSessionHint || !sessionId) return false
-  return linkedSessionHint.source !== 'codesurf'
-}
-
-function mergeHistoricalMessages(
-  previous: ChatMessage[],
-  incoming: ChatMessage[],
-): ChatMessage[] {
-  if (incoming.length === 0) return previous
-  const seen = new Set<string>()
-  const out: ChatMessage[] = []
-  for (const message of [...previous, ...incoming]) {
-    const key = buildChatMessageHistoryFingerprint(message)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(message)
-  }
-  out.sort((a, b) => a.timestamp - b.timestamp)
-  return out
-}
-
-type RenderableMessageSegment =
-  | { type: 'markdown'; text: string }
-  | { type: 'jsx'; jsx: string; isStreaming: boolean }
-
-const JSX_FENCE_LANGUAGES = new Set(['jsx', 'tsx', 'react'])
-
-function looksLikeInlineJsxSource(text: string): boolean {
-  const trimmed = text.trim()
-  if (!trimmed || trimmed.startsWith('```')) return false
-
-  const hasJsxTag = /<[A-Za-z][\w:.-]*(\s|>)/.test(trimmed)
-  if (!hasJsxTag) return false
-
-  if (/^<[A-Za-z][\w:.-]*(\s|>)/.test(trimmed)) return true
-
-  return /\b(return\s*\(|export\s+(default\s+)?(const|function)|const\s+[A-Z][\w$]*\s*=|function\s+[A-Z][\w$]*\s*\(|React\.FC|useState\s*\()/m.test(trimmed)
-}
-
-function splitRenderableMessageSegments(text: string, isStreaming = false): RenderableMessageSegment[] {
-  if (!text.includes('```')) {
-    if (looksLikeInlineJsxSource(text)) {
-      return [{ type: 'jsx', jsx: text, isStreaming }]
-    }
-    return text.trim() ? [{ type: 'markdown', text }] : []
-  }
-
-  const segments: RenderableMessageSegment[] = []
-  let cursor = 0
-
-  while (cursor < text.length) {
-    let fenceStart = -1
-    let headerEnd = -1
-    let searchFrom = cursor
-
-    while (searchFrom < text.length) {
-      const candidateStart = text.indexOf('```', searchFrom)
-      if (candidateStart === -1) break
-
-      const candidateHeaderEnd = text.indexOf('\n', candidateStart + 3)
-      if (candidateHeaderEnd === -1) break
-
-      const header = text.slice(candidateStart + 3, candidateHeaderEnd).trim().toLowerCase()
-      const language = header.split(/\s+/)[0]
-      if (JSX_FENCE_LANGUAGES.has(language)) {
-        fenceStart = candidateStart
-        headerEnd = candidateHeaderEnd
-        break
-      }
-
-      searchFrom = candidateHeaderEnd + 1
-    }
-
-    if (fenceStart === -1 || headerEnd === -1) break
-
-    if (fenceStart > cursor) {
-      segments.push({ type: 'markdown', text: text.slice(cursor, fenceStart) })
-    }
-
-    const closingFenceStart = text.indexOf('\n```', headerEnd + 1)
-    if (closingFenceStart === -1) {
-      if (isStreaming) {
-        const jsx = text.slice(headerEnd + 1)
-        if (jsx.trim()) segments.push({ type: 'jsx', jsx, isStreaming: true })
-      } else {
-        segments.push({ type: 'markdown', text: text.slice(fenceStart) })
-      }
-      cursor = text.length
-      break
-    }
-
-    const jsx = text.slice(headerEnd + 1, closingFenceStart)
-    if (jsx.trim()) segments.push({ type: 'jsx', jsx, isStreaming: false })
-
-    cursor = closingFenceStart + 4
-    if (text[cursor] === '\n') cursor += 1
-  }
-
-  if (cursor < text.length) {
-    const trailingText = text.slice(cursor)
-    if (looksLikeInlineJsxSource(trailingText)) {
-      segments.push({ type: 'jsx', jsx: trailingText, isStreaming })
-    } else {
-      segments.push({ type: 'markdown', text: trailingText })
-    }
-  }
-
-  const filtered = segments.filter(segment => segment.type === 'jsx' ? Boolean(segment.jsx.trim()) : Boolean(segment.text.trim()))
-  if (filtered.length === 0 && looksLikeInlineJsxSource(text)) {
-    return [{ type: 'jsx', jsx: text, isStreaming }]
-  }
-  return filtered
-}
-
-function InlineJSXPreviewBlock({ jsx, isStreaming = false }: { jsx: string; isStreaming?: boolean }): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-
-  const previewComponents = useMemo(() => {
-    const mergeStyle = (style: unknown, defaults: React.CSSProperties): React.CSSProperties => ({
-      ...defaults,
-      ...(style && typeof style === 'object' ? style as React.CSSProperties : {}),
-    })
-
-    const Card = ({ children, style, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div
-        {...props}
-        style={mergeStyle(style, {
-          borderRadius: 12,
-          border: `1px solid ${theme.border.default}`,
-          background: theme.surface.panel,
-          boxShadow: theme.shadow.panel,
-          padding: 16,
-        })}
-      >
-        {children}
-      </div>
-    )
-
-    const CardHeader = ({ children, style, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div {...props} style={mergeStyle(style, { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 })}>{children}</div>
-    )
-    const CardTitle = ({ children, style, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div {...props} style={mergeStyle(style, { fontSize: Math.max(16, fonts.size + 2), fontWeight: 700, color: theme.text.primary })}>{children}</div>
-    )
-    const CardDescription = ({ children, style, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div {...props} style={mergeStyle(style, { fontSize: Math.max(12, fonts.secondarySize), color: theme.text.muted, lineHeight: 1.5 })}>{children}</div>
-    )
-    const CardContent = ({ children, style, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div {...props} style={mergeStyle(style, { display: 'flex', flexDirection: 'column', gap: 10 })}>{children}</div>
-    )
-    const CardFooter = ({ children, style, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div {...props} style={mergeStyle(style, { display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 })}>{children}</div>
-    )
-    const Button = ({ children, style, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-      <button
-        {...props}
-        type={props.type ?? 'button'}
-        style={mergeStyle(style, {
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 8,
-          borderRadius: 8,
-          border: `1px solid ${theme.border.default}`,
-          background: theme.accent.base,
-          color: theme.text.inverse,
-          padding: '8px 12px',
-          fontSize: Math.max(12, fonts.size - 1),
-          fontWeight: 600,
-          cursor: 'default',
-        })}
-      >
-        {children}
-      </button>
-    )
-    const Badge = ({ children, style, ...props }: React.HTMLAttributes<HTMLSpanElement>) => (
-      <span
-        {...props}
-        style={mergeStyle(style, {
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          borderRadius: 999,
-          border: `1px solid ${theme.border.subtle}`,
-          background: theme.surface.panelMuted,
-          color: theme.text.secondary,
-          padding: '3px 8px',
-          fontSize: Math.max(11, fonts.secondarySize - 1),
-          fontWeight: 600,
-        })}
-      >
-        {children}
-      </span>
-    )
-    const Input = ({ style, ...props }: React.InputHTMLAttributes<HTMLInputElement>) => (
-      <input
-        {...props}
-        style={mergeStyle(style, {
-          width: '100%',
-          borderRadius: 8,
-          border: `1px solid ${theme.chat.inputBorder}`,
-          background: theme.chat.input,
-          color: theme.text.primary,
-          padding: '8px 10px',
-          fontSize: Math.max(12, fonts.size - 1),
-        })}
-      />
-    )
-    const Textarea = ({ style, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => (
-      <textarea
-        {...props}
-        style={mergeStyle(style, {
-          width: '100%',
-          minHeight: 96,
-          borderRadius: 8,
-          border: `1px solid ${theme.chat.inputBorder}`,
-          background: theme.chat.input,
-          color: theme.text.primary,
-          padding: '8px 10px',
-          fontSize: Math.max(12, fonts.size - 1),
-          resize: 'vertical',
-        })}
-      />
-    )
-    const Separator = ({ style, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-      <div {...props} style={mergeStyle(style, { width: '100%', height: 1, background: theme.border.subtle })} />
-    )
-    const Stack = ({ children, style, gap = 10, ...props }: React.HTMLAttributes<HTMLDivElement> & { gap?: number }) => (
-      <div {...props} style={mergeStyle(style, { display: 'flex', flexDirection: 'column', gap })}>{children}</div>
-    )
-    const Grid = ({ children, style, columns = 2, gap = 10, ...props }: React.HTMLAttributes<HTMLDivElement> & { columns?: number; gap?: number }) => (
-      <div {...props} style={mergeStyle(style, { display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gap })}>{children}</div>
-    )
-
-    return {
-      Badge,
-      Button,
-      Card,
-      CardContent,
-      CardDescription,
-      CardFooter,
-      CardHeader,
-      CardTitle,
-      Grid,
-      Input,
-      Separator,
-      Stack,
-      Textarea,
-    }
-  }, [fonts.secondarySize, fonts.size, theme.accent.base, theme.border.default, theme.border.subtle, theme.chat.input, theme.chat.inputBorder, theme.shadow.panel, theme.surface.panel, theme.surface.panelMuted, theme.text.inverse, theme.text.muted, theme.text.primary, theme.text.secondary])
-
-  const previewBindings = useMemo(() => ({
-    theme,
-    colors: {
-      accent: theme.accent.base,
-      background: theme.chat.background,
-      border: theme.border.default,
-      muted: theme.text.muted,
-      text: theme.text.primary,
-    },
-  }), [theme])
-
-  return (
-    <div
-      style={{
-        borderRadius: 12,
-        border: `1px solid ${theme.border.default}`,
-        background: theme.surface.panelMuted,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          padding: '10px 12px',
-          borderBottom: `1px solid ${theme.border.subtle}`,
-          background: theme.surface.panel,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <div
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: 999,
-              background: isStreaming ? theme.status.warning : theme.status.success,
-              flexShrink: 0,
-            }}
-          />
-          <div style={{ fontSize: Math.max(11, fonts.secondarySize), fontWeight: 700, color: theme.text.primary, letterSpacing: 0.2 }}>
-            JSX Preview
-          </div>
-        </div>
-        <div style={{ fontSize: Math.max(10, fonts.secondarySize - 1), color: theme.text.muted, flexShrink: 0 }}>
-          {isStreaming ? 'streaming' : 'inline render'}
-        </div>
-      </div>
-
-      <div
-        className="allow-text-selection"
-        style={{
-          padding: 14,
-          background: theme.chat.background,
-          color: theme.text.primary,
-          fontFamily: fonts.primary,
-          fontSize: fonts.size,
-        }}
-      >
-        <JSXPreview
-          jsx={jsx}
-          isStreaming={isStreaming}
-          components={previewComponents}
-          bindings={previewBindings}
-        >
-          <JSXPreviewContent />
-          <JSXPreviewError
-            style={{
-              padding: isStreaming ? '0' : '10px 12px',
-              marginTop: isStreaming ? 0 : 8,
-              borderRadius: isStreaming ? 0 : 8,
-              border: isStreaming ? 'none' : `1px solid ${theme.border.subtle}`,
-              background: isStreaming ? 'transparent' : theme.surface.panel,
-              color: theme.text.muted,
-              fontSize: Math.max(11, fonts.secondarySize),
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {(error) => isStreaming
-              ? <div style={{ color: theme.text.muted, fontSize: Math.max(11, fonts.secondarySize) }}>Waiting for valid JSX…</div>
-              : `Could not render JSX preview: ${error.message}`}
-          </JSXPreviewError>
-        </JSXPreview>
-      </div>
-
-      <details style={{ borderTop: `1px solid ${theme.border.subtle}` }}>
-        <summary
-          style={{
-            cursor: 'pointer',
-            listStyle: 'none',
-            padding: '10px 12px',
-            fontSize: Math.max(11, fonts.secondarySize),
-            color: theme.text.muted,
-            userSelect: 'none',
-          }}
-        >
-          Show JSX
-        </summary>
-        <div style={{ padding: '0 12px 12px' }}>
-          <pre
-            className="allow-text-selection"
-            style={{
-              margin: 0,
-              borderRadius: 8,
-              border: `1px solid ${theme.border.subtle}`,
-              background: theme.surface.panel,
-              color: theme.text.primary,
-              padding: 12,
-              overflowX: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              fontFamily: 'IBM Plex Mono, JetBrains Mono, monospace',
-              fontSize: Math.max(11, fonts.size - 1),
-              lineHeight: 1.55,
-            }}
-          >
-            <code>{jsx.trim()}</code>
-          </pre>
-        </div>
-      </details>
-    </div>
-  )
-}
-
-// ─── Insight block detection ──────────────────────────────────────────────
-// The model emits "★ Insight" callouts framed by box-drawing horizontal rules
-// (U+2500). Both marker lines are typically wrapped in backticks (so they
-// don't disrupt markdown flow), but the backticks can drop during streaming —
-// be permissive. We detect the open/close pair and lift the body out so we
-// can render it as a single styled block instead of three disjoint inline-code
-// runs interleaved with markdown.
-type ChatBodySegment =
-  | { kind: 'md'; text: string }
-  | { kind: 'insight'; text: string; closed: boolean }
-
-// `★ Insight ─────…` — leading backtick optional, trailing backtick optional.
-const INSIGHT_OPEN_RE = /^[ \t]*`?★ Insight[ \t]*─{5,}[ \t]*`?[ \t]*$/m
-// `─────…` — must be box-drawing rules, optionally backticked. A regular
-// markdown `---` HR doesn't match (intentional — we don't want to swallow them).
-const INSIGHT_CLOSE_RE = /^[ \t]*`?─{5,}`?[ \t]*$/m
-
-function splitInsightSegments(text: string): ChatBodySegment[] {
-  const segments: ChatBodySegment[] = []
-  let cursor = 0
-  while (cursor < text.length) {
-    const slice = text.slice(cursor)
-    const openMatch = slice.match(INSIGHT_OPEN_RE)
-    if (!openMatch || openMatch.index === undefined) {
-      const remaining = text.slice(cursor)
-      if (remaining.trim()) segments.push({ kind: 'md', text: remaining })
-      break
-    }
-    const openStart = cursor + openMatch.index
-    const openEnd = openStart + openMatch[0].length
-    if (openStart > cursor) {
-      const before = text.slice(cursor, openStart)
-      if (before.trim()) segments.push({ kind: 'md', text: before })
-    }
-    const afterOpen = text.slice(openEnd)
-    const closeMatch = afterOpen.match(INSIGHT_CLOSE_RE)
-    if (!closeMatch || closeMatch.index === undefined) {
-      // Unclosed — still streaming. Render the partial body as an open insight.
-      segments.push({ kind: 'insight', text: afterOpen.replace(/^\n+/, ''), closed: false })
-      cursor = text.length
-      break
-    }
-    const bodyEnd = openEnd + closeMatch.index
-    const closeEnd = openEnd + closeMatch.index + closeMatch[0].length
-    segments.push({
-      kind: 'insight',
-      text: text.slice(openEnd, bodyEnd).replace(/^\n+/, '').replace(/\n+$/, ''),
-      closed: true,
-    })
-    cursor = closeEnd
-    // Eat one trailing newline so the next markdown chunk doesn't start blank.
-    if (text[cursor] === '\n') cursor += 1
-  }
-  return segments
-}
-
-// Hex color helper: append an alpha component (00..ff) to a #rrggbb color.
-// Used to derive a subtle accent-tinted background from theme.accent.base.
-// TODO(design): the styling in InsightBlock below is a sensible default —
-// tweak the four marked knobs to match your sketch.
-function withAlpha(hex: string, alphaHex: string): string {
-  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex
-  return hex + alphaHex
-}
-
-interface InsightBlockProps {
-  text: string
-  closed: boolean
-  isStreaming?: boolean
-  accent: string
-  textColor: string
-}
-
-const InsightBlock = React.memo(({ text, closed, isStreaming, accent, textColor }: InsightBlockProps): JSX.Element => {
-  void closed
-  return (
-    <div
-      className="chat-insight"
-      style={{
-        // ── Glass panel in the active accent color ──────────────────────
-        // Layered for the "tinted glass" effect:
-        //   1. accent-tinted fill at ~14% so the color reads even against
-        //      opaque backgrounds (chat surface is theme.surface.panel)
-        //   2. backdrop-filter blur softens whatever sits behind
-        //   3. hairline accent border at ~30% alpha gives the edge definition
-        //      that the removed left rule used to provide
-        background: withAlpha(accent, '24'),                          // ~14% tint
-        backdropFilter: 'blur(14px) saturate(160%)',
-        WebkitBackdropFilter: 'blur(14px) saturate(160%)',
-        border: `1px solid ${withAlpha(accent, '4d')}`,               // ~30% accent edge
-        borderRadius: 12,                                              // matches code-block radius cohesion
-        padding: '12px 16px',
-        margin: '10px 0',
-        color: textColor,
-        // Subtle inner highlight on the top edge — a small touch that
-        // sells the "glass" reading without being explicit about it.
-        // Drop shadow anchored on #000 in dark mode (text.primary would lift
-        // toward white at high contrast and turn the shadow into a glow);
-        // light mode keeps text.primary so the shadow is genuinely dark
-        // against paper.
-        boxShadow: `0 1px 0 0 ${withAlpha(accent, '14')} inset, 0 1px 2px ${theme.mode === 'light' ? `color-mix(in srgb, ${theme.text.primary} 4%, transparent)` : `rgba(0,0,0,0.18)`}`,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color: accent,
-          marginBottom: 6,
-          textTransform: 'uppercase',
-          letterSpacing: 0.6,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        <span style={{ fontSize: 13, lineHeight: 1 }}>★</span>
-        <span>Insight</span>
-      </div>
-      <GuardedChatMarkdown text={text} isStreaming={isStreaming} />
-    </div>
-  )
-})
-
-function LargeTextBlock({ text, isStreaming, className }: {
-  text: string
-  isStreaming?: boolean
-  className?: string
-}): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const [expanded, setExpanded] = useState(false)
-  const measure = useMemo(() => measureText(text), [text])
-  const preview = useMemo(() => previewText(text), [text])
-
-  if (expanded) {
-    return (
-      <div className={className}>
-        <button
-          type="button"
-          onClick={() => setExpanded(false)}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            marginBottom: 8,
-            border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-            borderRadius: 8,
-            background: theme.chat.assistantBubble,
-            color: theme.chat.textSecondary,
-            padding: '5px 9px',
-            fontSize: fonts.secondarySize,
-            cursor: 'pointer',
-          }}
-        >
-          <ChevronRight size={12} style={{ transform: 'rotate(90deg)' }} />
-          Collapse large message
-        </button>
-        <ChatMarkdown text={text} isStreaming={isStreaming} />
-      </div>
-    )
-  }
-
-  return (
-    <div
-      className={className}
-      style={{
-        border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-        borderRadius: 10,
-        background: theme.chat.assistantBubble,
-        overflow: 'hidden',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: `1px solid ${theme.chat.assistantBubbleBorder}` }}>
-        <FileText size={13} color={theme.chat.textSecondary} style={{ flexShrink: 0 }} />
-        <div style={{ minWidth: 0, flex: 1, color: theme.chat.textSecondary, fontSize: fonts.secondarySize, fontWeight: 600 }}>
-          Large message - {measure.lines.toLocaleString()} lines - {measure.chars.toLocaleString()} chars
-        </div>
-        <button
-          type="button"
-          onClick={() => { void navigator.clipboard.writeText(text).catch(() => {}) }}
-          title="Copy full message"
-          style={{ border: 'none', background: 'transparent', color: theme.chat.muted, cursor: 'pointer', padding: 4, display: 'inline-flex' }}
-        >
-          <Copy size={13} />
-        </button>
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          style={{
-            border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-            borderRadius: 7,
-            background: theme.surface.panelMuted,
-            color: theme.chat.textSecondary,
-            padding: '4px 8px',
-            fontSize: fonts.secondarySize,
-            cursor: 'pointer',
-          }}
-        >
-          Expand
-        </button>
-      </div>
-      <pre
-        className="allow-text-selection"
-        style={{
-          margin: 0,
-          maxHeight: 320,
-          overflow: 'auto',
-          padding: 10,
-          color: theme.chat.text,
-          background: theme.surface.panelMuted,
-          fontFamily: fonts.mono,
-          fontSize: Math.max(10, fonts.size - 2),
-          lineHeight: 1.45,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}
-      >
-        {preview}
-      </pre>
-    </div>
-  )
-}
-
-function RawDiffFileBlock({ file }: { file: RawDiffFile }): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const [expanded, setExpanded] = useState(false)
-  const [renderFull, setRenderFull] = useState(false)
-  const large = useMemo(() => isLargeArtifact(file.diff), [file.diff])
-  const preview = useMemo(() => previewText(file.diff), [file.diff])
-
-  return (
-    <div style={{ borderTop: `1px solid ${theme.chat.assistantBubbleBorder}` }}>
-      <button
-        type="button"
-        onClick={() => setExpanded(value => !value)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          width: '100%',
-          border: 'none',
-          background: 'transparent',
-          color: theme.chat.textSecondary,
-          padding: '7px 10px',
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-      >
-        <ChevronRight size={13} style={{ transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: fonts.mono, fontSize: Math.max(10, fonts.size - 2) }}>
-          {file.path}
-        </span>
-        <span style={{ color: theme.status.success, fontFamily: fonts.mono, fontSize: 11 }}>+{file.additions}</span>
-        <span style={{ color: theme.status.danger, fontFamily: fonts.mono, fontSize: 11 }}>-{file.deletions}</span>
-      </button>
-      {expanded && (
-        <div style={{ padding: '0 10px 10px' }}>
-          {large && !renderFull ? (
-            <>
-              <pre
-                className="allow-text-selection"
-                style={{
-                  margin: 0,
-                  maxHeight: 280,
-                  overflow: 'auto',
-                  borderRadius: 8,
-                  background: theme.surface.panelMuted,
-                  color: theme.chat.text,
-                  padding: 10,
-                  fontFamily: fonts.mono,
-                  fontSize: Math.max(10, fonts.size - 2),
-                  lineHeight: 1.45,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {preview}
-              </pre>
-              <button
-                type="button"
-                onClick={() => setRenderFull(true)}
-                style={{
-                  marginTop: 8,
-                  border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-                  borderRadius: 7,
-                  background: theme.surface.panelMuted,
-                  color: theme.chat.textSecondary,
-                  padding: '4px 8px',
-                  fontSize: fonts.secondarySize,
-                  cursor: 'pointer',
-                }}
-              >
-                Render full diff
-              </button>
-            </>
-          ) : (
-            <DiffView diff={file.diff} />
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function RawDiffBlock({ files }: { files: RawDiffFile[] }): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const totals = useMemo(() => files.reduce((acc, file) => ({
-    additions: acc.additions + file.additions,
-    deletions: acc.deletions + file.deletions,
-  }), { additions: 0, deletions: 0 }), [files])
-  const raw = useMemo(() => files.map(file => file.diff).join('\n\n'), [files])
-
-  return (
-    <div
-      style={{
-        border: `1px solid ${theme.chat.assistantBubbleBorder}`,
-        borderRadius: 12,
-        background: theme.chat.assistantBubble,
-        overflow: 'hidden',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
-        <FileText size={13} color={theme.chat.textSecondary} style={{ flexShrink: 0 }} />
-        <div style={{ minWidth: 0, flex: 1, color: theme.chat.textSecondary, fontSize: fonts.secondarySize, fontWeight: 600 }}>
-          Diff - {files.length} file{files.length === 1 ? '' : 's'}
-        </div>
-        <span style={{ color: theme.status.success, fontFamily: fonts.mono, fontSize: 11 }}>+{totals.additions}</span>
-        <span style={{ color: theme.status.danger, fontFamily: fonts.mono, fontSize: 11 }}>-{totals.deletions}</span>
-        <button
-          type="button"
-          onClick={() => { void navigator.clipboard.writeText(raw).catch(() => {}) }}
-          title="Copy raw diff"
-          style={{ border: 'none', background: 'transparent', color: theme.chat.muted, cursor: 'pointer', padding: 4, display: 'inline-flex' }}
-        >
-          <Copy size={13} />
-        </button>
-      </div>
-      {files.map((file, index) => <RawDiffFileBlock key={`${file.path}:${index}`} file={file} />)}
-    </div>
-  )
-}
-
-function looksLikeUnfencedDiff(text: string): boolean {
-  const lines = text.split('\n')
-  const hasHunk = lines.some(line => /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(line.trim()))
-  const hasReviewDiffHeader = lines.some(line => /^review diff\s+a\/.+\s+(?:→|->)\s+b\/.+@@/.test(line.trim()))
-  const markdownTrapLines = lines.filter(line => /^[+-]\s{2,}\S/.test(line)).length
-  return (hasHunk || hasReviewDiffHeader) && markdownTrapLines >= 2
-}
-
-function GuardedChatMarkdown({ text, isStreaming, className }: {
-  text: string
-  isStreaming?: boolean
-  className?: string
-}): JSX.Element {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const diff = useMemo(() => isStreaming ? null : splitRawDiffText(text), [isStreaming, text])
-
-  if (!isStreaming && !diff && looksLikeUnfencedDiff(text)) {
-    return (
-      <div className={className} style={{ minWidth: 0 }}>
-        <pre
-          className="allow-text-selection"
-          style={{
-            margin: 0,
-            maxWidth: '100%',
-            overflow: 'auto',
-            borderRadius: 8,
-            background: theme.surface.panelMuted,
-            color: theme.chat.text,
-            padding: 10,
-            fontFamily: fonts.mono,
-            fontSize: Math.max(10, fonts.size - 2),
-            lineHeight: 1.45,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}
-        >
-          {text}
-        </pre>
-      </div>
-    )
-  }
-
-  if (diff) {
-    return (
-      <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
-        {diff.prefix && (
-          isLargeMessage(diff.prefix)
-            ? <LargeTextBlock text={diff.prefix} isStreaming={isStreaming} />
-            : <ChatMarkdown text={diff.prefix} isStreaming={isStreaming} />
-        )}
-        <RawDiffBlock files={diff.files} />
-      </div>
-    )
-  }
-
-  if (isLargeMessage(text)) {
-    return <LargeTextBlock text={text} isStreaming={isStreaming} className={className} />
-  }
-
-  return <ChatMarkdown text={text} isStreaming={isStreaming} className={className} />
-}
-
-type ExternalAgentMarkupSegment =
-  | { kind: 'md'; text: string }
-  | { kind: 'tool'; block: ToolBlock }
-
-function splitExternalAgentMarkup(text: string): ExternalAgentMarkupSegment[] {
-  const pattern = /\[external_agent_tool_call:\s*([^\]]+)\]([\s\S]*?)\[\/external_agent_tool_call\]|\[external_agent_tool_result(?::\s*([^\]]+))?\]([\s\S]*?)\[\/external_agent_tool_result\]/g
-  const segments: ExternalAgentMarkupSegment[] = []
-  let lastIndex = 0
-  let index = 0
-  for (const match of text.matchAll(pattern)) {
-    if (match.index == null) continue
-    const before = text.slice(lastIndex, match.index)
-    if (before) segments.push({ kind: 'md', text: before })
-    const callName = (match[1] ?? '').trim()
-    const resultLabel = (match[3] ?? '').trim()
-    const body = (match[2] ?? match[4] ?? '').trim()
-    const isResult = !callName
-    const isError = isResult && resultLabel.toLowerCase() === 'error'
-    segments.push({
-      kind: 'tool',
-      block: {
-        id: `external-agent-${match.index}-${index++}`,
-        name: callName || resultLabel || 'result',
-        input: body,
-        status: isError ? 'error' : 'done',
-      },
-    })
-    lastIndex = match.index + match[0].length
-  }
-  const tail = text.slice(lastIndex)
-  if (tail) segments.push({ kind: 'md', text: tail })
-  return segments.length > 0 ? segments : [{ kind: 'md', text }]
-}
-
-function getExternalAgentToolBlocks(text: string): ToolBlock[] {
-  return splitExternalAgentMarkup(text)
-    .filter((segment): segment is Extract<ExternalAgentMarkupSegment, { kind: 'tool' }> => segment.kind === 'tool')
-    .map(segment => segment.block)
-}
-
-function isExternalAgentToolOnlyText(text: string): boolean {
-  const segments = splitExternalAgentMarkup(text)
-  return segments.some(segment => segment.kind === 'tool')
-    && segments.every(segment => segment.kind === 'tool' || segment.text.trim().length === 0)
-}
-
-const ChatMessageContent = React.memo(({
-  text,
-  isStreaming,
-  isUser,
-  className,
-  readAttachmentPaths,
-}: {
-  text: string
-  isStreaming?: boolean
-  isUser?: boolean
-  className?: string
-  /** Paths that the model has demonstrably loaded via Read-style tools.
-   *  Used to render a confirmation tick on attachment chips — must only be
-   *  set when the attachment was actually consumed by the model. */
-  readAttachmentPaths?: Set<string>
-}) => {
-  const theme = useTheme()
-  const fonts = useAppFonts()
-  const { bodyText, attachmentPaths } = useMemo(() => splitMessageAttachmentPaths(text), [text])
-  // JSX preview disabled — was causing render lockups on message history load
-  // const bodySegments = useMemo(() => splitRenderableMessageSegments(bodyText, isStreaming), [bodyText, isStreaming])
-  // Chip colors must stay legible regardless of whether the parent message
-  // bubble is dark (dark theme user bubble) or light (light theme user
-  // bubble). In light mode we pick an explicitly-white chip surface with a
-  // strong border and a forced-dark text colour so we don't blend into the
-  // pale user bubble — previously `theme.surface.panelElevated` was nearly
-  // identical to the bubble and child text colours were inheriting light
-  // values from elsewhere, producing a "ghost chip" effect.
-  void isUser
-  const isLight = theme.mode === 'light'
-  // Chip surfaces follow theme: in light mode the canvas-anchored chip should
-  // read as paper, so use surface.app rather than panelElevated (which is the
-  // chat shell background and would blend in). Borders come from the theme's
-  // own gradient so contrast tracks.
-  const chipBackground = isLight ? theme.surface.app : theme.surface.panelElevated
-  const chipBorder = isLight ? theme.border.default : theme.border.default
-  const chipText = theme.text.primary
-  const chipMeta = theme.text.secondary
-
-  const attachments = attachmentPaths.length > 0 ? (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: bodyText ? 8 : 0, minWidth: 0 }}>
-      {bodyText && (
-        <div
-          style={{
-            fontSize: Math.max(10, fonts.secondarySize - 1),
-            color: chipMeta,
-            fontWeight: 600,
-            letterSpacing: 0.2,
-          }}
-        >
-          Attached file paths
-        </div>
-      )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
-        {attachmentPaths.map(path => {
-          const wasRead = readAttachmentPaths?.has(path) === true
-          const isImage = isImagePath(path)
-          return (
-            <button
-              key={path}
-              type="button"
-              title={wasRead ? `${path} — read by the model` : path}
-              onClick={() => { void dispatchOpenLink(path) }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                minWidth: 0,
-                maxWidth: '100%',
-                borderRadius: 6,
-                border: `1px solid ${chipBorder}`,
-                background: chipBackground,
-                color: chipText,
-                padding: isImage ? 3 : '3px 7px',
-                cursor: 'pointer',
-              }}
-            >
-              {isImage ? (
-                <img
-                  src={`contex-file://${encodeURI(path).replace(/#/g, '%23')}`}
-                  alt={basename(path)}
-                  style={{
-                    width: 28,
-                    height: 28,
-                    objectFit: 'cover',
-                    borderRadius: 4,
-                    flexShrink: 0,
-                    display: 'block',
-                    background: theme.surface.panelMuted,
-                  }}
-                />
-              ) : (
-                <FileText size={10} color={chipText} style={{ flexShrink: 0, opacity: 0.85 }} />
-              )}
-              <span
-                style={{
-                  minWidth: 0,
-                  maxWidth: 320,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: Math.max(10, fonts.size - 2),
-                  lineHeight: 1.2,
-                  color: chipText,
-                  paddingRight: isImage ? 6 : 0,
-                }}
-              >
-                {basename(path)}
-              </span>
-              {wasRead && (
-                <Check
-                  size={10}
-                  color={theme.status.success}
-                  style={{ flexShrink: 0, marginRight: isImage ? 4 : 0 }}
-                  aria-label="Read by the model"
-                />
-              )}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  ) : null
-
-  if (!bodyText) return attachments ?? null
-
-  // Split body into markdown / insight segments. Insights become styled
-  // blocks rendered with the active accent color; everything else flows
-  // through the normal markdown pipeline.
-  const accent = theme.accent.base
-  const textColor = theme.text.primary
-  const externalAgentSegments = useMemo(() => splitExternalAgentMarkup(bodyText), [bodyText])
-  const hasExternalAgentMarkup = externalAgentSegments.some(seg => seg.kind === 'tool')
-  const segments = useMemo(() => splitInsightSegments(bodyText), [bodyText])
-  const renderedBody = hasExternalAgentMarkup
-    ? (
-      <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-        {(() => {
-          const elements: JSX.Element[] = []
-          let chipRow: JSX.Element[] = []
-          let chipRowStart = 0
-          const flushChipRow = () => {
-            if (chipRow.length === 0) return
-            elements.push(
-              <div key={`external-tool-row-${chipRowStart}`} style={CHAT_CHIP_ROW_STYLE}>
-                {chipRow}
-              </div>
-            )
-            chipRow = []
-          }
-          externalAgentSegments.forEach((seg, i) => {
-            if (seg.kind === 'tool') {
-              if (chipRow.length === 0) chipRowStart = i
-              chipRow.push(<ToolBlockView key={seg.block.id} block={seg.block} />)
-              return
-            }
-            if (!seg.text.trim()) return
-            flushChipRow()
-            elements.push(<GuardedChatMarkdown key={`external-md-${i}`} text={seg.text} isStreaming={isStreaming} />)
-          })
-          flushChipRow()
-          return elements
-        })()}
-      </div>
-    )
-    : segments.length === 1 && segments[0].kind === 'md'
-      ? <GuardedChatMarkdown text={segments[0].text} isStreaming={isStreaming} className={className} />
-      : (
-        <div className={className}>
-          {segments.map((seg, i) => seg.kind === 'insight'
-            ? <InsightBlock key={i} text={seg.text} closed={seg.closed} isStreaming={isStreaming} accent={accent} textColor={textColor} />
-            : <GuardedChatMarkdown key={i} text={seg.text} isStreaming={isStreaming} />
-          )}
-        </div>
-      )
-
-  if (!attachments) return renderedBody
-  return <>{renderedBody}{attachments}</>
-})
-
-// --- Provider / Model config -----------------------------------------------------
-
-interface ProviderEntry {
-  id: string
-  label: string
-  description?: string
-  noun: 'model' | 'agent'
-  icon: React.ReactNode
-  models: ModelOption[]
-  kind: 'builtin' | 'extension'
-  transport?: ExtensionChatTransportConfig | null
-}
-
-
-const PROVIDER_ICON: Record<BuiltinProvider, React.ReactNode> = {
-  claude: <ClaudeIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-  codex: <CodexIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-  opencode: <Bot size={TOOLBAR_PILL_ICON_SIZE} />,
-  openclaw: <OpenClawIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-  hermes: <HermesIcon size={TOOLBAR_PILL_ICON_SIZE} />,
-}
-
-
-function getExtensionProviderIcon(icon: ExtensionChatProviderConfig['icon'] | undefined): React.ReactNode {
-  switch (icon) {
-    case 'server':
-      return <ShieldCheck size={TOOLBAR_PILL_ICON_SIZE} />
-    case 'plug':
-      return <Wrench size={TOOLBAR_PILL_ICON_SIZE} />
-    case 'bot':
-    default:
-      return <Bot size={TOOLBAR_PILL_ICON_SIZE} />
-  }
-}
-
-function normalizeExtensionModels(value: unknown): ExtensionChatModel[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item): ExtensionChatModel[] => {
-    if (!item || typeof item !== 'object') return []
-    const model = item as Record<string, unknown>
-    const id = typeof model.id === 'string' ? model.id.trim() : ''
-    const label = typeof model.label === 'string' ? model.label.trim() : id
-    if (!id || !label) return []
-    return [{
-      id,
-      label,
-      description: typeof model.description === 'string' ? model.description : undefined,
-    }]
-  })
-}
-
-function normalizeExtensionProviders(value: unknown): ExtensionChatProviderConfig[] {
-  const rawProviders = Array.isArray(value) ? value : [value]
-  return rawProviders.flatMap((item): ExtensionChatProviderConfig[] => {
-    if (!item || typeof item !== 'object') return []
-    const provider = item as Record<string, unknown>
-    const id = typeof provider.id === 'string' ? provider.id.trim() : ''
-    const label = typeof provider.label === 'string' ? provider.label.trim() : ''
-    const transport = provider.transport
-    if (!id || !label || !transport || typeof transport !== 'object') return []
-
-    const transportConfig = transport as Record<string, unknown>
-    if (transportConfig.type !== 'local-proxy') return []
-    const baseUrl = typeof transportConfig.baseUrl === 'string' ? transportConfig.baseUrl.trim() : ''
-    if (!baseUrl) return []
-
-    const models = normalizeExtensionModels(provider.models)
-    if (models.length === 0) return []
-
-    return [{
-      id,
-      label,
-      description: typeof provider.description === 'string' ? provider.description : undefined,
-      noun: provider.noun === 'agent' ? 'agent' : 'model',
-      icon: provider.icon === 'server' || provider.icon === 'plug' || provider.icon === 'bot'
-        ? provider.icon
-        : undefined,
-      models,
-      transport: {
-        type: 'local-proxy',
-        baseUrl,
-        apiKey: typeof transportConfig.apiKey === 'string' ? transportConfig.apiKey : undefined,
-        autoStart: transportConfig.autoStart === false ? false : true,
-      },
-    }]
-  })
-}
-
-// --- Shimmer keyframes (injected once, lifted from Paseo) ------------------------
-
-const SHIMMER_ID = 'chat-tile-shimmer'
-function relativeTime(ts: number): string {
-  const diff = Math.max(0, Math.floor((Date.now() - ts) / 1000))
-  if (diff < 5) return 'just now'
-  if (diff < 60) return `${diff}s ago`
-  const mins = Math.floor(diff / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  return `${days}d ago`
-}
-
-function ensureChatMdStyle(): void {
-  ensureShimmerStyles()
-  let style = document.getElementById(SHIMMER_ID) as HTMLStyleElement | null
-  if (!style) {
-    style = document.createElement('style')
-    style.id = SHIMMER_ID
-    document.head.appendChild(style)
-  }
-  style.textContent = CHAT_TILE_STYLES
-}
-
 
 // --- Component -------------------------------------------------------------------
 
@@ -1928,53 +196,21 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     '--ct-font-title-size': `${fontSize}px`,
     '--ct-font-title-weight': String(Math.max(fontWeight, 600)),
   }), [fontLineHeight, fontMono, fontSans, fontSecondary, fontSize, fontWeight, secondaryLineHeight, secondarySize, secondaryWeight, theme])
-  const initialRuntimeStateRef = useRef<ChatTilePersistedState | null>(getChatTileRuntimeState<ChatTilePersistedState>(tileId))
-  const initialProvider = initialRuntimeStateRef.current?.provider ?? DEFAULT_PROVIDER_ID
-  const initialModel = initialRuntimeStateRef.current?.model
-    ?? (isBuiltinProvider(initialProvider)
-      ? DEFAULT_MODELS[initialProvider][0]?.id
-      : DEFAULT_MODELS[DEFAULT_PROVIDER_ID][0]?.id)
-    ?? ''
-  const initialMode = resolveProviderModeId(
-    initialProvider,
-    initialRuntimeStateRef.current?.mode ?? settings?.chatProviderModes?.[initialProvider],
-  )
-  const initialExecutionTarget = initialRuntimeStateRef.current?.executionTarget ?? 'local'
-  const initialCloudHostId = initialRuntimeStateRef.current?.cloudHostId ?? null
-  const initialJobId = initialRuntimeStateRef.current?.jobId ?? null
-  const initialJobSequence = initialRuntimeStateRef.current?.jobSequence ?? 0
-
-  const [messages, setMessages] = useState<ChatMessage[]>(() => initialRuntimeStateRef.current?.messages ?? [])
-  const [input, setInput] = useState(() => initialRuntimeStateRef.current?.input ?? '')
-  const [isStreaming, setIsStreaming] = useState(() => initialRuntimeStateRef.current?.isStreaming ?? false)
-  // Subtle liveness tracking — when streaming, we bump `lastActivityAtRef` on
-  // every message/block mutation so the quiet-indicator can show how long the
-  // server has been idle without forcing the whole transcript to rerender.
-  const lastActivityAtRef = useRef<number>(Date.now())
-  // Sparse ticker used only when a just-finished tool crosses the collapse
-  // grace window and the chip cluster needs to recompute once.
-  const [toolCollapseTick, setToolCollapseTick] = useState(0)
-  // Progressive tool-chip collapse: remember when each ToolBlock first
-  // flipped to 'done' so we can fold chips into a group summary only after
-  // a grace period (keeps just-finished chips readable for a few seconds
-  // before they get tucked into "Called N tools"). Populated by an effect
-  // that walks messages; cleared when the chip is gone from state.
-  const toolCompletedAtRef = useRef<Map<string, number>>(new Map())
-  // Inline tool-permission prompts. Keyed by tool_use id.
-  // `pending` holds active requests awaiting a user decision.
-  // `resolved` holds recently-answered ones so the chip collapses gracefully
-  // instead of vanishing the moment the user clicks.
-  const [pendingToolPermissions, setPendingToolPermissions] = useState<Map<string, ToolPermissionRequest>>(() => new Map())
-  const [resolvedToolPermissions, setResolvedToolPermissions] = useState<Map<string, ToolPermissionDecision>>(() => new Map())
-  const handleToolPermissionDecision = useCallback(async (args: { cardId: string; toolId: string; decision: ToolPermissionDecision }) => {
-    const res = await window.electron?.chat?.answerToolPermission?.(args)
-    return res ?? { ok: true }
-  }, [])
-  const [executionTarget, setExecutionTarget] = useState<'local' | 'cloud'>(() => initialExecutionTarget)
-  const [cloudHostId, setCloudHostId] = useState<string | null>(() => initialCloudHostId)
-  const [provider, setProvider] = useState<string>(() => initialProvider)
-  const [model, setModel] = useState(() => initialModel)
-  const [mcpEnabled, setMcpEnabled] = useState(() => initialRuntimeStateRef.current?.mcpEnabled ?? true)
+  const {
+    initialRuntimeStateRef, initialMode, initialJobSequence,
+    messages, setMessages, input, setInput, isStreaming, setIsStreaming,
+    executionTarget, setExecutionTarget, cloudHostId, setCloudHostId,
+    provider, setProvider, model, setModel, mcpEnabled, setMcpEnabled,
+    mode, setMode, thinking, setThinking, autoAgentMode, setAutoAgentMode,
+    attachments, setAttachments, queuedTurns, setQueuedTurns,
+    openChatSurfaces, setOpenChatSurfaces, activeChatSurfaceId, setActiveChatSurfaceId,
+    sessionId, setSessionId, jobId, setJobId, jobSequence, setJobSequence,
+    linkedSessionEntryId, setLinkedSessionEntryId, linkedSessionHint, setLinkedSessionHint,
+    preserveSessionSummary, setPreserveSessionSummary, hasEarlierMessages, setHasEarlierMessages,
+    lastActivityAtRef, toolCollapseTick, setToolCollapseTick, explodedChipGroups, toggleExplodedChipGroup,
+    pendingToolPermissions, setPendingToolPermissions, resolvedToolPermissions, setResolvedToolPermissions,
+    handleToolPermissionDecision, toolCompletedAtRef,
+  } = useChatTileCoreState({ tileId, settings })
   const [workspaceSkills, setWorkspaceSkills] = useState<SkillDefinition[]>([])
   const mcpServers = useMCPServers()
   const [disabledServers, setDisabledServers] = useState<Set<string>>(new Set())
@@ -2112,7 +348,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     let cancelled = false
 
     void Promise.all(connectedPeers.map(async (peer) => {
-      const entries = await window.electron.tileContext.getAll(workspaceId, peer.peerId, 'ctx:')
+      const entries = await window.electron.tileContext?.getAll(workspaceId, peer.peerId, 'ctx:') ?? []
       return [peer.peerId, Array.isArray(entries) ? entries : []] as const
     })).then((results) => {
       if (cancelled) return
@@ -2154,27 +390,75 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
     return () => { for (const u of unsubs) u() }
   }, [connectedPeerSignature, tileId])
-  const [mode, setMode] = useState(() => initialMode)
   // Tracks the permission mode we last pushed to the running Claude query so
   // user-initiated mid-stream mode switches (Default -> Bypass etc.) propagate
   // into the active canUseTool closure via chat:setPermissionMode.
   const lastPushedModeRef = useRef<string>(initialMode)
-  const [thinking, setThinking] = useState(() => initialRuntimeStateRef.current?.thinking ?? 'adaptive')
-  const [autoAgentMode, setAutoAgentMode] = useState(() => initialRuntimeStateRef.current?.autoAgentMode ?? false)
   const effectiveAgentMode = Boolean(isConnected || isAutoConnected || autoAgentMode)
-  const [showModelMenu, setShowModelMenu] = useState(false)
-  const [showProviderMenu, setShowProviderMenu] = useState(false)
-  const [showInsertMenu, setShowInsertMenu] = useState(false)
-  const [showModeMenu, setShowModeMenu] = useState(false)
-  const [showThinkingMenu, setShowThinkingMenu] = useState(false)
-  const [showLocationMenu, setShowLocationMenu] = useState(false)
-  const [showBranchMenu, setShowBranchMenu] = useState(false)
-  const [showContextMenu, setShowContextMenu] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(() => initialRuntimeStateRef.current?.sessionId ?? null)
-  const [linkedSessionEntryId, setLinkedSessionEntryId] = useState<string | null>(() => initialRuntimeStateRef.current?.linkedSessionEntryId ?? null)
-  const [linkedSessionHint, setLinkedSessionHint] = useState<SessionEntryHint | null>(() => initialRuntimeStateRef.current?.linkedSessionHint ?? null)
-  const [preserveSessionSummary, setPreserveSessionSummary] = useState<boolean>(() => initialRuntimeStateRef.current?.preserveSessionSummary === true)
-  const [hasEarlierMessages, setHasEarlierMessages] = useState<boolean>(() => initialRuntimeStateRef.current?.hasEarlierMessages === true)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const acRef = useRef<HTMLDivElement>(null)
+  const closeProviderMenuRef = useRef<() => void>(() => {})
+  const closeAutocompleteRef = useRef<() => void>(() => {})
+  const {
+    providerEntries,
+    providerEntryById,
+    currentProviderEntry,
+    modeOptions,
+    currentMode,
+    optionNoun,
+    currentModel,
+    thinkingOptions,
+    handleProviderChange,
+  } = useChatTileProviders({
+    provider,
+    setProvider,
+    model,
+    setModel,
+    mode,
+    setMode,
+    thinking,
+    setThinking,
+    settings,
+    connectedPeers,
+    peerContextRef,
+    peerContextVersion,
+    onProviderChanged: () => closeProviderMenuRef.current(),
+  })
+  const {
+    showModelMenu,
+    setShowModelMenu,
+    showProviderMenu,
+    setShowProviderMenu,
+    showInsertMenu,
+    setShowInsertMenu,
+    showModeMenu,
+    setShowModeMenu,
+    showThinkingMenu,
+    setShowThinkingMenu,
+    showLocationMenu,
+    setShowLocationMenu,
+    showBranchMenu,
+    setShowBranchMenu,
+    showContextMenu,
+    modelFilter,
+    setModelFilter,
+    branchFilter,
+    setBranchFilter,
+    modelMenuRef,
+    providerMenuRef,
+    insertMenuRef,
+    modeMenuRef,
+    thinkingMenuRef,
+    locationMenuRef,
+    branchMenuRef,
+    contextMenuRef,
+    toggleMenu,
+  } = useChatTileComposerMenus({
+    textareaRef,
+    acRef,
+    onCloseAutocomplete: () => closeAutocompleteRef.current(),
+  })
+  closeProviderMenuRef.current = () => setShowProviderMenu(false)
   const pagedLinkedHistoryEnabled = canUsePagedLinkedHistory(linkedSessionEntryId, linkedSessionHint, sessionId)
 
   // Publish this tile's streaming state so the sidebar can swap the row icon
@@ -2183,32 +467,15 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setChatStreaming(tileId, isStreaming, { sessionId, entryId: linkedSessionEntryId })
     return () => { setChatStreaming(tileId, false) }
   }, [tileId, isStreaming, sessionId, linkedSessionEntryId])
-  // Older messages are loaded on demand and prepended into the same transcript
-  // list. They stay out of the live model context and persistence hot path,
-  // but render with the normal chat UI once loaded.
-  const [historicalMessages, setHistoricalMessages] = useState<ChatMessage[]>([])
-  const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW)
-  const [loadingEarlier, setLoadingEarlier] = useState(false)
-  const [earlierLoadError, setEarlierLoadError] = useState<string | null>(null)
-  const pendingHistoryPrependRef = useRef<{ previousHeight: number; previousTop: number } | null>(null)
-  const loadEarlierMessagesRef = useRef<() => Promise<void>>(async () => {})
-  const [jobId, setJobId] = useState<string | null>(() => initialJobId)
-  const [jobSequence, setJobSequence] = useState<number>(() => initialJobSequence)
   const { localExecutionLabel, remoteHosts, activeCloudHost, executionDisplayLabel, executionDisplayDetail } = useChatExecutionHosts({
     executionPreference: settings?.execution ?? null,
     executionTarget,
     cloudHostId,
   })
-  const [opencodeModels, setOpencodeModels] = useState<ModelOption[]>(DEFAULT_MODELS.opencode)
-  const [openclawAgents, setOpenclawAgents] = useState<ModelOption[]>(DEFAULT_MODELS.openclaw)
-  const [modelFilter, setModelFilter] = useState('')
-  const [attachments, setAttachments] = useState<PendingAttachment[]>(() => initialRuntimeStateRef.current?.attachments ?? [])
   const hasSendableDraft = input.trim().length > 0 || attachments.length > 0 || implicitPeerImageAttachments.length > 0
   // Chat-surface extensions (e.g. Sketch, Builder) mounted above the composer.
   // Multiple surfaces can stay open as tabs so a sketch can sit beside its
   // enhanced builder output inside the same chat.
-  const [openChatSurfaces, setOpenChatSurfaces] = useState<ActiveChatSurface[]>(() => normalizePersistedChatSurfaces(initialRuntimeStateRef.current?.openChatSurfaces))
-  const [activeChatSurfaceId, setActiveChatSurfaceId] = useState<string | null>(() => initialRuntimeStateRef.current?.activeChatSurfaceId ?? null)
   const [chatSurfaceMenu, setChatSurfaceMenu] = useState<ChatSurfaceMenuEntry[]>([])
   const openChatSurfacesRef = useRef<ActiveChatSurface[]>([])
   useEffect(() => { openChatSurfacesRef.current = openChatSurfaces }, [openChatSurfaces])
@@ -2246,7 +513,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       setActiveChatSurfaceId(openChatSurfaces[openChatSurfaces.length - 1]?.instanceId ?? null)
     }
   }, [activeChatSurfaceId, openChatSurfaces])
-  const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>(() => initialRuntimeStateRef.current?.queuedTurns ?? [])
   // Drag-reorder state for the queued-turn list. A row can be dropped above
   // ('before'), below ('after'), or onto ('into') another row — the last case
   // nests it as a child of that row, rendered indented underneath.
@@ -2258,9 +524,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // expand / re-collapse via the header.
   const [queueCollapsed, setQueueCollapsed] = useState(true)
   const prevQueuedCountRef = useRef(0)
-  const [isDropTarget, setIsDropTarget] = useState(false)
-  const [showScrollToLatest, setShowScrollToLatest] = useState(false)
-  const [branchFilter, setBranchFilter] = useState('')
   const { gitStatus, gitBranches, refreshGitState } = useChatGitState(_workspaceDir)
   const pagedLinkedHistoryEnabledRef = useRef(pagedLinkedHistoryEnabled)
   pagedLinkedHistoryEnabledRef.current = pagedLinkedHistoryEnabled
@@ -2308,7 +571,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       flushPendingStreamText()
     }, CHAT_STREAM_FLUSH_INTERVAL_MS)
   }, [flushPendingStreamText])
-  const stateLoadedRef = useRef(false)
   const lastJobSequenceRef = useRef<number>(initialJobSequence)
   const resumedJobKeyRef = useRef<string | null>(null)
 
@@ -2331,10 +593,99 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       resumedJobKeyRef.current = null
     }
   }, [jobId])
-  const latestStateRef = useRef<ChatTilePersistedState | null>(null)
-  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const requestedProviderOptionsRef = useRef<{ opencode: boolean; openclaw: boolean }>({ opencode: false, openclaw: false })
-  const isFlushingQueuedTurnRef = useRef(false)
+
+  const { latestStateRef, stateLoadedRef, persistLatestState } = useChatTilePersistence({
+    tileId,
+    workspaceId,
+    reloadToken,
+    initialRuntimeStateRef,
+    fallbackProvider: provider,
+    messages,
+    input,
+    attachments,
+    queuedTurns,
+    openChatSurfaces,
+    activeChatSurfaceId,
+    executionTarget,
+    provider,
+    model,
+    mcpEnabled,
+    mode,
+    thinking,
+    effectiveAgentMode,
+    autoAgentMode,
+    preserveSessionSummary,
+    linkedSessionEntryId,
+    linkedSessionHint,
+    hasEarlierMessages,
+    sessionId,
+    jobId,
+    jobSequence,
+    cloudHostId,
+    isStreaming,
+    setMessagesSafe,
+    setInput,
+    setAttachments,
+    setQueuedTurns,
+    setOpenChatSurfaces,
+    setActiveChatSurfaceId,
+    setProvider,
+    setModel,
+    setExecutionTarget,
+    setMcpEnabled,
+    setMode,
+    setThinking,
+    setAutoAgentMode,
+    setPreserveSessionSummary,
+    setLinkedSessionEntryId,
+    setLinkedSessionHint,
+    setHasEarlierMessages,
+    setSessionId,
+    setJobId,
+    setJobSequence,
+    setCloudHostId,
+    setIsStreaming,
+    lastJobSequenceRef,
+  })
+
+  const {
+    messagesRef,
+    stickToBottomRef,
+    historicalMessages,
+    setHistoricalMessages,
+    allMessages,
+    renderedMessages,
+    hiddenMessageCount,
+    loadingEarlier,
+    earlierLoadError,
+    showScrollToLatest,
+    scrollToLatest,
+    reviewLatestChanges,
+    handleMessagesScroll,
+    handleMessagesWheel,
+    handleMessagesKeyDown,
+    setAnnotationComposerActive,
+  } = useChatTileTranscript({
+    workspaceId,
+    sessionId,
+    linkedSessionEntryId,
+    linkedSessionHint,
+    hasEarlierMessages,
+    setHasEarlierMessages,
+    messages,
+    setMessages,
+    pagedLinkedHistoryEnabled,
+    isStreaming,
+  })
+
+  const {
+    updateBlockNote,
+    exportNotesToClipboard,
+  } = useChatTileBlockNotes({
+    allMessages,
+    setMessagesSafe,
+    setHistoricalMessages,
+  })
 
   // ─── TTS auto-speak (last-message-only, sentence-streamed) ──────────
   // Voice config comes from the persisted AppSettings.voice block (edited
@@ -2394,400 +745,62 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     if (planTodos && planTodos.length > 0) setPlanUpdatedAt(Date.now())
   }, [planTodos])
 
+  // Plugin-contributed commands that expose a slash trigger surface in the chat
+  // composer's `/` menu (point 3 — plugins appear in the chat area).
+  const pluginCommands = useContributions('commands') as PaletteCommand[]
+  const pluginSlashCommands = useMemo(
+    () =>
+      pluginCommands
+        .filter(c => typeof c.slash === 'string' && c.slash.trim())
+        .map(c => ({ slash: c.slash as string, title: c.title })),
+    [pluginCommands],
+  )
+
   // Autocomplete state (extracted to hook)
-  const { acType, setAcType, acQuery, setAcQuery, acIndex, setAcIndex, acItems } = useChatAutocomplete({
+  const {
+    acType,
+    setAcType,
+    acQuery,
+    setAcQuery,
+    acIndex,
+    setAcIndex,
+    acItems,
+    handleComposerInputChange,
+  } = useChatAutocomplete({
     workspaceDir: _workspaceDir,
     connectedPeers,
     workspaceSkills,
+    pluginSlashCommands,
+  })
+  closeAutocompleteRef.current = () => {
+    setAcType(null)
+    setAcQuery('')
+  }
+
+  const {
+    latestChangeDrawer,
+    latestChangeDrawerHasStats,
+    latestChangeDrawerExpanded,
+    setLatestChangeDrawerExpanded,
+    latestChangeDrawerExpandedFiles,
+    latestCheckpointId,
+    isRestoringLatestCheckpoint,
+    toggleLatestChangeDrawerFile,
+    restoreLatestCheckpoint,
+    checkpointRestoreContextValue,
+  } = useChatTileLatestChangeDrawer({
+    workspaceId,
+    tileId,
+    messages,
+    setMessagesSafe,
   })
 
-  const messagesRef = useRef<HTMLDivElement>(null)
-  const stickToBottomRef = useRef(true)
-  // Previous scrollTop, used by handleMessagesScroll to detect scroll direction.
-  // Any user scroll toward the top releases stickToBottomRef immediately, so
-  // auto-pin can't fight the user while they're reading history during streaming.
-  const lastScrollTopRef = useRef<number>(0)
-  const showScrollToLatestRef = useRef(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const acRef = useRef<HTMLDivElement>(null)
-  const modelMenuRef = useRef<HTMLDivElement>(null)
-  const providerMenuRef = useRef<HTMLDivElement>(null)
-  const insertMenuRef = useRef<HTMLDivElement>(null)
-  const modeMenuRef = useRef<HTMLDivElement>(null)
-  const thinkingMenuRef = useRef<HTMLDivElement>(null)
-  const locationMenuRef = useRef<HTMLDivElement>(null)
-  const branchMenuRef = useRef<HTMLDivElement>(null)
-  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const liveComposerActivityChip = useChatTileLiveComposerActivity({
+    isStreaming,
+    renderedMessages,
+  })
 
-  const loadEarlierMessages = useCallback(async () => {
-    if (!pagedLinkedHistoryEnabled || !workspaceId || !linkedSessionEntryId || !hasEarlierMessages || loadingEarlier) return
-    const api = window.electron?.chat?.loadSessionHistory
-    if (typeof api !== 'function') {
-      setEarlierLoadError('History loader unavailable')
-      return
-    }
-
-    const oldestLoadedMessage = historicalMessages[0] ?? messages[0] ?? null
-    const beforeFingerprint = oldestLoadedMessage
-      ? buildChatMessageHistoryFingerprint(oldestLoadedMessage)
-      : null
-    const scroller = messagesRef.current
-    if (scroller) {
-      pendingHistoryPrependRef.current = {
-        previousHeight: scroller.scrollHeight,
-        previousTop: scroller.scrollTop,
-      }
-    }
-
-    setLoadingEarlier(true)
-    setEarlierLoadError(null)
-    try {
-      const res = await api({
-        workspaceId,
-        sessionEntryId: linkedSessionEntryId,
-        entryHint: linkedSessionHint ?? null,
-        beforeFingerprint,
-        limit: LINKED_SESSION_HISTORY_PAGE_SIZE,
-      })
-      if (!res?.ok || !Array.isArray(res.messages)) {
-        setEarlierLoadError(res?.error || 'Could not load earlier messages')
-        pendingHistoryPrependRef.current = null
-        return
-      }
-      const liveFingerprints = new Set(messages.map(message => buildChatMessageHistoryFingerprint(message)))
-      const olderPage = (res.messages as ChatMessage[]).filter(message => !liveFingerprints.has(buildChatMessageHistoryFingerprint(message)))
-      if (olderPage.length === 0) {
-        pendingHistoryPrependRef.current = null
-      } else {
-        setHistoricalMessages(prev => mergeHistoricalMessages(prev, olderPage))
-      }
-      setHasEarlierMessages(res.hasMore === true)
-    } catch (err: any) {
-      pendingHistoryPrependRef.current = null
-      setEarlierLoadError(String(err?.message ?? err ?? 'Load failed'))
-    } finally {
-      setLoadingEarlier(false)
-    }
-  }, [pagedLinkedHistoryEnabled, workspaceId, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, loadingEarlier, historicalMessages, messages])
-
-  useEffect(() => {
-    loadEarlierMessagesRef.current = loadEarlierMessages
-  }, [loadEarlierMessages])
-
-  const renderedMessages = useMemo(() => {
-    // Dedupe by message ID when combining historical (session-restore) with
-    // live messages. Live wins — it has the freshest streaming state. Without
-    // this, an overlapping claude-N id from both sources triggers React's
-    // "two children with the same key" warning.
-    let combined: ChatMessage[]
-    if (historicalMessages.length > 0) {
-      const liveIds = new Set(messages.map(m => m.id))
-      combined = [
-        ...historicalMessages.filter(m => !liveIds.has(m.id)),
-        ...messages,
-      ]
-    } else {
-      combined = messages
-    }
-
-    if (combined.length <= visibleMessageLimit) return combined
-    return combined.slice(-visibleMessageLimit)
-  }, [historicalMessages, messages, visibleMessageLimit])
-
-  const mergeDrawerFileChanges = useCallback((fileChanges: FileChange[]): FileChange[] => {
-    const merged = new Map<string, FileChange>()
-    for (const change of fileChanges) {
-      const key = `${change.path}::${change.previousPath ?? ''}::${change.changeType}`
-      const existing = merged.get(key)
-      if (!existing) {
-        merged.set(key, { ...change })
-        continue
-      }
-      existing.additions += change.additions
-      existing.deletions += change.deletions
-      existing.diff = `${existing.diff}\n\n${change.diff}`.trim()
-    }
-    return Array.from(merged.values())
-  }, [])
-
-  const hiddenMessageCount = Math.max(0, historicalMessages.length + messages.length - renderedMessages.length)
-  const latestChangeDrawer = useMemo<LatestChangeDrawerState | null>(() => {
-    const batchMessages: ChatMessage[] = []
-    for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-      const message = messages[messageIndex]
-      if (message.role === 'user') break
-      batchMessages.unshift(message)
-    }
-    if (batchMessages.length === 0) return null
-
-    const rawFileChanges: FileChange[] = []
-    let latestMessageId: string | null = null
-    let latestToolBlockId: string | null = null
-    let changeBlockCount = 0
-
-    for (const message of batchMessages) {
-      for (const block of message.toolBlocks ?? []) {
-        const fileChanges = block.fileChanges ?? []
-        if (fileChanges.length === 0) continue
-        changeBlockCount += 1
-        rawFileChanges.push(...fileChanges)
-        latestMessageId = message.id
-        latestToolBlockId = block.id
-      }
-    }
-
-    if (rawFileChanges.length === 0 || !latestMessageId || !latestToolBlockId) return null
-
-    const fileChanges = mergeDrawerFileChanges(rawFileChanges)
-    return {
-      key: `${latestMessageId}:${latestToolBlockId}:${changeBlockCount}:${fileChanges.length}`,
-      messageId: latestMessageId,
-      toolBlockId: latestToolBlockId,
-      fileChanges,
-      fileCount: fileChanges.length,
-      additions: fileChanges.reduce((sum, change) => sum + change.additions, 0),
-      deletions: fileChanges.reduce((sum, change) => sum + change.deletions, 0),
-      changeBlockCount,
-    }
-  }, [messages, mergeDrawerFileChanges])
-  const latestChangeDrawerHasStats = latestChangeDrawer ? hasVisibleFileChangeStats(latestChangeDrawer) : false
-  const liveComposerActivityChip = useMemo(() => {
-    if (!isStreaming) return null
-    const liveMsg = renderedMessages[renderedMessages.length - 1]
-    if (!liveMsg || liveMsg.role !== 'assistant' || !liveMsg.isStreaming) return null
-
-    const activeThinking = liveMsg.thinkingBlocks?.find(tb => !tb.done)
-      ?? (!(liveMsg.contentBlocks ?? []).some(b => b.type === 'thinking') && liveMsg.thinking && !liveMsg.thinking.done
-        ? liveMsg.thinking
-        : null)
-
-    return (
-      <div style={{
-        width: CHAT_COMPOSER_WIDTH,
-        minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
-        margin: '0 auto',
-        paddingTop: 4,
-        paddingBottom: 4,
-        position: 'relative',
-        zIndex: 2,
-      }}>
-        {activeThinking
-          ? <ThinkingBlockView thinking={activeThinking} />
-          : <WorkingChipView message={liveMsg} />
-        }
-      </div>
-    )
-  }, [isStreaming, renderedMessages])
-  const [latestChangeDrawerExpanded, setLatestChangeDrawerExpanded] = useState(false)
-  const [latestChangeDrawerExpandedFiles, setLatestChangeDrawerExpandedFiles] = useState<Record<string, boolean>>({})
-  const [latestCheckpointId, setLatestCheckpointId] = useState<string | null>(null)
-  const [isRestoringLatestCheckpoint, setIsRestoringLatestCheckpoint] = useState(false)
-  const [restoringCheckpointId, setRestoringCheckpointId] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!latestChangeDrawer) {
-      setLatestCheckpointId(null)
-      return
-    }
-
-    // Default the drawer to collapsed whenever a new change block arrives
-    // (including on initial mount / reload). Users can expand on demand.
-    setLatestChangeDrawerExpanded(false)
-    setLatestChangeDrawerExpandedFiles({})
-  }, [latestChangeDrawer?.key])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!workspaceId || !latestChangeDrawer) {
-      setLatestCheckpointId(null)
-      return
-    }
-
-    void window.electron.canvas
-      .listCheckpoints(workspaceId, `codesurf-runtime:${tileId}`)
-      .then(checkpoints => {
-        if (cancelled) return
-        const undoIndex = Math.max(0, (latestChangeDrawer.changeBlockCount ?? 1) - 1)
-        setLatestCheckpointId(checkpoints[undoIndex]?.id ?? checkpoints[0]?.id ?? null)
-      })
-      .catch(() => {
-        if (!cancelled) setLatestCheckpointId(null)
-      })
-
-    return () => { cancelled = true }
-  }, [workspaceId, tileId, latestChangeDrawer?.key])
-
-  const toggleLatestChangeDrawerFile = useCallback((key: string) => {
-    setLatestChangeDrawerExpandedFiles(prev => ({ ...prev, [key]: !(prev[key] ?? false) }))
-  }, [])
-
-  const restoreLatestCheckpoint = useCallback(async () => {
-    if (!workspaceId || !latestCheckpointId || isRestoringLatestCheckpoint) return
-    setIsRestoringLatestCheckpoint(true)
-    try {
-      const result = await window.electron.canvas.restoreCheckpoint(workspaceId, latestCheckpointId, `codesurf-runtime:${tileId}`)
-      if (!result.ok) {
-        const errorText = result.error ?? 'Checkpoint restore failed'
-        setMessagesSafe(prev => [...prev, {
-          id: `msg-restore-checkpoint-error-${Date.now()}`,
-          role: 'assistant',
-          content: `Undo failed: ${errorText}`,
-          timestamp: Date.now(),
-        }])
-        return
-      }
-      const restoredParts: string[] = []
-      if (typeof result.filesRestored === 'number' && result.filesRestored > 0) {
-        restoredParts.push(`${result.filesRestored} restored`)
-      }
-      if (typeof result.filesDeleted === 'number' && result.filesDeleted > 0) {
-        restoredParts.push(`${result.filesDeleted} deleted`)
-      }
-      const suffix = restoredParts.length > 0 ? ` (${restoredParts.join(', ')})` : ''
-      setMessagesSafe(prev => [...prev, {
-        id: `msg-restore-checkpoint-${Date.now()}`,
-        role: 'assistant',
-        content: `Restored the latest checkpoint before those changes${suffix}.`,
-        timestamp: Date.now(),
-      }])
-      setLatestCheckpointId(null)
-    } catch (error) {
-      const errorText = error instanceof Error ? error.message : String(error)
-      setMessagesSafe(prev => [...prev, {
-        id: `msg-restore-checkpoint-error-${Date.now()}`,
-        role: 'assistant',
-        content: `Undo failed: ${errorText}`,
-        timestamp: Date.now(),
-      }])
-    } finally {
-      setIsRestoringLatestCheckpoint(false)
-    }
-  }, [workspaceId, tileId, latestCheckpointId, isRestoringLatestCheckpoint, setMessagesSafe])
-
-  const restoreCheckpointFromToolBlock = useCallback(async (checkpointId: string, sessionEntryId: string, label = 'checkpoint') => {
-    if (!workspaceId || !checkpointId || !sessionEntryId || restoringCheckpointId || isRestoringLatestCheckpoint) return
-    setRestoringCheckpointId(checkpointId)
-    try {
-      const result = await window.electron.canvas.restoreCheckpoint(workspaceId, checkpointId, sessionEntryId)
-      if (!result.ok) {
-        const errorText = result.error ?? 'Checkpoint restore failed'
-        setMessagesSafe(prev => [...prev, {
-          id: `msg-restore-checkpoint-error-${Date.now()}`,
-          role: 'assistant',
-          content: `Restore failed: ${errorText}`,
-          timestamp: Date.now(),
-        }])
-        return
-      }
-      const restoredParts: string[] = []
-      if (typeof result.filesRestored === 'number' && result.filesRestored > 0) {
-        restoredParts.push(`${result.filesRestored} restored`)
-      }
-      if (typeof result.filesDeleted === 'number' && result.filesDeleted > 0) {
-        restoredParts.push(`${result.filesDeleted} deleted`)
-      }
-      const suffix = restoredParts.length > 0 ? ` (${restoredParts.join(', ')})` : ''
-      setMessagesSafe(prev => [...prev, {
-        id: `msg-restore-checkpoint-${Date.now()}`,
-        role: 'assistant',
-        content: `Restored checkpoint: ${label}${suffix}.`,
-        timestamp: Date.now(),
-      }])
-      if (latestCheckpointId === checkpointId) setLatestCheckpointId(null)
-    } catch (error) {
-      const errorText = error instanceof Error ? error.message : String(error)
-      setMessagesSafe(prev => [...prev, {
-        id: `msg-restore-checkpoint-error-${Date.now()}`,
-        role: 'assistant',
-        content: `Restore failed: ${errorText}`,
-        timestamp: Date.now(),
-      }])
-    } finally {
-      setRestoringCheckpointId(current => current === checkpointId ? null : current)
-    }
-  }, [workspaceId, restoringCheckpointId, isRestoringLatestCheckpoint, latestCheckpointId, setMessagesSafe])
-
-  const checkpointRestoreContextValue = useMemo<CheckpointRestoreContextValue>(() => ({
-    workspaceId: workspaceId ?? null,
-    tileId,
-    restoringCheckpointId,
-    restoreCheckpoint: restoreCheckpointFromToolBlock,
-  }), [workspaceId, tileId, restoringCheckpointId, restoreCheckpointFromToolBlock])
-
-  // Dream completion → synthetic chip in chat history.
-  //
-  // Polls the daemon summary every 5s. When the workspace's `lastRun.completedAt`
-  // advances to a value we haven't seen yet (and the run succeeded), append a
-  // single ChatMessage carrying a 'Dream completed' tool block. This appears
-  // inline with the rest of history, scrolls with it, and persists to canvas
-  // state alongside any other message — same lifecycle as a checkpoint chip.
-  //
-  // The first poll after mount seeds the "last seen" ref without injecting a
-  // chip, so reopening a tile doesn't dump every historical dream into the
-  // transcript. Only completions that happen *while the tile is open* show up.
-  const lastSeenDreamCompletionRef = useRef<string | null>(null)
-  const dreamPollSeededRef = useRef(false)
-  useEffect(() => {
-    if (!workspaceId) return
-    let cancelled = false
-
-    const poll = async () => {
-      try {
-        const summary = await window.electron.system.daemonSummary()
-        if (cancelled) return
-        const lastRun = summary?.dreaming?.lastRun
-        if (!lastRun) return
-        const matchesWorkspace = !lastRun.workspaceId || lastRun.workspaceId === workspaceId
-        if (!matchesWorkspace) return
-        const completedAt = lastRun.completedAt ?? null
-        if (!completedAt) return
-        if (!dreamPollSeededRef.current) {
-          dreamPollSeededRef.current = true
-          lastSeenDreamCompletionRef.current = completedAt
-          return
-        }
-        if (lastSeenDreamCompletionRef.current === completedAt) return
-        lastSeenDreamCompletionRef.current = completedAt
-        if (lastRun.status === 'failed' || lastRun.status === 'cancelled') return
-
-        const runId = String(lastRun.id ?? completedAt)
-        const sessionsReviewed = Number(lastRun.sessionsReviewed ?? 0)
-        const summaryText = sessionsReviewed > 0
-          ? `Auto-dream consolidated ${sessionsReviewed} session${sessionsReviewed === 1 ? '' : 's'}`
-          : 'Auto-dream completed'
-        const toolId = `${DREAM_TOOL_ID_PREFIX}${runId}`
-        const ts = Date.parse(completedAt) || Date.now()
-
-        setMessagesSafe(prev => {
-          // De-dupe: if a dream message with this toolId already exists in history, skip.
-          if (prev.some(m => m.toolBlocks?.some(tb => tb.id === toolId))) return prev
-          return [...prev, {
-            id: `msg-dream-${runId}`,
-            role: 'system',
-            content: '',
-            timestamp: ts,
-            contentBlocks: [{ type: 'tool', toolId }],
-            toolBlocks: [{
-              id: toolId,
-              name: DREAM_TOOL_NAME,
-              input: '',
-              summary: summaryText,
-              status: 'done',
-            }],
-          }]
-        })
-      } catch {
-        // Polling failures are non-fatal — try again next tick.
-      }
-    }
-
-    poll()
-    const interval = window.setInterval(poll, 5000)
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [workspaceId, setMessagesSafe])
+  useChatTileDreamPolling(workspaceId, setMessagesSafe)
 
   useEffect(() => { ensureChatMdStyle() }, [])
 
@@ -2940,37 +953,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [tileId, provider, model, availableSkillInventory])
 
-  // Only tiles actively using OpenCode should subscribe to the model list, otherwise
-  // every chat tile holds the same large provider payload in memory.
-  useEffect(() => {
-    if (provider !== 'opencode') return
 
-    const unsubscribeOpencode = window.electron?.chat?.onOpencodeModelsUpdated?.((payload: any) => {
-      if (payload?.models?.length) setOpencodeModels(payload.models)
-    })
-
-    return () => { unsubscribeOpencode?.() }
-  }, [provider])
-
-  useEffect(() => {
-    if (provider === 'opencode' && !requestedProviderOptionsRef.current.opencode) {
-      requestedProviderOptionsRef.current.opencode = true
-      window.electron?.chat?.opencodeModels?.().then((result: any) => {
-        if (result?.models?.length) setOpencodeModels(result.models)
-      }).catch(() => {
-        requestedProviderOptionsRef.current.opencode = false
-      })
-    }
-
-    if (provider === 'openclaw' && !requestedProviderOptionsRef.current.openclaw) {
-      requestedProviderOptionsRef.current.openclaw = true
-      window.electron?.chat?.openclawAgents?.().then((result: any) => {
-        if (result?.agents?.length) setOpenclawAgents(result.agents)
-      }).catch(() => {
-        requestedProviderOptionsRef.current.openclaw = false
-      })
-    }
-  }, [provider])
 
 
 
@@ -2983,53 +966,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     }
   }, [messages, pagedLinkedHistoryEnabled])
 
-  useEffect(() => {
-    if (!pagedLinkedHistoryEnabled || isStreaming) return
-    if (messages.length <= LINKED_SESSION_LIVE_TAIL_LIMIT) return
-
-    const overflowCount = messages.length - LINKED_SESSION_LIVE_TAIL_LIMIT
-    if (overflowCount <= 0) return
-
-    const overflowMessages = messages.slice(0, overflowCount)
-    if (overflowMessages.length === 0) return
-
-    setHistoricalMessages(prev => mergeHistoricalMessages(prev, overflowMessages))
-    setMessages(prev => prev.slice(-LINKED_SESSION_LIVE_TAIL_LIMIT))
-    setHasEarlierMessages(true)
-  }, [pagedLinkedHistoryEnabled, isStreaming, messages])
-
-  useEffect(() => {
-    latestStateRef.current = {
-      messages,
-      input,
-      attachments,
-      queuedTurns,
-      openChatSurfaces,
-      activeChatSurfaceId,
-      executionTarget,
-      provider,
-      model,
-      mcpEnabled,
-      mode,
-      thinking,
-      agentMode: effectiveAgentMode,
-      autoAgentMode,
-      preserveSessionSummary,
-      linkedSessionEntryId,
-      linkedSessionHint,
-      hasEarlierMessages,
-      sessionId,
-      jobId,
-      jobSequence,
-      cloudHostId,
-      isStreaming,
-    }
-    if (stateLoadedRef.current) {
-      if (isChatTileRuntimeStateDisposed(tileId)) return
-      setChatTileRuntimeState(tileId, latestStateRef.current)
-    }
-  }, [tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming])
-
   // Publish the latest task list for this tile so external chrome (tab bar,
   // sidebar) can surface the agent's current plan without drilling into
   // ChatTile internals. Walks reverse-chronologically across both the live
@@ -3037,9 +973,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // Codex `update_plan` data even when it lived outside the recent tail.
   useEffect(() => {
     let latest: TileTodoItem[] | null = null
-    const allMessages = historicalMessages.length > 0
-      ? [...historicalMessages, ...messages]
-      : messages
     outer: for (let i = allMessages.length - 1; i >= 0; i -= 1) {
       const msg = allMessages[i]
       const blocks = msg.toolBlocks
@@ -3053,7 +986,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       }
     }
     setTileTodos(tileId, latest)
-  }, [tileId, historicalMessages, messages])
+  }, [tileId, allMessages])
 
   // Clear the published todos when the tile unmounts so stale state doesn't
   // linger in the store.
@@ -3061,10 +994,9 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     return () => { clearTileTodos(tileId) }
   }, [tileId])
 
-  // Track the first moment each ToolBlock flipped to 'done' so the
-  // progressive-collapse logic (applyLiveCollapse below) can apply a grace
-  // period before folding a freshly-finished chip into the group summary.
-  // Also prune entries for tool ids that no longer exist in state.
+  // Track the first moment each ToolBlock flipped to 'done'. Retained as a
+  // recompute heartbeat (toolCollapseTick) for the chip transcript; also
+  // prunes entries for tool ids that no longer exist in state.
   const toolStampInitialRunRef = useRef(true)
   useEffect(() => {
     const seen = new Set<string>()
@@ -3109,147 +1041,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     else if (prev >= 3 && next < 3) setQueueCollapsed(false)
     prevQueuedCountRef.current = next
   }, [queuedTurns.length])
-
-  const persistLatestState = useCallback((stateOverride?: ChatTilePersistedState | null) => {
-    if (persistTimerRef.current) {
-      clearTimeout(persistTimerRef.current)
-      persistTimerRef.current = null
-    }
-    const nextState = stateOverride ?? latestStateRef.current
-    if (!workspaceId || !stateLoadedRef.current || !nextState || isChatTileRuntimeStateDisposed(tileId)) return
-    const persistedState = nextState.linkedSessionEntryId
-      ? { ...nextState, messages: [] }
-      : nextState
-    void window.electron.canvas.saveTileState(workspaceId, tileId, persistedState).catch(() => {})
-  }, [workspaceId, tileId])
-
-  useEffect(() => {
-    reviveChatTileRuntimeState(tileId)
-    stateLoadedRef.current = false
-
-    const applySavedState = (saved: Partial<ChatTilePersistedState> | null | undefined) => {
-      if (!saved) return
-      if (Array.isArray(saved.messages)) setMessagesSafe(saved.messages)
-      if (typeof saved.input === 'string') setInput(saved.input)
-      if (Array.isArray(saved.attachments)) {
-        setAttachments(saved.attachments.filter((item: any) => typeof item?.path === 'string').map((item: any) => ({
-          path: item.path,
-          kind: item.kind === 'image' || isImagePath(item.path) ? 'image' : 'file',
-        })))
-      }
-      if (Array.isArray(saved.queuedTurns)) {
-        setQueuedTurns(saved.queuedTurns.filter((item: any) => typeof item?.id === 'string' && typeof item?.content === 'string').map((item: any) => ({
-          id: item.id,
-          content: item.content,
-          preview: typeof item.preview === 'string' ? item.preview : buildQueuedTurnPreview(item.content, Number(item.attachmentCount) || 0),
-          attachmentCount: Number(item.attachmentCount) || 0,
-          createdAt: Number(item.createdAt) || Date.now(),
-          parentId: typeof item.parentId === 'string' ? item.parentId : null,
-        })))
-      }
-      if (Array.isArray(saved.openChatSurfaces)) {
-        const restoredSurfaces = normalizePersistedChatSurfaces(saved.openChatSurfaces)
-        setOpenChatSurfaces(restoredSurfaces)
-        if (typeof saved.activeChatSurfaceId === 'string' && restoredSurfaces.some(surface => surface.instanceId === saved.activeChatSurfaceId)) {
-          setActiveChatSurfaceId(saved.activeChatSurfaceId)
-        } else if (saved.activeChatSurfaceId === null) {
-          setActiveChatSurfaceId(null)
-        } else {
-          setActiveChatSurfaceId(restoredSurfaces[restoredSurfaces.length - 1]?.instanceId ?? null)
-        }
-      } else if (saved.activeChatSurfaceId === null) {
-        setActiveChatSurfaceId(null)
-      }
-      const savedProvider = typeof saved.provider === 'string' ? saved.provider : provider
-      if (saved.provider) setProvider(saved.provider)
-      if (typeof saved.model === 'string') setModel(saved.model)
-      if (saved.executionTarget === 'local' || saved.executionTarget === 'cloud') setExecutionTarget(saved.executionTarget)
-      if (typeof saved.mcpEnabled === 'boolean') setMcpEnabled(saved.mcpEnabled)
-      if (typeof saved.mode === 'string') setMode(resolveProviderModeId(savedProvider, saved.mode))
-      if (typeof saved.thinking === 'string') setThinking(saved.thinking)
-      if (typeof saved.autoAgentMode === 'boolean') setAutoAgentMode(saved.autoAgentMode)
-      if (typeof saved.preserveSessionSummary === 'boolean') setPreserveSessionSummary(saved.preserveSessionSummary)
-      if (typeof saved.linkedSessionEntryId === 'string' || saved.linkedSessionEntryId === null) setLinkedSessionEntryId(saved.linkedSessionEntryId ?? null)
-      if (saved.linkedSessionHint === null) {
-        setLinkedSessionHint(null)
-      } else if (saved.linkedSessionHint && typeof saved.linkedSessionHint === 'object') {
-        const hint = saved.linkedSessionHint as Partial<SessionEntryHint>
-        if (typeof hint.id === 'string' && typeof hint.source === 'string') {
-          setLinkedSessionHint({
-            id: hint.id,
-            source: hint.source as SessionEntryHint['source'],
-            filePath: typeof hint.filePath === 'string' ? hint.filePath : undefined,
-            sessionId: typeof hint.sessionId === 'string' || hint.sessionId === null ? hint.sessionId : null,
-            provider: typeof hint.provider === 'string' ? hint.provider : '',
-            model: typeof hint.model === 'string' ? hint.model : '',
-            messageCount: typeof hint.messageCount === 'number' ? hint.messageCount : 0,
-            title: typeof hint.title === 'string' ? hint.title : '',
-            projectPath: typeof hint.projectPath === 'string' || hint.projectPath === null ? hint.projectPath : null,
-          })
-        }
-      }
-      if (typeof saved.hasEarlierMessages === 'boolean') setHasEarlierMessages(saved.hasEarlierMessages)
-      else if (saved.linkedSessionEntryId == null) setHasEarlierMessages(false)
-      if (typeof saved.sessionId === 'string' || saved.sessionId === null) setSessionId(saved.sessionId)
-      if (typeof saved.jobId === 'string' || saved.jobId === null) setJobId(saved.jobId ?? null)
-      if (typeof saved.jobSequence === 'number') {
-        setJobSequence(saved.jobSequence)
-        lastJobSequenceRef.current = saved.jobSequence
-      }
-      if (typeof saved.cloudHostId === 'string' || saved.cloudHostId === null) setCloudHostId(saved.cloudHostId ?? null)
-      if (typeof saved.isStreaming === 'boolean') setIsStreaming(saved.isStreaming)
-    }
-
-    const cached = reloadToken > 0
-      ? getChatTileRuntimeState<ChatTilePersistedState>(tileId)
-      : (initialRuntimeStateRef.current ?? getChatTileRuntimeState<ChatTilePersistedState>(tileId))
-    if (cached) {
-      applySavedState(cached)
-      stateLoadedRef.current = true
-      return
-    }
-
-    if (!workspaceId) {
-      stateLoadedRef.current = true
-      return
-    }
-
-    window.electron.canvas.loadTileState(workspaceId, tileId).then((saved: any) => {
-      applySavedState(saved)
-    }).catch(() => {}).finally(() => {
-      stateLoadedRef.current = true
-    })
-  }, [workspaceId, tileId, reloadToken])
-
-  useEffect(() => {
-    if (!stateLoadedRef.current) return
-    if (!workspaceId || !linkedSessionEntryId) return
-    if (isStreaming) return
-
-    const usePagedHistory = canUsePagedLinkedHistory(linkedSessionEntryId, linkedSessionHint, sessionId)
-    let cancelled = false
-    void window.electron.canvas.getSessionState(workspaceId, linkedSessionEntryId, {
-      entryHint: linkedSessionHint ?? null,
-      tailLimit: usePagedHistory ? LINKED_SESSION_HISTORY_PAGE_SIZE : undefined,
-    })
-      .then((saved: any) => {
-        if (cancelled || !saved) return
-        const savedProvider = typeof saved.provider === 'string'
-          ? saved.provider
-          : (latestStateRef.current?.provider ?? DEFAULT_PROVIDER_ID)
-        if (Array.isArray(saved.messages)) setMessagesSafe(saved.messages)
-        if (typeof saved.provider === 'string') setProvider(saved.provider)
-        if (typeof saved.model === 'string') setModel(saved.model)
-        if (typeof saved.mode === 'string') setMode(resolveProviderModeId(savedProvider, saved.mode))
-        if (typeof saved.hasEarlierMessages === 'boolean') setHasEarlierMessages(saved.hasEarlierMessages)
-        if (typeof saved.sessionId === 'string' || saved.sessionId === null) setSessionId(saved.sessionId ?? null)
-        if (saved.executionTarget === 'local' || saved.executionTarget === 'cloud') setExecutionTarget(saved.executionTarget)
-        if (typeof saved.cloudHostId === 'string' || saved.cloudHostId === null) setCloudHostId(saved.cloudHostId ?? null)
-      })
-      .catch(() => {})
-
-    return () => { cancelled = true }
-  }, [workspaceId, linkedSessionEntryId, linkedSessionHint, reloadToken, isStreaming, sessionId, setMessagesSafe])
 
   // Reset the "last activity" clock every time streaming toggles on so the
   // quiet-indicator starts from zero for each new turn. The message-change
@@ -3296,9 +1087,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // the live-collapse grace window. This avoids the old 500ms parent-level
   // rerender loop that made the transcript pulse while streaming.
   useEffect(() => {
-    const sourceMessages = historicalMessages.length > 0
-      ? [...historicalMessages, ...messages]
-      : messages
+    const sourceMessages = allMessages
     const now = Date.now()
     let nextDeadline: number | null = null
 
@@ -3319,54 +1108,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       setToolCollapseTick(n => (n + 1) & 0xffff)
     }, timeoutMs)
     return () => window.clearTimeout(id)
-  }, [historicalMessages, messages, toolCollapseTick])
-
-  useEffect(() => {
-    if (!workspaceId || !stateLoadedRef.current || isChatTileRuntimeStateDisposed(tileId)) return
-    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
-    persistTimerRef.current = setTimeout(() => {
-      persistTimerRef.current = null
-      persistLatestState()
-    }, isStreaming ? 2000 : 500)
-
-    return () => {
-      if (persistTimerRef.current) {
-        clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-    }
-  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, persistLatestState])
-
-  useEffect(() => {
-    // Flush pending state on window close so the last few seconds of a
-    // conversation are not lost. The unmount cleanup fires async IPC which
-    // may not survive Electron's window teardown — beforeunload fires
-    // earlier and gives the main process time to write.
-    const handleBeforeUnload = (): void => {
-      if (persistTimerRef.current) {
-        clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-      const latest = latestStateRef.current
-      if (latest && !isChatTileRuntimeStateDisposed(tileId)) {
-        persistLatestState(latest)
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      if (persistTimerRef.current) {
-        clearTimeout(persistTimerRef.current)
-        persistTimerRef.current = null
-      }
-      const latest = latestStateRef.current
-      if (!latest) return
-      if (isChatTileRuntimeStateDisposed(tileId)) return
-      setChatTileRuntimeState(tileId, latest)
-      persistLatestState(latest)
-    }
-  }, [tileId, persistLatestState])
+  }, [allMessages, toolCollapseTick])
 
   useEffect(() => {
     if (!stateLoadedRef.current) return
@@ -3394,156 +1136,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [tileId, provider, model, _workspaceDir, executionTarget, cloudHostId, settings?.execution, jobId, jobSequence])
 
-  const builtinProviderEntries = useMemo<Record<BuiltinProvider, ProviderEntry>>(() => ({
-    claude: {
-      id: 'claude',
-      label: PROVIDER_LABELS.claude,
-      noun: 'model',
-      icon: PROVIDER_ICON.claude,
-      models: DEFAULT_MODELS.claude,
-      kind: 'builtin',
-    },
-    codex: {
-      id: 'codex',
-      label: PROVIDER_LABELS.codex,
-      noun: 'model',
-      icon: PROVIDER_ICON.codex,
-      models: DEFAULT_MODELS.codex,
-      kind: 'builtin',
-    },
-    opencode: {
-      id: 'opencode',
-      label: PROVIDER_LABELS.opencode,
-      noun: 'model',
-      icon: PROVIDER_ICON.opencode,
-      models: opencodeModels,
-      kind: 'builtin',
-    },
-    openclaw: {
-      id: 'openclaw',
-      label: PROVIDER_LABELS.openclaw,
-      noun: 'agent',
-      icon: PROVIDER_ICON.openclaw,
-      models: openclawAgents,
-      kind: 'builtin',
-    },
-    hermes: {
-      id: 'hermes',
-      label: PROVIDER_LABELS.hermes,
-      noun: 'model',
-      icon: PROVIDER_ICON.hermes,
-      models: DEFAULT_MODELS.hermes,
-      kind: 'builtin',
-    },
-  }), [opencodeModels, openclawAgents])
-
-  const extensionProviderEntries = useMemo<ProviderEntry[]>(() => {
-    void peerContextVersion
-    const entries = new Map<string, ProviderEntry>()
-
-    for (const peer of connectedPeers) {
-      const peerContext = peerContextRef.current.get(peer.peerId) ?? {}
-      const providers = normalizeExtensionProviders(peerContext['ctx:chat:providers'])
-      for (const providerConfig of providers) {
-        entries.set(providerConfig.id, {
-          id: providerConfig.id,
-          label: providerConfig.label,
-          description: providerConfig.description,
-          noun: providerConfig.noun ?? 'model',
-          icon: getExtensionProviderIcon(providerConfig.icon),
-          models: providerConfig.models.map(modelOption => ({
-            id: modelOption.id,
-            label: modelOption.label,
-            description: modelOption.description,
-          })),
-          kind: 'extension',
-          transport: providerConfig.transport,
-        })
-      }
-    }
-
-    return Array.from(entries.values()).sort((a, b) => a.label.localeCompare(b.label))
-  }, [connectedPeers, peerContextVersion])
-
-  const providerEntries = useMemo<ProviderEntry[]>(() => [
-    builtinProviderEntries.claude,
-    builtinProviderEntries.codex,
-    builtinProviderEntries.opencode,
-    builtinProviderEntries.openclaw,
-    builtinProviderEntries.hermes,
-    ...extensionProviderEntries,
-  ], [builtinProviderEntries, extensionProviderEntries])
-
-  const providerEntryById = useMemo(() => {
-    const next = new Map<string, ProviderEntry>()
-    for (const entry of providerEntries) next.set(entry.id, entry)
-    return next
-  }, [providerEntries])
-
-  const currentProviderEntry = providerEntryById.get(provider)
-    ?? providerEntryById.get(DEFAULT_PROVIDER_ID)
-    ?? providerEntries[0]
-
-  const modeOptions = useMemo<ModeOption[]>(() => {
-    if (!currentProviderEntry) return [EXTENSION_PROVIDER_MODE]
-    return currentProviderEntry.kind === 'builtin'
-      ? PROVIDER_MODES[currentProviderEntry.id as BuiltinProvider]
-      : [EXTENSION_PROVIDER_MODE]
-  }, [currentProviderEntry])
-
-  // Close dropdowns on outside click or Escape
-  const anyMenuOpen = showModelMenu || showProviderMenu || showInsertMenu || showModeMenu || showThinkingMenu || showLocationMenu || showBranchMenu || showContextMenu
-  const menuRefs = [modelMenuRef, providerMenuRef, insertMenuRef, modeMenuRef, thinkingMenuRef, locationMenuRef, branchMenuRef, contextMenuRef]
-
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as Node
-      const targetEl = e.target instanceof Element ? e.target : null
-      // If click is inside any menu button or portaled dropdown, let the menu handle it.
-      const insideAnyMenu = menuRefs.some(ref => ref.current?.contains(target))
-        || Boolean(targetEl?.closest('[data-chat-menu-portal="true"]'))
-      if (insideAnyMenu) return
-      // Click is outside all menus — close everything
-      setShowModelMenu(false)
-      setShowProviderMenu(false)
-      setShowInsertMenu(false)
-      setShowModeMenu(false)
-      setShowThinkingMenu(false)
-      setShowLocationMenu(false)
-      setShowBranchMenu(false)
-      setShowContextMenu(false)
-      if (acRef.current && !acRef.current.contains(target) && target !== textareaRef.current) {
-        setAcType(null)
-        setAcQuery('')
-      }
-    }
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && anyMenuOpen) {
-        e.stopPropagation()
-        e.preventDefault()
-        setShowModelMenu(false)
-        setShowProviderMenu(false)
-        setShowInsertMenu(false)
-        setShowModeMenu(false)
-        setShowThinkingMenu(false)
-        setShowLocationMenu(false)
-        setShowBranchMenu(false)
-        setShowContextMenu(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    document.addEventListener('keydown', handleKey, true)
-    return () => {
-      document.removeEventListener('mousedown', handleClick)
-      document.removeEventListener('keydown', handleKey, true)
-    }
-  }, [anyMenuOpen])
-
-  const optionNoun = currentProviderEntry?.noun ?? 'model'
-  const currentModel = currentProviderEntry?.models.find(m => m.id === model)
-    ?? currentProviderEntry?.models[0]
-    ?? { id: '', label: optionNoun === 'agent' ? 'No agent' : 'No model' }
-  const currentMode = modeOptions.find(item => item.id === mode) ?? modeOptions[0] ?? EXTENSION_PROVIDER_MODE
   const contextWindowLimit = useMemo(() => getApproxContextWindowTokens(provider, model), [provider, model])
   const systemOverheadTokens = useMemo(
     () => getApproxSystemOverheadTokens(provider, model),
@@ -3662,49 +1254,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     }
   }, [branchFilter, _workspaceDir, refreshGitState])
 
-  useEffect(() => {
-    if (!currentProviderEntry) return
-    if (currentProviderEntry.id !== provider) {
-      setProvider(currentProviderEntry.id)
-      setModel(currentProviderEntry.models[0]?.id ?? '')
-      setMode(resolveProviderModeId(currentProviderEntry.id, settings?.chatProviderModes?.[currentProviderEntry.id]))
-      return
-    }
-
-    const options = currentProviderEntry.models
-    if (options.length === 0) return
-    if (!options.some(option => option.id === model)) {
-      setModel(options[0].id)
-    }
-  }, [currentProviderEntry, provider, settings?.chatProviderModes, model])
-
-  useEffect(() => {
-    if (!modeOptions.some(option => option.id === mode)) {
-      setMode(resolveProviderModeId(provider, settings?.chatProviderModes?.[provider]))
-    }
-  }, [modeOptions, mode, provider, settings?.chatProviderModes])
-
-  const handleProviderChange = useCallback((providerId: string) => {
-    const nextProvider = providerEntryById.get(providerId)
-    if (!nextProvider) return
-    setProvider(nextProvider.id)
-    setModel(nextProvider.models[0]?.id ?? '')
-    setMode(resolveProviderModeId(nextProvider.id, settings?.chatProviderModes?.[nextProvider.id]))
-    // Preserve thinking preference across providers
-    setShowProviderMenu(false)
-  }, [providerEntryById, settings?.chatProviderModes])
-
-  const toggleMenu = useCallback((which: 'model' | 'provider' | 'insert' | 'mode' | 'thinking' | 'location' | 'branch' | 'context') => {
-    setShowModelMenu(prev => { const next = which === 'model' ? !prev : false; if (!next) setModelFilter(''); return next })
-    setShowProviderMenu(prev => which === 'provider' ? !prev : false)
-    setShowInsertMenu(prev => which === 'insert' ? !prev : false)
-    setShowModeMenu(prev => which === 'mode' ? !prev : false)
-    setShowThinkingMenu(prev => which === 'thinking' ? !prev : false)
-    setShowLocationMenu(prev => which === 'location' ? !prev : false)
-    setShowBranchMenu(prev => { const next = which === 'branch' ? !prev : false; if (!next) setBranchFilter(''); return next })
-    setShowContextMenu(prev => which === 'context' ? !prev : false)
-  }, [])
-
   // ─── Voice dictation (via useChatDictation hook) ────────────────────
   // Wire transcriptions into the input state.
   useEffect(() => {
@@ -3712,270 +1261,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       setInput(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + text)
     })
   }, [dictation])
-
-  const isNearLatest = useCallback((el: HTMLDivElement) => {
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_AUTO_SCROLL_THRESHOLD
-  }, [])
-
-  const syncScrollToLatestVisibility = useCallback((next: boolean) => {
-    if (showScrollToLatestRef.current === next) return
-    showScrollToLatestRef.current = next
-    setShowScrollToLatest(next)
-  }, [])
-
-  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    const el = messagesRef.current
-    if (!el) return
-    stickToBottomRef.current = true
-    syncScrollToLatestVisibility(false)
-    el.scrollTo({ top: el.scrollHeight, behavior })
-  }, [syncScrollToLatestVisibility])
-
-  const reviewLatestChanges = useCallback(() => {
-    const scroller = messagesRef.current
-    if (!scroller) return
-    const blocks = scroller.querySelectorAll<HTMLElement>('[data-tool-block-kind="file-changes"]')
-    const latestBlock = blocks.item(blocks.length - 1)
-    if (!latestBlock) {
-      scrollToLatest()
-      return
-    }
-
-    stickToBottomRef.current = false
-    syncScrollToLatestVisibility(true)
-    latestBlock.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
-  }, [scrollToLatest, syncScrollToLatestVisibility])
-
-  // Direction-aware user-intent handlers. Only UPWARD input releases
-  // stick-to-bottom; downward input is the user following along, so we let
-  // the auto-pin mechanism keep working normally. This avoids the previous
-  // bug where any wheel (including downward) froze auto-pin for 800ms and
-  // left streaming content drifting off-screen above the viewport.
-  const handleMessagesWheel = useCallback((ev: React.WheelEvent<HTMLDivElement>) => {
-    if (ev.deltaY < 0) {
-      // Wheeled UP — user wants to read history. Release stick.
-      stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    }
-    // ev.deltaY >= 0 (down or zero): no-op. Let auto-pin keep working.
-  }, [syncScrollToLatestVisibility])
-
-  const handleMessagesKeyDown = useCallback((ev: React.KeyboardEvent<HTMLDivElement>) => {
-    if (ev.key === 'ArrowUp' || ev.key === 'PageUp' || ev.key === 'Home') {
-      stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    }
-  }, [syncScrollToLatestVisibility])
-
-  const handleMessagesScroll = useCallback(() => {
-    const el = messagesRef.current
-    if (!el) return
-
-    const prevTop = lastScrollTopRef.current
-    const currentTop = el.scrollTop
-    lastScrollTopRef.current = currentTop
-
-    if (currentTop < prevTop) {
-      // Scrolled toward the top — release stick. This covers keyboard nav,
-      // programmatic "scroll up", and any input we didn't catch at the wheel
-      // layer. Safe because auto-pin always goes DOWN (scrollTop=scrollHeight).
-      if (stickToBottomRef.current) stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    } else if (isNearLatest(el)) {
-      // At or near bottom → (re-)stick and collapse the rendered transcript
-      // back to the latest two pages. Older messages remain in state/session,
-      // but React stops reconciling DOM the user cannot see.
-      if (!stickToBottomRef.current) stickToBottomRef.current = true
-      if (visibleMessageLimit !== CHAT_INITIAL_RENDER_WINDOW) setVisibleMessageLimit(CHAT_INITIAL_RENDER_WINDOW)
-      syncScrollToLatestVisibility(false)
-    }
-
-    if (el.scrollTop <= LINKED_SESSION_HISTORY_LOAD_THRESHOLD && !loadingEarlier) {
-      pendingHistoryPrependRef.current = { previousHeight: el.scrollHeight, previousTop: el.scrollTop }
-      if (hiddenMessageCount > 0) {
-        setVisibleMessageLimit(prev => prev + CHAT_RENDER_PAGE_SIZE)
-      } else if (pagedLinkedHistoryEnabled && hasEarlierMessages) {
-        void loadEarlierMessagesRef.current()
-      }
-    }
-  }, [isNearLatest, syncScrollToLatestVisibility, pagedLinkedHistoryEnabled, hasEarlierMessages, loadingEarlier, hiddenMessageCount, visibleMessageLimit])
-
-  useLayoutEffect(() => {
-    const pending = pendingHistoryPrependRef.current
-    const el = messagesRef.current
-    if (!pending || !el) return
-    pendingHistoryPrependRef.current = null
-    const delta = el.scrollHeight - pending.previousHeight
-    el.scrollTop = pending.previousTop + delta
-  }, [historicalMessages, visibleMessageLimit])
-
-  useEffect(() => {
-    if (loadingEarlier) return
-    const el = messagesRef.current
-    if (!el) return
-    if (el.scrollHeight > el.clientHeight + LINKED_SESSION_HISTORY_LOAD_THRESHOLD) return
-
-    pendingHistoryPrependRef.current = { previousHeight: el.scrollHeight, previousTop: el.scrollTop }
-    if (hiddenMessageCount > 0) {
-      setVisibleMessageLimit(prev => prev + CHAT_RENDER_PAGE_SIZE)
-    } else if (pagedLinkedHistoryEnabled && hasEarlierMessages) {
-      void loadEarlierMessagesRef.current()
-    }
-  }, [pagedLinkedHistoryEnabled, hasEarlierMessages, loadingEarlier, historicalMessages.length, messages.length, hiddenMessageCount, visibleMessageLimit])
-
-  // Tracks whether a block-note composer is currently active (open AND has
-  // non-empty text). While true, auto-scroll is suppressed so the viewport
-  // doesn't jump out from under the user while they're typing a note in
-  // place. New streamed tokens still land at the bottom of the scroll area,
-  // we just don't yank the scroll position to follow them.
-  const annotationComposerActiveRef = useRef(false)
-  const [_annotationComposerActive, setAnnotationComposerActiveState] = useState(false)
-  const setAnnotationComposerActive = useCallback((active: boolean) => {
-    annotationComposerActiveRef.current = active
-    setAnnotationComposerActiveState(active)
-    if (active) {
-      // Freezing the scroll position means auto-stick is no longer valid —
-      // if the user wants to jump back they can click the "scroll to latest"
-      // pill. This matches the behaviour when the user scrolls up manually.
-      stickToBottomRef.current = false
-      syncScrollToLatestVisibility(true)
-    }
-  }, [syncScrollToLatestVisibility])
-
-  // Auto-scroll only while the user is already following the latest messages
-  // AND there's no active note composer demanding stable scroll.
-  useLayoutEffect(() => {
-    const el = messagesRef.current
-    if (!el) return
-    if (annotationComposerActiveRef.current) return
-    if (!stickToBottomRef.current) {
-      syncScrollToLatestVisibility(true)
-      return
-    }
-    el.scrollTop = el.scrollHeight
-    syncScrollToLatestVisibility(false)
-  }, [messages, syncScrollToLatestVisibility])
-
-  /**
-   * Updates or clears the note attached to a specific block. Passing `text === null`
-   * deletes the note. Notes are stored inline on the underlying record (message,
-   * tool block, or thinking block) so they persist with the conversation.
-   */
-  const updateBlockNote = useCallback((
-    target:
-      | { kind: 'message'; messageId: string }
-      | { kind: 'tool'; messageId: string; toolBlockId: string }
-      | { kind: 'thinking'; messageId: string; thinkingId: string },
-    text: string | null,
-  ) => {
-    const nextNote: BlockNote | null = text && text.trim().length > 0
-      ? { text: text.trim(), createdAt: Date.now() }
-      : null
-    const applyToCollection = (collection: ChatMessage[]): ChatMessage[] => collection.map(msg => {
-      if (msg.id !== target.messageId) return msg
-      if (target.kind === 'message') {
-        if (nextNote) {
-          const merged: BlockNote = msg.note
-            ? { ...msg.note, text: nextNote.text, updatedAt: Date.now() }
-            : nextNote
-          return { ...msg, note: merged }
-        }
-        const { note: _discard, ...rest } = msg
-        return rest
-      }
-      if (target.kind === 'tool') {
-        const blocks = msg.toolBlocks?.map(b => {
-          if (b.id !== target.toolBlockId) return b
-          if (nextNote) {
-            const merged: BlockNote = b.note
-              ? { ...b.note, text: nextNote.text, updatedAt: Date.now() }
-              : nextNote
-            return { ...b, note: merged }
-          }
-          const { note: _discard, ...rest } = b
-          return rest
-        })
-        return { ...msg, toolBlocks: blocks }
-      }
-      // thinking
-      const thinkingBlocks = msg.thinkingBlocks?.map(tb => {
-        if (tb.id !== target.thinkingId) return tb
-        if (nextNote) {
-          const merged: BlockNote = tb.note
-            ? { ...tb.note, text: nextNote.text, updatedAt: Date.now() }
-            : nextNote
-          return { ...tb, note: merged }
-        }
-        const { note: _discard, ...rest } = tb
-        return rest
-      })
-      return { ...msg, thinkingBlocks }
-    })
-    setMessagesSafe(prev => applyToCollection(prev))
-    setHistoricalMessages(prev => applyToCollection(prev))
-  }, [setMessagesSafe])
-
-  /**
-   * Collects every attached note from the conversation into a flat array,
-   * tagged with the block kind and source snippet so downstream analysis
-   * (or export) can surface them with context.
-   */
-  const collectAllNotes = useCallback((): Array<{
-    kind: 'message' | 'tool' | 'thinking'
-    messageId: string
-    blockId?: string
-    role?: string
-    context: string
-    note: BlockNote
-  }> => {
-    const out: Array<{ kind: 'message' | 'tool' | 'thinking'; messageId: string; blockId?: string; role?: string; context: string; note: BlockNote }> = []
-    const sourceMessages = historicalMessages.length > 0
-      ? [...historicalMessages, ...messages]
-      : messages
-    for (const m of sourceMessages) {
-      if (m.note) {
-        const snippet = m.content.trim().slice(0, 200)
-        out.push({ kind: 'message', messageId: m.id, role: m.role, context: snippet, note: m.note })
-      }
-      for (const tb of m.toolBlocks ?? []) {
-        if (tb.note) {
-          const snippet = `${tb.name}: ${(tb.summary ?? tb.input ?? '').slice(0, 160)}`
-          out.push({ kind: 'tool', messageId: m.id, blockId: tb.id, context: snippet, note: tb.note })
-        }
-      }
-      for (const tk of m.thinkingBlocks ?? []) {
-        if (tk.note) {
-          const snippet = tk.content.slice(0, 200)
-          out.push({ kind: 'thinking', messageId: m.id, blockId: tk.id, context: snippet, note: tk.note })
-        }
-      }
-    }
-    return out
-  }, [historicalMessages, messages])
-
-  /** Copies a Markdown-formatted export of all attached notes to the clipboard. */
-  const exportNotesToClipboard = useCallback(async () => {
-    const notes = collectAllNotes()
-    if (notes.length === 0) {
-      try { await navigator.clipboard.writeText('# Chat notes\n\n_No notes yet._') } catch { /* ignore */ }
-      return
-    }
-    const lines = ['# Chat notes', '']
-    for (const entry of notes) {
-      const header = entry.kind === 'message'
-        ? `## ${entry.role ?? 'message'}`
-        : entry.kind === 'tool'
-          ? '## tool call'
-          : '## thinking'
-      lines.push(header)
-      lines.push(`> ${entry.context.replace(/\n/g, ' ')}`)
-      lines.push('')
-      lines.push(entry.note.text)
-      lines.push('')
-    }
-    const payload = lines.join('\n')
-    try { await navigator.clipboard.writeText(payload) } catch { /* ignore */ }
-  }, [collectAllNotes])
 
   // Stream listener -- handles all rich event types from Claude Agent SDK
   useChatStreamHandler({
@@ -4045,6 +1330,71 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [])
 
+  const {
+    dispatchMessageContent,
+    sendMessage,
+    reorderQueuedTurn,
+    flushQueueStateNow,
+    logQueueEvent,
+    stopStreaming,
+    handleQueuedTurnSteer,
+  } = useChatTileMessaging({
+    tileId,
+    workspaceId,
+    workspaceDir: _workspaceDir,
+    settings,
+    isStreaming,
+    input,
+    attachments,
+    implicitPeerImageAttachments,
+    queuedTurns,
+    messages,
+    provider,
+    model,
+    mode,
+    thinking,
+    sessionId,
+    mcpEnabled,
+    executionTarget,
+    cloudHostId,
+    effectiveAgentMode,
+    autoAgentMode,
+    linkedSessionEntryId,
+    linkedSessionHint,
+    hasEarlierMessages,
+    connectedPeers,
+    peerContextRef,
+    peerToolNames,
+    providerEntryById,
+    currentProviderEntry,
+    activeCloudHost,
+    latestStateRef,
+    persistLatestState,
+    lastJobSequenceRef,
+    resumedJobKeyRef,
+    stickToBottomRef,
+    activeChatSurfaceRef,
+    openChatSurfacesRef,
+    textareaRef,
+    setMessagesSafe,
+    setInput,
+    setAttachments,
+    setQueuedTurns,
+    setOpenChatSurfaces,
+    setActiveChatSurfaceId,
+    setIsStreaming,
+    setJobId,
+    setJobSequence,
+    setPreserveSessionSummary,
+    setAcType,
+    setAcQuery,
+    focusComposer,
+    getChatSurfaceIframe,
+    postToChatSurface,
+    exportNotesToClipboard,
+    pluginCommands,
+  })
+
   const syncComposerHeight = useCallback(() => {
     const ta = textareaRef.current
     if (!ta) return
@@ -4052,40 +1402,21 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     ta.style.height = `${Math.max(CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT, Math.min(ta.scrollHeight, 134))}px`
   }, [])
 
-  const addAttachments = useCallback((paths: string[]) => {
-    if (paths.length === 0) return
-    setAttachments(prev => {
-      const seen = new Set(prev.map(item => item.path))
-      const next = [...prev]
-      for (const path of paths) {
-        if (seen.has(path)) continue
-        seen.add(path)
-        next.push({ path, kind: isImagePath(path) ? 'image' : 'file' })
-      }
-      return next
-    })
-    setAcType(null)
-    setAcQuery('')
-    requestAnimationFrame(() => {
-      syncComposerHeight()
-      const ta = textareaRef.current
-      if (!ta) return
-      ta.focus()
-      const pos = ta.value.length
-      ta.setSelectionRange(pos, pos)
-    })
-  }, [syncComposerHeight])
-
-  const openAttachmentPicker = useCallback(async () => {
-    const paths = await window.electron.chat?.selectFiles()
-    if (paths && paths.length > 0) addAttachments(paths)
-    setShowInsertMenu(false)
-  }, [addAttachments])
-
-  const removeAttachment = useCallback((path: string) => {
-    setAttachments(prev => prev.filter(item => item.path !== path))
-    requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [])
+  const {
+    isDropTarget,
+    openAttachmentPicker,
+    removeAttachment,
+    handleTileDragOver,
+    handleTileDragLeave,
+    handleTileDrop,
+  } = useChatTileAttachments({
+    textareaRef,
+    syncComposerHeight,
+    setAttachments,
+    setAcType,
+    setAcQuery,
+    setShowInsertMenu,
+  })
 
   // ── Chat-surface extensions (e.g. Sketch) ─────────────────────────────────
   // Re-query whenever extensions are enabled/disabled or the global
@@ -4445,690 +1776,34 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     return () => window.removeEventListener('message', handler)
   }, [chatSurfaceMenu, chatSurfaceThemeColors, chatSurfaceThemeVars, getChatSurfaceIframe, getChatSurfacePeerEntries, openChatSurface, postToChatSurface])
 
-  const handleTileDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    // Ignore our own internal drags (queued-turn reorder, etc.) — they
-    // advertise themselves via a custom mime type so we don't mistake the
-    // drag for a file drop and trigger the attachment overlay.
-    const dt = e.dataTransfer
-    if (dt.types.includes('application/x-codesurf-queued-turn')) return
-    const hasFiles = dt.types.includes('Files')
-    const hasUri = dt.types.includes('text/uri-list')
-    const hasPlain = dt.types.includes('text/plain')
-    const hasFileRef = dt.types.includes('application/file-reference-path')
-    if (!hasFiles && !hasUri && !hasPlain && !hasFileRef) return
-    e.preventDefault()
-    e.stopPropagation()
-    e.dataTransfer.dropEffect = 'copy'
-    setIsDropTarget(true)
-  }, [])
+  const { selectAcItem } = useChatAutocompleteSelection({
+    input,
+    acType,
+    textareaRef,
+    syncComposerHeight,
+    setInput,
+    setAttachments,
+    setAcType,
+    setAcQuery,
+  })
 
-  const handleTileDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
-    setIsDropTarget(false)
-  }, [])
-
-  const handleTileDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    // Bail out of file-attachment handling when this is an internal drag
-    // (queued-turn reorder). The inner handlers already did the work and
-    // the text/plain payload is a queue id, not a path.
-    if (e.dataTransfer.types.includes('application/x-codesurf-queued-turn')) {
-      setIsDropTarget(false)
-      return
-    }
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDropTarget(false)
-    // Check file-reference-path first (from FileTile drags), then fall back to generic extraction
-    const fileRef = e.dataTransfer.getData('application/file-reference-path')
-    const droppedPaths = fileRef ? [fileRef] : getDroppedPaths(e.dataTransfer)
-    if (droppedPaths.length === 0) return
-    addAttachments(droppedPaths)
-  }, [addAttachments])
-
-  const dispatchMessageContent = useCallback(async (messageContent: string): Promise<boolean> => {
-    const trimmedContent = messageContent.trim()
-    if (!trimmedContent) return false
-    const { bodyText: userBodyText } = splitMessageAttachmentPaths(trimmedContent)
-
-    const state = latestStateRef.current
-    const activeProvider = state?.provider ?? provider
-    const activeModel = state?.model ?? model
-    const activeThinking = state?.thinking ?? thinking
-    const activeSessionId = state?.sessionId ?? sessionId
-    const activeMcpEnabled = state?.mcpEnabled ?? mcpEnabled
-    const activeMessages = state?.messages ?? messages
-    const activeProviderEntry = providerEntryById.get(activeProvider) ?? currentProviderEntry
-    const activeModeOptions = activeProviderEntry?.kind === 'builtin'
-      ? PROVIDER_MODES[activeProviderEntry.id as BuiltinProvider]
-      : [EXTENSION_PROVIDER_MODE]
-    const rawActiveMode = state?.mode ?? mode
-    const activeMode = activeModeOptions.some(option => option.id === rawActiveMode)
-      ? rawActiveMode
-      : resolveProviderModeId(activeProvider, settings?.chatProviderModes?.[activeProvider])
-    const nextCloudHostId = executionTarget === 'cloud'
-      ? (cloudHostId ?? activeCloudHost?.id ?? null)
-      : null
-
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      role: 'user',
-      content: trimmedContent,
-      timestamp: Date.now(),
-    }
-    const assistantId = `msg-${Date.now() + 1}`
-    const optimisticMessages = normalizeMessagesForMemory([
-      ...activeMessages,
-      userMsg,
-      {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        isStreaming: true,
-      },
-    ])
-    const optimisticState: ChatTilePersistedState = {
-      messages: optimisticMessages,
-      input: '',
-      attachments: [],
-      queuedTurns: state?.queuedTurns ?? queuedTurns,
-      executionTarget: state?.executionTarget ?? executionTarget,
-      provider: activeProvider,
-      model: activeModel,
-      mcpEnabled: activeMcpEnabled,
-      mode: activeMode,
-      thinking: activeThinking,
-      agentMode: state?.agentMode ?? effectiveAgentMode,
-      autoAgentMode: state?.autoAgentMode ?? autoAgentMode,
-      preserveSessionSummary: linkedSessionEntryId ? true : false,
-      linkedSessionEntryId,
-      linkedSessionHint,
-      hasEarlierMessages,
-      sessionId: activeSessionId,
-      jobId: null,
-      jobSequence: 0,
-      cloudHostId: nextCloudHostId,
-      isStreaming: true,
-    }
-
-    setPreserveSessionSummary(linkedSessionEntryId ? true : false)
-    setMessagesSafe(optimisticMessages)
-    setIsStreaming(true)
-    setJobId(null)
-    setJobSequence(0)
-    lastJobSequenceRef.current = 0
-    resumedJobKeyRef.current = null
-    stickToBottomRef.current = true
-    focusComposer()
-    latestStateRef.current = optimisticState
-    persistLatestState(optimisticState)
-
-    window.electron?.bus?.publish(`tile:${tileId}`, 'activity', `chat:${tileId}`, {
-      message: `User: ${userMsg.content.slice(0, 100)}`, role: 'user',
-    })
-
-    try {
-      const recentEditContext = await buildRecentEditContext(activeMessages, _workspaceDir, userBodyText)
-      const blockNotesContext = buildBlockNotesContext(activeMessages)
-      const requestMessages = [...activeMessages, userMsg].map((message, index, allMessages) => {
-        const isNewestUserMessage = index === allMessages.length - 1 && message.id === userMsg.id
-        if (!isNewestUserMessage || (!recentEditContext && !blockNotesContext)) {
-          return { role: message.role, content: message.content }
-        }
-        // Both context blocks are appended to the newest user turn so they
-        // travel with the request the model is actually responding to, not
-        // as floating system noise earlier in the transcript.
-        const parts = [message.content]
-        if (recentEditContext) parts.push(`---\nRecent edit context:\n${recentEditContext}`)
-        if (blockNotesContext) parts.push(`---\n${blockNotesContext}`)
-        return {
-          role: message.role,
-          content: parts.join('\n\n').trim(),
-        }
-      })
-
-      const peers = activeMcpEnabled ? connectedPeers.map(p => ({
-        peerId: p.peerId,
-        peerType: p.peerType,
-        tools: p.capabilities.filter(c => c.startsWith('tool:')).map(c => stripCapabilityPrefix(c)),
-        actions: p.actions,
-        context: peerContextRef.current.get(p.peerId),
-      })) : []
-
-      const result = await window.electron?.chat?.send({
-        cardId: tileId,
-        workspaceId,
-        provider: activeProvider,
-        model: activeModel,
-        providerTransport: activeProviderEntry?.transport ?? null,
-        mode: activeMode,
-        thinking: activeThinking,
-        workspaceDir: _workspaceDir,
-        mcpEnabled: activeMcpEnabled,
-        executionTarget,
-        cloudHostId: nextCloudHostId,
-        executionPreference: settings?.execution ?? null,
-        messages: requestMessages,
-        negotiatedTools: activeMcpEnabled ? peerToolNames : undefined,
-        peers: peers.length > 0 ? peers : undefined,
-        sessionId: activeSessionId,
-      })
-      if (result && typeof result === 'object' && 'jobId' in result && typeof (result as { jobId?: unknown }).jobId === 'string') {
-        const nextJobId = (result as { jobId: string }).jobId
-        setJobId(nextJobId)
-        setJobSequence(0)
-        lastJobSequenceRef.current = 0
-        const nextState = {
-          ...optimisticState,
-          jobId: nextJobId,
-          jobSequence: 0,
-        }
-        latestStateRef.current = nextState
-        persistLatestState(nextState)
-      } else {
-        setJobId(null)
-        setJobSequence(0)
-        lastJobSequenceRef.current = 0
-        latestStateRef.current = optimisticState
-        persistLatestState(optimisticState)
-      }
-      return true
-    } catch (err) {
-      setMessagesSafe(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: `Error: ${err}`, isStreaming: false } : m
-      ))
-      setIsStreaming(false)
-      focusComposer()
-      return false
-    }
-  }, [provider, model, mode, thinking, sessionId, mcpEnabled, messages, providerEntryById, currentProviderEntry, tileId, connectedPeers, _workspaceDir, executionTarget, cloudHostId, activeCloudHost, settings?.execution, settings?.chatProviderModes, peerToolNames, focusComposer, setMessagesSafe, queuedTurns, effectiveAgentMode, autoAgentMode, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, persistLatestState])
-
-  const logQueueEvent = useCallback((
-    type: 'enqueue' | 'dispatch' | 'delete' | 'complete' | 'clear' | 'reorder',
-    details?: { queueId?: string; content?: string; preview?: string; attachmentCount?: number; createdAt?: number; draggedId?: string; targetId?: string; mode?: string; newParentId?: string | null },
-  ) => {
-    try {
-      // Best-effort append to the queued-message event log. Tolerate two
-      // failure modes that shouldn't surface as uncaught rejections:
-      //   1) IPC API missing entirely (preload hasn't injected yet)
-      //   2) Handler not yet registered on the main process (early-boot race)
-      // The optional-chain handles (1); the .catch handles (2) and any
-      // transient IPC failure. These events are advisory — losing one is
-      // acceptable and must never bubble up as a promise rejection.
-      const result = (window.electron as any)?.canvas?.queuedMessages?.append?.({
-        type,
-        at: Date.now(),
-        workspaceId,
-        tileId,
-        ...(details ?? {}),
-      })
-      if (result && typeof result.catch === 'function') {
-        result.catch(() => { /* best-effort; swallow */ })
-      }
-    } catch { /* best effort */ }
-  }, [workspaceId, tileId])
-
-  const flushQueueStateNow = useCallback((nextQueue: QueuedChatTurn[]) => {
-    // Bypass the debounced persistLatestState so the tile-state JSON on disk
-    // has the very latest queue before any possible crash or restart.
-    const base = latestStateRef.current
-    if (!base) return
-    persistLatestState({ ...base, queuedTurns: nextQueue })
-  }, [persistLatestState])
-
-  // Reorder / re-parent a queued turn in response to a drag-drop gesture.
-  // Supports three drop modes relative to the target row:
-  //   'before' → sibling of target, inserted at the target's slot
-  //   'after'  → sibling of target, inserted just after target (+ its kids)
-  //   'into'   → nested under target as a child (flattened to one level)
-  // Children of the dragged item are orphaned to the top level when the
-  // dragged row moves — we intentionally keep the tree shallow (one level
-  // of nesting) so the queue stays legible at a glance.
-  const reorderQueuedTurn = useCallback((
-    draggedId: string,
-    targetId: string,
-    mode: 'before' | 'after' | 'into',
-  ) => {
-    if (draggedId === targetId) return
-    const prev = queuedTurns
-    const draggedIdx = prev.findIndex(t => t.id === draggedId)
-    const targetIdx = prev.findIndex(t => t.id === targetId)
-    if (draggedIdx < 0 || targetIdx < 0) return
-    const dragged = prev[draggedIdx]
-
-    // Orphan any children of dragged (they become top-level), and remove
-    // dragged itself so we can re-insert it at the new location.
-    const orphaned = prev.map(t =>
-      t.parentId === draggedId ? { ...t, parentId: null } : t
-    )
-    const without = orphaned.filter(t => t.id !== draggedId)
-    const newTargetIdx = without.findIndex(t => t.id === targetId)
-    if (newTargetIdx < 0) return
-    const target = without[newTargetIdx]
-
-    let newParentId: string | null = null
-    let insertIdx = newTargetIdx
-
-    if (mode === 'into') {
-      // Only nest one level deep. If the target is already a child, treat
-      // the drop as a sibling 'after' target.
-      if (target.parentId) {
-        newParentId = target.parentId
-        insertIdx = newTargetIdx + 1
-      } else {
-        newParentId = target.id
-        const childCount = without.filter(t => t.parentId === target.id).length
-        insertIdx = newTargetIdx + 1 + childCount
-      }
-    } else if (mode === 'before') {
-      newParentId = target.parentId ?? null
-      insertIdx = newTargetIdx
-    } else {
-      // 'after'
-      newParentId = target.parentId ?? null
-      if (!target.parentId) {
-        // Insert after target AND its existing children so we don't split
-        // the visual group.
-        const childCount = without.filter(t => t.parentId === target.id).length
-        insertIdx = newTargetIdx + 1 + childCount
-      } else {
-        insertIdx = newTargetIdx + 1
-      }
-    }
-
-    const nextDragged: QueuedChatTurn = { ...dragged, parentId: newParentId }
-    const result = [
-      ...without.slice(0, insertIdx),
-      nextDragged,
-      ...without.slice(insertIdx),
-    ]
-    setQueuedTurns(result)
-    flushQueueStateNow(result)
-    logQueueEvent('reorder', { draggedId, targetId, mode, newParentId })
-  }, [queuedTurns, flushQueueStateNow, logQueueEvent])
-
-  const queueCurrentDraft = useCallback(() => {
-    const draftAttachments = mergeAttachments(attachments, implicitPeerImageAttachments)
-    const messageContent = buildOutgoingMessageContent(input, draftAttachments)
-    if (!messageContent) return false
-
-    const queuedTurn: QueuedChatTurn = {
-      id: `queued-${Date.now()}`,
-      content: messageContent,
-      preview: buildQueuedTurnPreview(messageContent, draftAttachments.length),
-      attachmentCount: draftAttachments.length,
-      createdAt: Date.now(),
-    }
-
-    setPreserveSessionSummary(linkedSessionEntryId ? true : false)
-    const nextQueue = [...queuedTurns, queuedTurn]
-    setQueuedTurns(nextQueue)
-    flushQueueStateNow(nextQueue)
-    logQueueEvent('enqueue', {
-      queueId: queuedTurn.id,
-      content: queuedTurn.content,
-      preview: queuedTurn.preview,
-      attachmentCount: queuedTurn.attachmentCount,
-      createdAt: queuedTurn.createdAt,
-    })
-    setInput('')
-    setAttachments([])
-    setAcType(null)
-    setAcQuery('')
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    focusComposer()
-    return true
-  }, [input, attachments, implicitPeerImageAttachments, focusComposer, queuedTurns, linkedSessionEntryId, flushQueueStateNow, logQueueEvent])
-
-  const sendMessage = useCallback(async () => {
-    if (isStreaming) {
-      queueCurrentDraft()
-      return
-    }
-
-    // Flush the active chat-surface (Sketch / Builder) to a temp attachment
-    // before composing the outgoing message. When Builder is active we persist
-    // its HTML payload as a temporary .html file so the normal attachment path
-    // can carry it into the turn just like files dropped from Finder.
-    let flushedAttachments = mergeAttachments(attachments, implicitPeerImageAttachments)
-    const surface = activeChatSurfaceRef.current
-    if (surface) {
-      try {
-        await new Promise<void>((resolve) => {
-          let done = false
-          const ack = () => {
-            if (done) return
-            done = true
-            window.removeEventListener('message', onceAck)
-            clearTimeout(timeout)
-            resolve()
-          }
-          const timeout = setTimeout(ack, 1200)
-          const onceAck = (e: MessageEvent) => {
-            if (getChatSurfaceIframe(surface.instanceId)?.contentWindow !== e.source) return
-            const msg = e.data
-            if (!msg || typeof msg !== 'object') return
-            if (msg.type === 'contex-rpc' && msg.method === 'surface.setPayload' && msg.tileId === surface.instanceId) {
-              ack()
-            }
-          }
-          window.addEventListener('message', onceAck)
-          postToChatSurface(surface.instanceId, { type: 'contex-event', event: 'surface.requestFlush', data: {} })
-        })
-      } catch { /* best-effort */ }
-
-      const latest = activeChatSurfaceRef.current
-      const payload = latest?.payload
-      if (payload?.data) {
-        try {
-          const chatApi = (window.electron as unknown as { chat?: { writeTempAttachment?: (p: { data: string; mime?: string; ext?: string; filenameHint?: string }) => Promise<{ ok: true; path: string } | { ok: false; error: string }> } }).chat
-          if (chatApi?.writeTempAttachment) {
-            const attachmentData = payload.kind === 'text' ? encodeUtf8Base64(payload.data) : payload.data
-            const attachmentKind: PendingAttachment['kind'] = payload.kind === 'text' ? 'file' : 'image'
-            const r = await chatApi.writeTempAttachment({
-              data: attachmentData,
-              mime: payload.kind === 'text' ? (payload.mime ?? 'text/html') : payload.mime,
-              ext: payload.kind === 'text' ? (payload.ext ?? 'html') : payload.ext,
-              filenameHint: surface.label.toLowerCase().replace(/\s+/g, '-'),
-            })
-            if (r.ok) {
-              flushedAttachments = mergeAttachments(flushedAttachments, [{ path: r.path, kind: attachmentKind }])
-            }
-          }
-        } catch { /* best-effort */ }
-      }
-    }
-
-    const messageContent = buildOutgoingMessageContent(input, flushedAttachments)
-    if (!messageContent) return
-
-    // Local-only slash commands — handled client-side, never dispatched to
-    // the model. `/export-notes` copies every attached BlockNote (message,
-    // tool, thinking) into the clipboard as a Markdown report.
-    if (messageContent.trim() === '/export-notes') {
-      setInput('')
-      setAcType(null)
-      setAcQuery('')
-      if (textareaRef.current) textareaRef.current.style.height = 'auto'
-      await exportNotesToClipboard()
-      return
-    }
-
-    // Signal the sidebar that the user just submitted a message in this thread
-    // so it can promote the session to the top. This is the ONLY path that
-    // should move a thread in the sidebar — opening, streaming-resume, or tool
-    // continuation must not trigger it.
-    recordChatMessageSent({ tileId, sessionId, entryId: linkedSessionEntryId })
-
-    setInput('')
-    setAcType(null)
-    setAcQuery('')
-    setAttachments([])
-
-    // Clear every open surface for the next turn, then reset the tab strip.
-    for (const openSurface of openChatSurfacesRef.current) {
-      postToChatSurface(openSurface.instanceId, { type: 'contex-event', event: 'surface.clear', data: {} })
-    }
-    setOpenChatSurfaces([])
-    setActiveChatSurfaceId(null)
-
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    await dispatchMessageContent(messageContent)
-  }, [isStreaming, input, attachments, implicitPeerImageAttachments, queueCurrentDraft, dispatchMessageContent, exportNotesToClipboard, getChatSurfaceIframe, postToChatSurface])
-
-  const insertSteerMessageIntoStream = useCallback((content: string) => {
-    const trimmed = content.trim()
-    if (!trimmed) return
-    const userMsg: ChatMessage = {
-      id: `msg-steer-${Date.now()}`,
-      role: 'user',
-      content: trimmed,
-      timestamp: Date.now(),
-    }
-    setMessagesSafe(prev => {
-      const streamingAssistantIndex = prev.findLastIndex(message => message.role === 'assistant' && message.isStreaming)
-      if (streamingAssistantIndex < 0) return [...prev, userMsg]
-      return [
-        ...prev.slice(0, streamingAssistantIndex),
-        userMsg,
-        ...prev.slice(streamingAssistantIndex),
-      ]
-    })
-    stickToBottomRef.current = true
-    window.electron?.bus?.publish(`tile:${tileId}`, 'activity', `chat:${tileId}`, {
-      message: `User steered: ${trimmed.slice(0, 100)}`,
-      role: 'user',
-    })
-  }, [setMessagesSafe, tileId])
-
-  const stopStreaming = useCallback(() => {
-    window.electron?.chat?.stop?.(tileId)
-    setIsStreaming(false)
-    setJobId(null)
-    setMessagesSafe(prev => prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m))
-    focusComposer()
-  }, [tileId, focusComposer])
-
-  const clearConversation = useCallback(() => {
-    if (isStreaming) return
-    setMessagesSafe([])
-    setAttachments([])
-    setQueuedTurns([])
-    flushQueueStateNow([])
-    logQueueEvent('clear')
-    setPreserveSessionSummary(false)
-    setLinkedSessionEntryId(null)
-    setLinkedSessionHint(null)
-    setHasEarlierMessages(false)
-    setSessionId(null)
-    setJobId(null)
-    setJobSequence(0)
-    lastJobSequenceRef.current = 0
-    setHistoricalMessages([])
-    setLoadingEarlier(false)
-    setEarlierLoadError(null)
-    window.electron?.chat?.clearSession?.(tileId)
-  }, [isStreaming, tileId, flushQueueStateNow, logQueueEvent])
-
-  // Drop any previously-loaded older pages whenever the backing linked
-  // session changes so the next thread starts from a clean tail view.
-  useEffect(() => {
-    setHistoricalMessages([])
-    setEarlierLoadError(null)
-    pendingHistoryPrependRef.current = null
-  }, [sessionId, linkedSessionEntryId])
-
-  useEffect(() => {
-    if (isStreaming || queuedTurns.length === 0 || isFlushingQueuedTurnRef.current) return
-
-    const nextTurn = queuedTurns[0]
-    isFlushingQueuedTurnRef.current = true
-
-    void (async () => {
-      const sent = await dispatchMessageContent(nextTurn.content)
-      const remaining = queuedTurns.filter(turn => turn.id !== nextTurn.id)
-      setQueuedTurns(remaining)
-      flushQueueStateNow(remaining)
-      logQueueEvent('dispatch', { queueId: nextTurn.id })
-      if (!sent) {
-        setInput(current => current.trim() ? current : nextTurn.content)
-      }
-    })().finally(() => {
-      isFlushingQueuedTurnRef.current = false
-    })
-  }, [isStreaming, queuedTurns, dispatchMessageContent, flushQueueStateNow, logQueueEvent])
-
-  const handleQueuedTurnSteer = useCallback(async (turn: QueuedChatTurn) => {
-    const content = turn.content.trim()
-    if (!content) return
-
-    if (isStreaming) {
-      const result = await window.electron?.chat?.steer?.({ cardId: tileId, message: content })
-      if (!result?.ok) {
-        setMessagesSafe(prev => [...prev, {
-          id: `msg-steer-error-${Date.now()}`,
-          role: 'assistant',
-          content: `Steer failed: ${result?.error ?? 'No active steerable stream'}`,
-          timestamp: Date.now(),
-          isStreaming: false,
-        }])
-        return
-      }
-
-      const remaining = queuedTurns.filter(item => item.id !== turn.id)
-      setQueuedTurns(remaining)
-      flushQueueStateNow(remaining)
-      logQueueEvent('dispatch', { queueId: turn.id, content: turn.content, preview: turn.preview, attachmentCount: turn.attachmentCount })
-      insertSteerMessageIntoStream(content)
-      return
-    }
-
-    const remaining = queuedTurns.filter(item => item.id !== turn.id)
-    setQueuedTurns(remaining)
-    flushQueueStateNow(remaining)
-    logQueueEvent('dispatch', { queueId: turn.id, content: turn.content, preview: turn.preview, attachmentCount: turn.attachmentCount })
-    const sent = await dispatchMessageContent(content)
-    if (!sent) {
-      setInput(current => current.trim() ? current : content)
-    }
-  }, [isStreaming, tileId, queuedTurns, flushQueueStateNow, logQueueEvent, insertSteerMessageIntoStream, dispatchMessageContent, setMessagesSafe])
-
-  const selectAcItem = useCallback((item: AutocompleteItem) => {
-    const ta = textareaRef.current
-    if (!ta) return
-    const pos = ta.selectionStart ?? input.length
-    const textBefore = input.slice(0, pos)
-    const textAfter = input.slice(pos)
-
-    // Find the trigger start position
-    let triggerStart = pos
-    if (acType === 'slash') {
-      const match = textBefore.match(/(^|\s)(\/\w*)$/)
-      if (match) triggerStart = pos - match[2].length
-    } else if (acType === 'mention') {
-      const match = textBefore.match(/@[\w./]*$/)
-      if (match) triggerStart = pos - match[0].length
-    }
-
-    const replacement = item.value + ' '
-    const newVal = input.slice(0, triggerStart) + replacement + textAfter
-    setInput(newVal)
-    if (item.attachPath) {
-      setAttachments(prev => {
-        if (prev.some(existing => existing.path === item.attachPath)) return prev
-        return [...prev, { path: item.attachPath, kind: isImagePath(item.attachPath) ? 'image' : 'file' }]
-      })
-    }
-    setAcType(null)
-    setAcQuery('')
-
-    // Restore focus and cursor position after React re-render
-    requestAnimationFrame(() => {
-      syncComposerHeight()
-      if (ta) {
-        ta.focus()
-        const newPos = triggerStart + replacement.length
-        ta.setSelectionRange(newPos, newPos)
-      }
-    })
-  }, [input, acType, syncComposerHeight])
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // ─── Push-to-talk: hold spacebar (when input empty) to record ────────
-    // Only triggers when the draft is empty so we don't break normal typing.
-    // The keyup handler on the textarea stops recording when the key is released.
-    // e.repeat guards against the auto-repeat keydown stream after the first event.
-    if (
-      e.key === ' '
-      && !e.repeat
-      && !e.metaKey && !e.ctrlKey && !e.altKey
-      && input.length === 0
-      && !isDictating
-    ) {
-      e.preventDefault()
-      toggleDictation()
-      return
-    }
-    // While recording, swallow further space events on the textarea so the
-    // recognizer's audio gathering isn't visually polluted by " " characters
-    // landing in the input. (We append the transcript on stop.)
-    if (e.key === ' ' && isDictating) {
-      e.preventDefault()
-      return
-    }
-
-    // Autocomplete keyboard navigation
-    if (acType && acItems.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setAcIndex(i => (i + 1) % acItems.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setAcIndex(i => (i - 1 + acItems.length) % acItems.length)
-        return
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        selectAcItem(acItems[acIndex])
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setAcType(null)
-        setAcQuery('')
-        return
-      }
-    }
-
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      sendMessage()
-    }
-  }, [sendMessage, acType, acItems, acIndex, selectAcItem, input.length, isDictating, toggleDictation])
-
-  // Release push-to-talk on space-up. toggleDictation is idempotent — safe
-  // even if the user held space without ever entering recording mode (e.g.
-  // ignored because the input wasn't empty).
-  const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === ' ' && isDictating) {
-      e.preventDefault()
-      toggleDictation()
-    }
-  }, [isDictating, toggleDictation])
+  const { handleKeyDown, handleKeyUp } = useChatTileComposerKeys({
+    input,
+    isDictating,
+    toggleDictation,
+    acType,
+    acItems,
+    acIndex,
+    setAcIndex,
+    setAcType,
+    setAcQuery,
+    selectAcItem,
+    sendMessage,
+  })
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
-    setInput(val)
-    syncComposerHeight()
-
-    // Detect autocomplete triggers based on cursor position
-    const pos = e.target.selectionStart ?? val.length
-    const textBefore = val.slice(0, pos)
-
-    // Slash command: `/` at start of input or after a space
-    const slashMatch = textBefore.match(/(^|\s)\/(\w*)$/)
-    if (slashMatch) {
-      setAcType('slash')
-      setAcQuery(slashMatch[2])
-      setAcIndex(0)
-      return
-    }
-
-    // @ mention: `@` anywhere
-    const mentionMatch = textBefore.match(/@([\w./]*)$/)
-    if (mentionMatch) {
-      setAcType('mention')
-      setAcQuery(mentionMatch[1])
-      setAcIndex(0)
-      return
-    }
-
-    // No trigger active
-    setAcType(null)
-    setAcQuery('')
-  }, [syncComposerHeight])
+    handleComposerInputChange(e, setInput, syncComposerHeight)
+  }, [handleComposerInputChange, syncComposerHeight])
 
   const isStartScreen = messages.length === 0 && !isStreaming
 
@@ -5185,1601 +1860,193 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         minHeight: 0,
         minWidth: 0,
       }}>
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-        minWidth: 0,
-        position: 'relative',
-        justifyContent: isStartScreen ? 'center' : undefined,
-      }}>
-
-      {/* Messages */}
-      <div
-        ref={messagesRef}
-        className={`chat-messages ${isStartScreen ? '' : 'cs-fade-scroll-y cs-fade-scroll-y-lg'}`}
-        onScroll={handleMessagesScroll}
-        onWheel={handleMessagesWheel}
-        onKeyDown={handleMessagesKeyDown}
-        tabIndex={-1}
-        style={{
-          flex: isStartScreen ? '0 0 auto' : 1,
-          overflowY: isStartScreen ? 'visible' : 'auto',
-          padding: isStartScreen ? '12px 14px 4px' : '12px 14px',
-          overflowX: 'hidden',
-          minHeight: 0,
-          // Keep the transcript centerline stable while chat history loads and
-          // overflow flips on. Reserve both edges so the content doesn't jump
-          // left when the scroll container becomes scrollable.
-          scrollbarGutter: 'stable both-edges' as React.CSSProperties['scrollbarGutter'],
-          scrollbarWidth: 'none' as React.CSSProperties['scrollbarWidth'],
-          // Disable Chrome's built-in scroll anchoring. React pins scrollTop =
-          // scrollHeight on every message update (useLayoutEffect below);
-          // anchoring would simultaneously try to preserve visual position as
-          // streaming content changes height, producing up-and-down judder on
-          // the currently-streaming section.
-          overflowAnchor: 'none',
+      <ChatTileTranscriptColumn
+        isStartScreen={isStartScreen}
+        messagesRef={messagesRef}
+        handleMessagesScroll={handleMessagesScroll}
+        handleMessagesWheel={handleMessagesWheel}
+        handleMessagesKeyDown={handleMessagesKeyDown}
+        hiddenMessageCount={hiddenMessageCount}
+        renderedMessages={renderedMessages}
+        pagedLinkedHistoryEnabled={pagedLinkedHistoryEnabled}
+        loadingEarlier={loadingEarlier}
+        earlierLoadError={earlierLoadError}
+        isStreaming={isStreaming}
+        toolCollapseTick={toolCollapseTick}
+        explodedChipGroups={explodedChipGroups}
+        toggleExplodedChipGroup={toggleExplodedChipGroup}
+        updateBlockNote={updateBlockNote}
+        setAnnotationComposerActive={setAnnotationComposerActive}
+        readAttachmentPaths={readAttachmentPaths}
+        fontSize={fontSize}
+        fontLineHeight={fontLineHeight}
+        fontMono={fontMono}
+        monoSize={monoSize}
+        ttsState={ttsState}
+        voiceSettings={voiceSettings}
+        showScrollToLatest={showScrollToLatest}
+        scrollToLatest={scrollToLatest}
+        liveComposerActivityChip={liveComposerActivityChip}
+        latestChangeDrawer={latestChangeDrawer}
+        latestChangeDrawerHasStats={latestChangeDrawerHasStats}
+        latestChangeDrawerExpanded={latestChangeDrawerExpanded}
+        latestChangeDrawerExpandedFiles={latestChangeDrawerExpandedFiles}
+        latestCheckpointId={latestCheckpointId}
+        isRestoringLatestCheckpoint={isRestoringLatestCheckpoint}
+        fontSans={fontSans}
+        onToggleLatestChangeDrawerExpanded={() => setLatestChangeDrawerExpanded(v => !v)}
+        onToggleLatestChangeDrawerFile={toggleLatestChangeDrawerFile}
+        onRestoreLatestCheckpoint={() => { void restoreLatestCheckpoint() }}
+        onReviewLatestChanges={reviewLatestChanges}
+        queuedTurns={queuedTurns}
+        queueCollapsed={queueCollapsed}
+        draggingTurnId={draggingTurnId}
+        dragOverTurn={dragOverTurn}
+        onToggleQueueCollapsed={() => setQueueCollapsed(v => !v)}
+        onSetDraggingTurnId={setDraggingTurnId}
+        onSetDragOverTurn={setDragOverTurn}
+        onReorderQueuedTurn={reorderQueuedTurn}
+        onSteerQueuedTurn={handleQueuedTurnSteer}
+        onDeleteQueuedTurn={(turnId) => {
+          const remaining = queuedTurns.filter(item => item.id !== turnId)
+          setQueuedTurns(remaining)
+          flushQueueStateNow(remaining)
+          logQueueEvent('delete', { queueId: turnId })
         }}
       >
-        <div className="cs-chat-message-stack" style={{
-          width: '100%',
-          margin: '0 auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-          minHeight: '100%',
-        }}>
-          {isStartScreen && (
-             <div style={{
-               display: 'flex', flexDirection: 'column',
-               alignItems: 'center', justifyContent: 'center',
-               color: theme.chat.text, textAlign: 'center',
-               fontSize: 'clamp(24px, 3vw, 34px)',
-               lineHeight: 1.15,
-               fontWeight: 550,
-               letterSpacing: 0,
-             }}>
-               What do you want to build today with CodeSurf?
-             </div>
-           )}
-
-          {hiddenMessageCount > 0 && (
-            <div style={{
-              alignSelf: 'center',
-              maxWidth: CHAT_MESSAGE_MAX_WIDTH,
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: `1px solid ${theme.chat.divider}`,
-              background: theme.chat.userBubble,
-              color: theme.chat.muted,
-              fontSize: 11,
-              textAlign: 'center',
-            }}>
-              Showing the latest {renderedMessages.length} messages. Scroll up to reveal older pages; {hiddenMessageCount} older message{hiddenMessageCount === 1 ? '' : 's'} are preserved but not mounted.
-            </div>
-          )}
-
-          {pagedLinkedHistoryEnabled && (loadingEarlier || earlierLoadError) && (
-            <div style={{
-              alignSelf: 'center',
-              padding: '6px 12px 2px',
-              borderRadius: 999,
-              border: `1px solid ${theme.chat.divider}`,
-              background: theme.chat.userBubble,
-              color: theme.chat.muted,
-              fontSize: 11,
-              textAlign: 'center',
-            }}>
-              {loadingEarlier ? 'Loading older messages…' : earlierLoadError}
-            </div>
-          )}
-
-          {(() => {
-            // Walk the message list and group *consecutive* chip-only
-            // assistant messages (thinking + tool calls, no prose text)
-            // into a single visual cluster so their chips all live in one
-            // wrapping row. The Claude Agent SDK emits a separate assistant
-            // message per tool-round, so without this grouping each round
-            // would render on its own line and waste horizontal space.
-            //
-            // Additionally, once a cluster grows past a threshold, older
-            // completed tool chips progressively fold into a single "Called
-            // N tools" summary — see applyLiveCollapse below. A grace period
-            // keeps each freshly-finished chip readable for a few seconds
-            // before it tucks into the summary, so the user can click it
-            // while it's still fresh.
-            const nodes: JSX.Element[] = []
-            // Read toolCollapseTick so the transcript only recomputes when a
-            // just-finished tool actually crosses the collapse grace window.
-            void toolCollapseTick
-
-            // Progressive-collapse tuning. Deliberately conservative so
-            // short focused turns don't collapse at all.
-            const COLLAPSE_MIN_ITEMS = 5   // cluster must have ≥ this to collapse
-            const COLLAPSE_TAIL_SIZE = 2   // always keep at least this many expanded
-
-            // Typed item used to represent one chip slot between extraction
-            // and final render. Carries enough data for both live-collapse
-            // decisions and the React render step.
-            type ChipItem =
-              | { kind: 'thinking'; key: string; block: ThinkingBlock }
-              | { kind: 'tool-single'; key: string; block: ToolBlock; isLive: boolean }
-              | { kind: 'tool-group-same'; key: string; blocks: ToolBlock[] }
-              | { kind: 'tool-group-mixed'; key: string; blocks: ToolBlock[] }
-
-            let clusterItems: ChipItem[] = []
-            let clusterStartKey: string | null = null
-            let clusterMsgIds: string[] = []
-
-            const buildMessageBlockLookup = (msg: ChatMessage) => ({
-              thinkingById: new Map((msg.thinkingBlocks ?? []).map(block => [block.id, block])),
-              toolById: new Map((msg.toolBlocks ?? []).map(block => [block.id, block])),
-            })
-
-            // Extract chip items (thinking + tool groups) from a single
-            // message's contentBlocks. Text blocks are ignored — callers
-            // only invoke this on chip-only messages.
-            const extractChipsFromMessage = (msg: ChatMessage, isLiveMessage: boolean): ChipItem[] => {
-              const items: ChipItem[] = []
-              const blocks = msg.contentBlocks ?? []
-              if (blocks.length === 0 && isExternalAgentToolOnlyText(msg.content ?? '')) {
-                for (const tb of getExternalAgentToolBlocks(msg.content ?? '')) {
-                  if (!shouldRenderToolBlock(tb)) continue
-                  items.push({
-                    kind: 'tool-single',
-                    key: `${msg.id}-${tb.id}`,
-                    block: tb,
-                    isLive: isLiveMessage,
-                  })
-                }
-                return items
-              }
-              const { thinkingById, toolById } = buildMessageBlockLookup(msg)
-              let i = 0
-              while (i < blocks.length) {
-                const block = blocks[i]
-                if (block.type === 'thinking') {
-                  const tb = thinkingById.get(block.thinkingId)
-                  // Active thinking for the live message renders above the input bar — skip here
-                  if (tb && (!isLiveMessage || tb.done)) items.push({
-                    kind: 'thinking',
-                    key: `${msg.id}-think-${block.thinkingId}`,
-                    block: !isLiveMessage && !tb.done ? { ...tb, done: true } : tb,
-                  })
-                  i++; continue
-                }
-                if (block.type === 'tool') {
-                  const rawTools: ToolBlock[] = []
-                  while (i < blocks.length) {
-                    const cb = blocks[i]
-                    if (cb.type !== 'tool') break
-                    const tb = toolById.get(cb.toolId)
-                    if (tb && shouldRenderToolBlock(tb)) rawTools.push(tb)
-                    i++
-                  }
-                  const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length) && !isCheckpointToolBlock(tb) && !isDreamToolBlock(tb))
-                  const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
-                  const uniqueNames = new Set(collapsibleTools.map(t => t.name))
-                  const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
-                  const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
-                  let groupEmitted = false
-                  for (const tb of rawTools) {
-                    if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
-                      if (!groupEmitted) {
-                        groupEmitted = true
-                        if (useSameNameGroup) items.push({
-                          kind: 'tool-group-same',
-                          key: `${msg.id}-grp-${tb.id}`,
-                          blocks: collapsibleTools,
-                        })
-                        else items.push({
-                          kind: 'tool-group-mixed',
-                          key: `${msg.id}-mgrp-${tb.id}`,
-                          blocks: collapsibleTools,
-                        })
-                      }
-                      continue
-                    }
-                    items.push({
-                      kind: 'tool-single',
-                      key: `${msg.id}-${tb.id}`,
-                      block: tb,
-                      isLive: isLiveMessage,
-                    })
-                  }
-                  continue
-                }
-                i++
-              }
-              return items
-            }
-
-            const renderChipItem = (item: ChipItem): JSX.Element => {
-              if (item.kind === 'thinking') {
-                return <ThinkingBlockView key={item.key} thinking={item.block} />
-              }
-              if (item.kind === 'tool-single') {
-                return <ToolBlockView key={item.key} block={item.block} isLive={item.isLive} />
-              }
-              if (item.kind === 'tool-group-same') {
-                return <CollapsedToolGroup key={item.key} name={item.blocks[0]?.name ?? ''} blocks={item.blocks} />
-              }
-              return <MixedToolGroup key={item.key} blocks={item.blocks} />
-            }
-
-            const renderChipRow = (items: JSX.Element[], key: string): JSX.Element => {
-              return (
-                <div key={key} style={CHAT_CHIP_ROW_STYLE}>
-                  {items}
-                </div>
-              )
-            }
-
-            // Progressive collapse: walk the cluster's item list, figure out
-            // how much of the tail should stay expanded (all items that are
-            // running, or completed within the grace window, plus at least
-            // COLLAPSE_TAIL_SIZE items), and fold everything before that into
-            // a single synthetic "Called N tools" summary chip. Does nothing
-            // when the cluster is short, or when the foldable prefix has
-            // fewer than 2 items (a 1-item summary is pointless noise).
-            const applyLiveCollapse = (items: ChipItem[]): ChipItem[] => {
-              if (items.length < COLLAPSE_MIN_ITEMS) return items
-              const now = Date.now()
-              const isEligibleToFold = (item: ChipItem): boolean => {
-                if (item.kind === 'thinking') return item.block.done
-                if (item.kind === 'tool-single') {
-                  if (item.block.status !== 'done') return false
-                  const at = toolCompletedAtRef.current.get(item.block.id) ?? now
-                  return now - at >= LIVE_TOOL_COLLAPSE_GRACE_MS
-                }
-                return true // already-grouped chips are always foldable
-              }
-              // Start by keeping the last COLLAPSE_TAIL_SIZE items, then
-              // extend the tail backward across any non-eligible items.
-              let cut = Math.max(items.length - COLLAPSE_TAIL_SIZE, 0)
-              while (cut > 0 && !isEligibleToFold(items[cut - 1])) cut -= 1
-              const head = items.slice(0, cut)
-              const tail = items.slice(cut)
-              if (head.length < 2) return items
-              // Flatten head items into a ToolBlock[] for the summary.
-              // Thinking chips don't contribute to the tool count but we
-              // still fold them away (their timing is already summarized).
-              const folded: ToolBlock[] = []
-              for (const item of head) {
-                if (item.kind === 'tool-single') folded.push(item.block)
-                else if (item.kind === 'tool-group-same' || item.kind === 'tool-group-mixed') {
-                  folded.push(...item.blocks)
-                }
-              }
-              if (folded.length === 0) return items
-              const summary: ChipItem = {
-                kind: 'tool-group-mixed',
-                key: `live-collapse-${head[0].key}`,
-                blocks: folded,
-              }
-              return [summary, ...tail]
-            }
-
-            // A message qualifies for clustering only when it is an assistant
-            // turn that is pure chip content — any prose text (content or a
-            // 'text' contentBlock) breaks the cluster so prose lines keep
-            // their normal bubble rendering.
-            const isChipOnly = (msg: ChatMessage): boolean => {
-              if (msg.role !== 'assistant') return false
-              const blocks = msg.contentBlocks ?? []
-              if (blocks.length === 0) return isExternalAgentToolOnlyText(msg.content ?? '')
-              if (blocks.some(b => b.type === 'text')) return false
-              if ((msg.content ?? '').trim().length > 0) return false
-              return blocks.some(b => b.type === 'tool' || b.type === 'thinking')
-            }
-
-            const flushCluster = () => {
-              if (clusterItems.length === 0) return
-              const lastId = clusterMsgIds[clusterMsgIds.length - 1]
-              const lastMsg = renderedMessages.find(m => m.id === lastId)
-              const clusterId = clusterStartKey ?? 'cluster'
-              const finalItems = applyLiveCollapse(clusterItems)
-              nodes.push(
-                <BlockNoteAffordance
-                  key={`cluster-${clusterId}`}
-                  note={lastMsg?.note}
-                  side="right"
-                  onComposerActiveChange={setAnnotationComposerActive}
-                  onUpdateNote={(text) => updateBlockNote({ kind: 'message', messageId: lastId }, text)}
-                >
-                  {renderChipRow(finalItems.map(renderChipItem), `cluster-row-${clusterId}`)}
-                </BlockNoteAffordance>
-              )
-              clusterItems = []
-              clusterStartKey = null
-              clusterMsgIds = []
-            }
-
-            for (const msg of renderedMessages) {
-              const isLiveMessage = Boolean(
-                msg.role === 'assistant'
-                && isStreaming
-                && msg.isStreaming
-                && msg.id === renderedMessages[renderedMessages.length - 1]?.id
-              )
-              if (isChipOnly(msg)) {
-                const items = extractChipsFromMessage(msg, isLiveMessage)
-                if (clusterItems.length === 0) clusterStartKey = msg.id
-                clusterItems.push(...items)
-                clusterMsgIds.push(msg.id)
-                continue
-              }
-              flushCluster()
-              const { thinkingById, toolById } = buildMessageBlockLookup(msg)
-              const visibleToolBlocks = msg.toolBlocks?.filter(shouldRenderToolBlock) ?? []
-              const hasVisibleToolBlocks = visibleToolBlocks.length > 0
-              // Smart-side: user bubbles are right-aligned, so the annotation
-              // icon sits on their LEFT where the gutter is; for assistant /
-              // tool / thinking content that's left-aligned, the icon sits on
-              // the RIGHT. This gives symmetrical "note in the empty space"
-              // behaviour without the user having to choose a side.
-              const annotationSide: 'left' | 'right' = msg.role === 'user' ? 'left' : 'right'
-              nodes.push(
-              <BlockNoteAffordance
-                key={msg.id}
-                note={msg.note}
-                side={annotationSide}
-                onComposerActiveChange={setAnnotationComposerActive}
-                onUpdateNote={(text) => updateBlockNote({ kind: 'message', messageId: msg.id }, text)}
-              >
-              <div style={{
-                display: 'flex', flexDirection: 'column',
-                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                width: msg.role === 'user' ? 'auto' : '100%',
-                maxWidth: msg.role === 'user' ? '60%' : '100%',
-                minWidth: 0,
-                alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                marginBottom: msg.role === 'user' ? 5 : 0,
-                gap: 2,
-                ...(isLiveMessage ? {} : CHAT_OFFSCREEN_MESSAGE_STYLE),
-              }}>
-                {/* Thinking block — show the pre-tools indicator only when there
-                    are no inline thinking content-blocks yet, so we don't render
-                    the first thinking block twice. */}
-                {(() => {
-                  const hasInlineThinking = (msg.contentBlocks ?? []).some(b => b.type === 'thinking')
-                  const legacyThinking = msg.thinking
-                    ? (!isLiveMessage && !msg.thinking.done ? { ...msg.thinking, done: true } : msg.thinking)
-                    : (isLiveMessage && !msg.content ? { content: '', done: false } : null)
-                  // Skip active legacy thinking for live messages — shown above input bar instead
-                  const showLegacy = !hasInlineThinking && Boolean(legacyThinking) && (!isLiveMessage || legacyThinking?.done)
-                  return showLegacy
-                    ? <ThinkingBlockView thinking={legacyThinking ?? { content: '', done: false }} />
-                    : null
-                })()}
-
-                {/* Interleaved content blocks — text and tool calls in stream order */}
-                {(msg.contentBlocks?.length ?? 0) > 0 ? (
-                    (() => {
-                      const elements: JSX.Element[] = []
-                      const blocks = msg.contentBlocks!
-                      let i = 0
-                      // Accumulator for a contiguous run of "chip-row" content
-                      // (thinking + tool blocks). Text blocks break the run and
-                      // cause the accumulator to flush into a single flex
-                      // container so thinking chips sit inline with tool chips
-                      // on the same wrapping row.
-                      let chipRow: JSX.Element[] = []
-                      let chipRowStartIdx = i
-                      const flushChipRow = () => {
-                        if (chipRow.length === 0) return
-                        elements.push(renderChipRow(chipRow, `chiprow-${chipRowStartIdx}`))
-                        chipRow = []
-                      }
-                      while (i < blocks.length) {
-                        const block = blocks[i]
-                        if (block.type === 'thinking') {
-                          if (chipRow.length === 0) chipRowStartIdx = i
-                          const tb = thinkingById.get(block.thinkingId)
-                          // Active (not-done) thinking blocks for the live message render
-                          // in the fixed zone above the input bar — skip them here so they
-                          // don't also appear inside the message scroll area. Once done they
-                          // fall through and render as the static "copy" in the chip row.
-                          if (tb && (!isLiveMessage || tb.done)) {
-                            chipRow.push(
-                              <ThinkingBlockView
-                                key={`think-${block.thinkingId}`}
-                                thinking={!isLiveMessage && !tb.done ? { ...tb, done: true } : tb}
-                              />
-                            )
-                          }
-                          i++
-                          continue
-                        }
-                        if (block.type === 'tool') {
-                          if (chipRow.length === 0) chipRowStartIdx = i
-                          // Collect consecutive tool blocks, then sub-group same-name completed ones
-                          const rawTools: ToolBlock[] = []
-                          while (i < blocks.length) {
-                            const cb = blocks[i]
-                            if (cb.type !== 'tool') break
-                            const tb = toolById.get(cb.toolId)
-                            if (tb && shouldRenderToolBlock(tb)) rawTools.push(tb)
-                            i++
-                          }
-                          // Grouping rules:
-                          //   - 3+ collapsible tool blocks all with the same name → "Read x6" chip.
-                          //   - 3+ collapsible tool blocks with mixed names → "Called N tools" chip.
-                          //   - Otherwise each chip renders inline.
-                          //   - Non-collapsible tools (running / file-change / checkpoints) always stay inline.
-                          const collapsibleTools = rawTools.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length) && !isCheckpointToolBlock(tb) && !isDreamToolBlock(tb))
-                          const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
-                          const uniqueNames = new Set(collapsibleTools.map(t => t.name))
-                          const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
-                          const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
-                          let groupEmitted = false
-                          for (const tb of rawTools) {
-                            if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
-                              if (!groupEmitted) {
-                                groupEmitted = true
-                                if (useSameNameGroup) {
-                                  chipRow.push(<CollapsedToolGroup key={`grp-${tb.id}`} name={tb.name} blocks={collapsibleTools} />)
-                                } else {
-                                  chipRow.push(<MixedToolGroup key={`mgrp-${tb.id}`} blocks={collapsibleTools} />)
-                                }
-                              }
-                              continue
-                            }
-                            chipRow.push(<ToolBlockView key={tb.id} block={tb} isLive={isLiveMessage} />)
-                          }
-                          continue
-                        }
-                        {
-                          // Any non-chip block (text) flushes the pending chip row
-                          // first, then renders itself at block level.
-                          flushChipRow()
-                          const isLastBlock = i === blocks.length - 1
-                          elements.push(
-                            <div key={`text-${i}`} style={{
-                              background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                              border: msg.role === 'user' ? '1px solid transparent' : '0',
-                              boxShadow: msg.role === 'user'
-                                ? theme.mode === 'light'
-                                  ? `var(--cs-edge-shadow), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
-                                  : 'var(--cs-edge-shadow)'
-                                : undefined,
-                              borderRadius: 14,
-                              padding: '8px 12px',
-                              margin: msg.role === 'user' ? '2px' : 0,
-                              fontSize, lineHeight: fontLineHeight,
-                              wordBreak: 'break-word',
-                              color: theme.chat.text, position: 'relative',
-                              width: msg.role === 'user' ? 'calc(100% - 4px)' : '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
-                            }}>
-                              <ChatMessageContent text={block.text} isStreaming={isLiveMessage && isLastBlock} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
-                            </div>
-                          )
-                          i++
-                        }
-                      }
-                      // Flush any trailing chip row (e.g. stream ended on a
-                      // thinking or tool block without a subsequent text block).
-                      flushChipRow()
-                      // WorkingChipView moved to the fixed zone above the input bar.
-                      return elements
-                    })()
-                ) : (
-                  <>
-                    {/* Fallback: legacy layout for messages without contentBlocks */}
-                    {hasVisibleToolBlocks && (
-                      (() => {
-                        const out: JSX.Element[] = []
-                        const collapsibleTools = visibleToolBlocks.filter(tb => tb.status === 'done' && !(tb.fileChanges?.length))
-                        const collapsibleIds = new Set(collapsibleTools.map(t => t.id))
-                        const uniqueNames = new Set(collapsibleTools.map(t => t.name))
-                        const useSameNameGroup = collapsibleTools.length >= 3 && uniqueNames.size === 1
-                        const useMixedGroup = collapsibleTools.length >= 3 && uniqueNames.size > 1
-                        let groupEmitted = false
-                        for (const tb of visibleToolBlocks) {
-                          if (collapsibleIds.has(tb.id) && (useSameNameGroup || useMixedGroup)) {
-                            if (!groupEmitted) {
-                              groupEmitted = true
-                              if (useSameNameGroup) {
-                                out.push(<CollapsedToolGroup key={`grp-${tb.id}`} name={tb.name} blocks={collapsibleTools} />)
-                              } else {
-                                out.push(<MixedToolGroup key={`mgrp-${tb.id}`} blocks={collapsibleTools} />)
-                              }
-                            }
-                            continue
-                          }
-                          out.push(<ToolBlockView key={tb.id} block={tb} isLive={isLiveMessage} />)
-                        }
-                        return renderChipRow(out, `legacy-tools-${msg.id}`)
-                      })()
-                    )}
-                    {msg.content && (
-                      <div style={{
-                        background: msg.role === 'user' ? theme.chat.userBubble : 'transparent',
-                        border: msg.role === 'user' ? '1px solid transparent' : '0',
-                        boxShadow: msg.role === 'user'
-                          ? theme.mode === 'light'
-                            ? `var(--cs-edge-shadow), 0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent)`
-                            : 'var(--cs-edge-shadow)'
-                          : undefined,
-                        borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-                        padding: '8px 12px',
-                        margin: msg.role === 'user' ? '2px' : 0,
-                        fontSize, lineHeight: fontLineHeight,
-                        wordBreak: 'break-word',
-                        color: theme.chat.text, position: 'relative',
-                        width: msg.role === 'user' ? 'calc(100% - 4px)' : '100%', minWidth: 0, overflow: 'visible', boxSizing: 'border-box',
-                      }}>
-                        <ChatMessageContent text={msg.content} isStreaming={isLiveMessage} isUser={msg.role === 'user'} readAttachmentPaths={readAttachmentPaths} />
-                        {isLiveMessage && msg.content.length === 0 && !hasVisibleToolBlocks && (
-                          <WorkingDots />
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-                {/* Cost/turns/time footer */}
-                {msg.role === 'assistant' && (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    fontSize: monoSize - 2, color: theme.chat.subtle, fontFamily: fontMono,
-                    padding: '0 4px',
-                    marginTop: -5,
-                    // Reserve a stable footer line so the layout doesn't jump
-                    // ~10px when streaming finishes and cost/turns/time first
-                    // appear. Without this the auto-pin shifts content up.
-                    minHeight: monoSize + 2,
-                    visibility: (!isLiveMessage && msg.cost != null) ? 'visible' : 'hidden',
-                  }}>
-                    {!isLiveMessage && msg.cost != null && (<>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                      <DollarSign size={9} /> ${msg.cost.toFixed(4)}
-                    </span>
-                    {msg.turns != null && (
-                      <span>{msg.turns} turn{msg.turns !== 1 ? 's' : ''}</span>
-                    )}
-                    <span>{relativeTime(msg.timestamp)}</span>
-                    {/* Per-message speak / stop button — appears on every
-                        completed assistant message. Click speaks (or
-                        re-speaks) this message; if it's currently being
-                        spoken, click stops just that message. */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (ttsState.currentMessageId === msg.id) {
-                          ttsPlayer.stopMessage(msg.id)
-                        } else {
-                          void speakMessage({
-                            messageId: msg.id,
-                            text: msg.content,
-                            ttsProvider: voiceSettings.ttsProvider,
-                            ttsVoice: voiceSettings.ttsVoice,
-                            spokifyModel: voiceSettings.spokifyModel,
-                            force: true,
-                          })
-                        }
-                      }}
-                      onMouseDown={e => e.preventDefault()}
-                      title={ttsState.currentMessageId === msg.id ? 'Stop speaking' : 'Speak this message'}
-                      style={{
-                        marginLeft: 'auto', background: 'transparent', border: 'none',
-                        cursor: 'pointer', padding: 2, display: 'flex',
-                        color: ttsState.currentMessageId === msg.id ? theme.accent.base : theme.chat.subtle,
-                      }}
-                    >
-                      <Mic size={10} strokeWidth={2.2} />
-                    </button>
-                    </>)}
-                  </div>
-                )}
-                {/* User message time footer */}
-                {!isLiveMessage && msg.role === 'user' && (
-                  <div style={{
-                    fontSize: monoSize - 2, color: theme.chat.subtle, fontFamily: fontMono,
-                    padding: '0 6px', textAlign: 'right',
-                    marginTop: 2,
-                    lineHeight: 1.2,
-                    alignSelf: 'flex-end',
-                    overflow: 'visible',
-                  }}>
-                    {relativeTime(msg.timestamp)}
-                  </div>
-                )}
-
-              </div>
-              </BlockNoteAffordance>
-              )
-            }
-            flushCluster()
-            return nodes
-          })()}
-        </div>
-      </div>
-
-      <div style={{ flexShrink: 0, position: 'relative', overflow: 'visible' }}>
-        {showScrollToLatest && (
-            <button
-              onClick={() => scrollToLatest()}
-              title="Jump to latest"
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-                zIndex: 3,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 30,
-                height: 30,
-                minWidth: 30,
-                padding: 0,
-                borderRadius: '50%',
-                border: `0.5px solid ${theme.border.strong}`,
-                background: theme.surface.panelElevated,
-                color: theme.text.secondary,
-                cursor: 'pointer',
-                boxShadow: theme.shadow.panel,
-                backdropFilter: 'blur(10px)',
-                ...NON_SELECTABLE_UI_STYLE,
-              }}
-            >
-              <ArrowDown size={15} strokeWidth={1.8} />
-            </button>
-        )}
-
-        {liveComposerActivityChip}
-
-        {latestChangeDrawer && (
-          <ChatComposerDrawerFrame style={{
-            // Match the queued-messages drawer's indent + bottom-tuck so the
-            // changes drawer reads as pulled out from behind the composer
-            // rather than sitting on top of it.
-            width: `calc(${CHAT_COMPOSER_WIDTH} - 24px)`,
-            minWidth: `calc(${CHAT_COMPOSER_MIN_WIDTH_STYLE} - 24px)`,
-            margin: '0 auto 0 auto',
-          }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-                padding: '10px 14px',
-                ...NON_SELECTABLE_UI_STYLE,
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setLatestChangeDrawerExpanded(v => !v)}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                  border: 'none',
-                  background: 'transparent',
-                  padding: 0,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  color: theme.chat.textSecondary,
-                  fontFamily: fontSans,
-                  ...NON_SELECTABLE_UI_STYLE,
-                }}
-              >
-                <span style={{ fontSize: 12, fontWeight: 600, color: theme.chat.text }}>
-                  {latestChangeDrawer.fileCount} file{latestChangeDrawer.fileCount === 1 ? '' : 's'} changed
-                </span>
-                {latestChangeDrawerHasStats && (
-                  <>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.success }}>
-                      +{latestChangeDrawer.additions}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: theme.status.danger }}>
-                      -{latestChangeDrawer.deletions}
-                    </span>
-                  </>
-                )}
-              </button>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                {latestCheckpointId && (
-                  <button
-                    type="button"
-                    onClick={event => {
-                      event.stopPropagation()
-                      void restoreLatestCheckpoint()
-                    }}
-                    disabled={isRestoringLatestCheckpoint}
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: isRestoringLatestCheckpoint ? theme.chat.muted : theme.chat.text,
-                      fontSize: 12,
-                      fontFamily: fontSans,
-                      fontWeight: 500,
-                      cursor: isRestoringLatestCheckpoint ? 'default' : 'pointer',
-                      padding: 0,
-                      opacity: isRestoringLatestCheckpoint ? 0.6 : 1,
-                      ...NON_SELECTABLE_UI_STYLE,
-                    }}
-                  >
-                    {isRestoringLatestCheckpoint ? 'Undoing…' : 'Undo'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={event => {
-                    event.stopPropagation()
-                    setLatestChangeDrawerExpanded(v => !v)
-                  }}
-                  title={latestChangeDrawerExpanded ? 'Collapse changes' : 'Expand changes'}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 22,
-                    height: 22,
-                    border: 'none',
-                    background: 'transparent',
-                    color: theme.chat.textSecondary,
-                    cursor: 'pointer',
-                    padding: 0,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                >
-                  <ChevronRight size={14} style={{
-                    transform: latestChangeDrawerExpanded ? 'rotate(90deg)' : 'none',
-                    transition: 'transform 0.15s',
-                    opacity: 0.55,
-                  }} />
-                </button>
-              </div>
-            </div>
-            {latestChangeDrawerExpanded && (
-              <div style={{
-                borderTop: `1px solid ${theme.chat.divider}`,
-                display: 'flex',
-                flexDirection: 'column',
-              }}>
-                {latestChangeDrawer.fileChanges.map((change, index) => {
-                  const fileKey = `${latestChangeDrawer.key}:${change.path}:${index}`
-                  const fileHasDiff = hasRenderableFileChangeDiff(change)
-                  const isExpanded = latestChangeDrawerExpandedFiles[fileKey] ?? false
-                  const fileHasStats = hasVisibleFileChangeStats(change)
-                  return (
-                    <div
-                      key={fileKey}
-                      style={{
-                        borderTop: index > 0 ? `1px solid ${theme.chat.divider}` : 'none',
-                        background: theme.surface.panelMuted,
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (fileHasDiff) toggleLatestChangeDrawerFile(fileKey)
-                        }}
-                        style={{
-                          width: '100%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                          padding: '12px 14px',
-                          border: 'none',
-                          background: 'transparent',
-                          cursor: fileHasDiff ? 'pointer' : 'default',
-                          textAlign: 'left',
-                          color: theme.chat.text,
-                          fontFamily: fontSans,
-                          fontSize: 12,
-                          ...NON_SELECTABLE_UI_STYLE,
-                        }}
-                      >
-                        <span style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {change.path}
-                        </span>
-                        {fileHasStats && (
-                          <>
-                            <span style={{ color: theme.status.success, fontWeight: 600, flexShrink: 0 }}>
-                              +{change.additions}
-                            </span>
-                            <span style={{ color: theme.status.danger, fontWeight: 600, flexShrink: 0 }}>
-                              -{change.deletions}
-                            </span>
-                          </>
-                        )}
-                        <ChevronRight size={14} style={{
-                          transform: isExpanded ? 'rotate(90deg)' : 'none',
-                          transition: 'transform 0.15s',
-                          opacity: fileHasDiff ? 0.55 : 0,
-                          flexShrink: 0,
-                        }} />
-                      </button>
-                      {isExpanded && fileHasDiff && (
-                        <div style={{ borderTop: `1px solid ${theme.chat.divider}` }}>
-                          <DiffView
-                            diff={change.diff}
-                            path={change.path}
-                            fontSize={Math.max(10, monoSize - 2)}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  padding: '10px 14px 12px',
-                  borderTop: `1px solid ${theme.chat.divider}`,
-                  background: theme.surface.panelMuted,
-                }}>
-                  <button
-                    type="button"
-                    onClick={reviewLatestChanges}
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: theme.chat.textSecondary,
-                      fontSize: 11,
-                      fontFamily: fontSans,
-                      fontWeight: 500,
-                      cursor: 'pointer',
-                      padding: 0,
-                      ...NON_SELECTABLE_UI_STYLE,
-                    }}
-                  >
-                    Jump to message
-                  </button>
-                </div>
-              </div>
-            )}
-          </ChatComposerDrawerFrame>
-        )}
-
-        {queuedTurns.length > 0 && (() => {
-          // Count crash/error-looking items once per render so the summary
-          // row can call them out in red — urgent rows are rendered with a
-          // red left-bar when expanded, but when collapsed the only tell
-          // is the "N errors" suffix in the summary row.
-          const urgentCount = queuedTurns.filter(t => isUrgentQueuedContent(t.content)).length
-          const showCollapsed = queueCollapsed && queuedTurns.length >= 3
-          return (
-          <ChatComposerDrawerFrame
-            joinedToPrevious={Boolean(latestChangeDrawer)}
-            collapsed={showCollapsed}
-            style={{
-              // Match the "changes" drawer's indent + tucks the bottom edge under
-              // the composer so it reads as a drawer pulled out from behind it.
-              width: `calc(${CHAT_COMPOSER_WIDTH} - 24px)`,
-              minWidth: `calc(${CHAT_COMPOSER_MIN_WIDTH_STYLE} - 24px)`,
-              margin: '0 auto 0 auto',
-            }}
-          >
-            {/* Header / summary row. When collapsed it's the ONLY visible
-                row and clicking anywhere on it expands. When expanded it
-                becomes a compact toggle at the top so the user can tuck the
-                queue back away. */}
-            {queuedTurns.length >= 3 && (
-              <button
-                type="button"
-                onClick={() => setQueueCollapsed(v => !v)}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: showCollapsed ? '6px 14px' : '6px 14px',
-                  border: 'none',
-                  borderBottom: showCollapsed ? 'none' : `1px solid ${theme.chat.divider}`,
-                  background: 'transparent',
-                  color: theme.chat.textSecondary,
-                  cursor: 'pointer',
-                  fontFamily: fontSans,
-                  // Pin text to 11px regardless of the user's chat font —
-                  // this is UI chrome, not conversation content, so it should
-                  // match the composer toolbar pills rather than message body.
-                  fontSize: 11,
-                  // Tight line-height so the text's visual centre lines up
-                  // with the 14px icons on the same row (avoids the baseline
-                  // hang we had at 1.35).
-                  lineHeight: 1,
-                  textAlign: 'left',
-                  ...NON_SELECTABLE_UI_STYLE,
-                }}
-                title={showCollapsed ? 'Expand queued messages' : 'Collapse queued messages'}
-              >
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 14,
-                  height: 14,
-                  color: theme.chat.muted,
-                  flexShrink: 0,
-                }}>
-                  {showCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                </span>
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 14,
-                  height: 14,
-                  color: urgentCount > 0 ? theme.status.danger : theme.chat.muted,
-                  flexShrink: 0,
-                }}>
-                  {urgentCount > 0 ? <AlertTriangle size={12} /> : <MessageSquare size={12} />}
-                </span>
-                <span style={{
-                  flex: 1, minWidth: 0,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  lineHeight: 1,
-                }}>
-                  <span style={{ fontWeight: 600 }}>
-                    {queuedTurns.length} queued {queuedTurns.length === 1 ? 'message' : 'messages'}
-                  </span>
-                  {urgentCount > 0 && (
-                    <>
-                      <span style={{ color: theme.chat.muted }}>, </span>
-                      <span style={{ color: theme.status.danger, fontWeight: 600 }}>
-                        {urgentCount} {urgentCount === 1 ? 'error' : 'errors'}
-                      </span>
-                    </>
-                  )}
-                </span>
-              </button>
-            )}
-            {!showCollapsed && queuedTurns.map((turn, index) => {
-              const depth = turn.parentId ? 1 : 0
-              const isDraggingThis = draggingTurnId === turn.id
-              const dropHere = dragOverTurn?.id === turn.id ? dragOverTurn.mode : null
-              // Flag pasted error/warning/stack-trace dumps so the row can
-              // render with a red tint — makes it obvious at a glance that
-              // this queued turn is a crash report rather than a normal prompt.
-              const isUrgent = isUrgentQueuedContent(turn.content)
-              return (
-              <div
-                key={turn.id}
-                onDragOver={(ev) => {
-                  // Only accept our own internal queue-turn drags. The
-                  // custom mime type is set in onDragStart below.
-                  if (!ev.dataTransfer.types.includes('application/x-codesurf-queued-turn')) return
-                  if (draggingTurnId === turn.id) return
-                  ev.preventDefault()
-                  ev.stopPropagation()
-                  ev.dataTransfer.dropEffect = 'move'
-                  const rect = ev.currentTarget.getBoundingClientRect()
-                  const y = ev.clientY - rect.top
-                  const h = rect.height
-                  // Zone thresholds: top quarter → before, middle half → into,
-                  // bottom quarter → after. Child rows can't be nested further,
-                  // so dropping onto a child collapses to sibling mode.
-                  let mode: 'before' | 'after' | 'into'
-                  if (y < h * 0.25) mode = 'before'
-                  else if (y > h * 0.75) mode = 'after'
-                  else mode = turn.parentId ? 'after' : 'into'
-                  if (dragOverTurn?.id !== turn.id || dragOverTurn.mode !== mode) {
-                    setDragOverTurn({ id: turn.id, mode })
-                  }
-                }}
-                onDragLeave={(ev) => {
-                  // Only clear if the pointer actually left this row (not
-                  // just moved to a child element).
-                  const related = ev.relatedTarget as Node | null
-                  if (related && ev.currentTarget.contains(related)) return
-                  if (dragOverTurn?.id === turn.id) setDragOverTurn(null)
-                }}
-                onDrop={(ev) => {
-                  // Source-of-truth is the dataTransfer payload plus the
-                  // row's own id (from closure) and the cursor position —
-                  // NOT React state. Some browsers fire a dragleave between
-                  // the last dragover and drop, which would clear the
-                  // dragOverTurn state and leave us unable to reorder. The
-                  // data-transfer + geometry approach is immune to that.
-                  const draggedId = ev.dataTransfer.getData('application/x-codesurf-queued-turn')
-                    || ev.dataTransfer.getData('text/plain')
-                  if (!draggedId || draggedId === turn.id) return
-                  ev.preventDefault()
-                  ev.stopPropagation()
-                  const rect = ev.currentTarget.getBoundingClientRect()
-                  const y = ev.clientY - rect.top
-                  const h = rect.height
-                  let mode: 'before' | 'after' | 'into'
-                  if (y < h * 0.25) mode = 'before'
-                  else if (y > h * 0.75) mode = 'after'
-                  else mode = turn.parentId ? 'after' : 'into'
-                  reorderQueuedTurn(draggedId, turn.id, mode)
-                  setDragOverTurn(null)
-                  setDraggingTurnId(null)
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '6px 14px',
-                  paddingLeft: 14 + depth * 22,
-                  borderTop: index > 0 ? `1px solid ${theme.chat.divider}` : undefined,
-                  background: dropHere === 'into'
-                    ? theme.surface.hover
-                    : (isDraggingThis
-                      ? theme.surface.selection
-                      // Urgent rows get a soft red tint so a pasted crash/error
-                      // log stands out without drowning the rest of the queue.
-                      : (isUrgent ? `color-mix(in srgb, ${theme.status.danger} 18%, transparent)` : 'transparent')),
-                  // Top/bottom indicator lines for before/after drop zones.
-                  // Urgent rows additionally get a left accent bar in danger
-                  // color; if a drop indicator is active, it takes precedence.
-                  boxShadow: dropHere === 'before'
-                    ? `inset 0 2px 0 0 ${theme.accent.base}`
-                    : dropHere === 'after'
-                      ? `inset 0 -2px 0 0 ${theme.accent.base}`
-                      : (isUrgent ? `inset 3px 0 0 0 ${theme.status.danger}` : undefined),
-                  opacity: isDraggingThis ? 0.5 : 1,
-                  transition: 'background 0.12s, opacity 0.12s',
-                  position: 'relative',
-                }}
-              >
-                {/* Drag handle — native HTML5 DnD is initiated here; setting
-                    draggable on the row itself would steal text selection.
-                    Hit area is deliberately generous (24×24) with the grip
-                    icon visually centered, so users don't have to aim at
-                    the 14px glyph precisely. */}
-                <div
-                  draggable
-                  onDragStart={(ev) => {
-                    ev.stopPropagation()
-                    ev.dataTransfer.effectAllowed = 'move'
-                    // Custom mime type marks this as an internal queue-turn
-                    // drag so tile-level file-drop handlers can ignore it.
-                    // Keep text/plain for backwards compat and because some
-                    // drop targets only read text/plain.
-                    try {
-                      ev.dataTransfer.setData('application/x-codesurf-queued-turn', turn.id)
-                    } catch { /* older browsers reject custom types silently */ }
-                    ev.dataTransfer.setData('text/plain', turn.id)
-                    setDraggingTurnId(turn.id)
-                  }}
-                  onDragEnd={() => {
-                    setDraggingTurnId(null)
-                    setDragOverTurn(null)
-                  }}
-                  title="Drag to reorder — drop on a row to nest as a sub-item"
-                  style={{
-                    width: 24,
-                    height: 24,
-                    marginLeft: -4,
-                    marginRight: -4,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: theme.chat.muted,
-                    cursor: 'grab',
-                    flexShrink: 0,
-                    opacity: 0.6,
-                    borderRadius: 4,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                  onMouseEnter={(ev) => {
-                    ev.currentTarget.style.opacity = '1'
-                    ev.currentTarget.style.background = theme.surface.hover
-                  }}
-                  onMouseLeave={(ev) => {
-                    ev.currentTarget.style.opacity = '0.6'
-                    ev.currentTarget.style.background = 'transparent'
-                  }}
-                >
-                  <GripVertical size={14} />
-                </div>
-                <div style={{
-                  width: 18,
-                  height: 18,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: isUrgent ? theme.status.danger : theme.chat.muted,
-                  flexShrink: 0,
-                  ...NON_SELECTABLE_UI_STYLE,
-                }}>
-                  {isUrgent ? <AlertTriangle size={14} /> : <MessageSquare size={14} />}
-                </div>
-                <div
-                  title={isUrgent ? 'This queued message looks like a pasted error/crash log' : undefined}
-                  style={{
-                    minWidth: 0, flex: 1,
-                    color: isUrgent ? theme.status.danger : theme.chat.textSecondary,
-                    fontWeight: isUrgent ? 600 : undefined,
-                    fontSize: Math.max(12, fontSize),
-                    fontFamily: fontSans,
-                    lineHeight: 1.35,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {turn.preview}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleQueuedTurnSteer(turn)
-                  }}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: theme.chat.textSecondary,
-                    fontSize: 12,
-                    fontFamily: fontSans,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: 0,
-                    opacity: 1,
-                    flexShrink: 0,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                  title={isStreaming ? 'Send this message into the running stream' : 'Send this queued message now'}
-                >
-                  <CornerDownRight size={14} />
-                  <span>Steer</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const remaining = queuedTurns.filter(item => item.id !== turn.id)
-                    setQueuedTurns(remaining)
-                    flushQueueStateNow(remaining)
-                    logQueueEvent('delete', { queueId: turn.id })
-                  }}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: theme.chat.muted,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                    flexShrink: 0,
-                    ...NON_SELECTABLE_UI_STYLE,
-                  }}
-                  title="Remove queued message"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              )
-            })}
-          </ChatComposerDrawerFrame>
-          )
-        })()}
-
-        {/* Input bar */}
-        <ChatComposerWrap style={{
-          flexShrink: 0,
-          width: CHAT_COMPOSER_WIDTH,
-          minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
-          margin: isStartScreen ? '12px auto 6px auto' : '0 auto 6px auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-        }}>
-        <ChatComposerCard style={{
-        minHeight: CHAT_COMPOSER_MIN_HEIGHT,
-        border: isDropTarget ? `1px solid ${theme.accent.base}` : `1px solid ${composerBorder}`, borderRadius: 14,
-        // Keep the fill on the actual input surface. The dimensional edge is
-        // handled by ChatComposerCard's stacked shadow, not by painting a gray
-        // border colour across the whole composer.
-        background: isDropTarget ? theme.surface.accentSoft : composerBackground,
-        position: 'relative',
-        display: 'flex',
-        flexDirection: 'column',
-        boxShadow: isDropTarget
-          ? `0 0 0 1px ${theme.border.accent}, 0 0 22px ${theme.accent.soft}`
-          : theme.mode === 'light'
-            ? `0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent), 0 10px 28px color-mix(in srgb, ${theme.text.primary} 9%, transparent)`
-            : `0 10px 28px color-mix(in srgb, #000 18%, transparent)`,
-        transition: 'border-color 120ms ease, background 120ms ease, box-shadow 120ms ease',
-      }}>
-        <ChatComposerAutocompletePopup
-          popupRef={acRef}
-          autocompleteType={acType}
-          query={acQuery}
-          items={acItems}
-          activeIndex={acIndex}
+        <ChatTileComposer
+          isStartScreen={isStartScreen}
+          isDropTarget={isDropTarget}
+          composerBackground={composerBackground}
+          composerBorder={composerBorder}
+          acRef={acRef}
+          acType={acType}
+          acQuery={acQuery}
+          acItems={acItems}
+          acIndex={acIndex}
           fontSans={fontSans}
           fontMono={fontMono}
-          onHoverIndex={setAcIndex}
-          onSelect={selectAcItem}
-        />
-
-        <ChatComposerVoiceStatus
+          onAcHoverIndex={setAcIndex}
+          onAcSelect={selectAcItem}
           isDictating={isDictating}
           dictationText={dictationText}
           dictationError={dictationError}
           ttsState={ttsState}
           onStopVoicePlayback={() => bargeIn()}
-        />
-
-        <ChatComposerSurfaceHost
-          surfaces={openChatSurfaces}
-          activeSurface={activeChatSurface}
-          fontMono={fontMono}
-          showBuilderEnhance={activeChatSurface?.extId === 'sketch' && chatSurfaceMenu.some(entry => entry.extId === 'builder' || entry.surfaceId === 'builder')}
-          renderSurfaceIcon={renderChatSurfaceIcon}
+          openChatSurfaces={openChatSurfaces}
+          activeChatSurface={activeChatSurface}
+          chatSurfaceMenu={chatSurfaceMenu}
           onActivateSurface={setActiveChatSurfaceId}
           onCloseSurface={closeChatSurface}
           onOpenBuilderFromSketch={() => { void openBuilderFromSketch() }}
           onSetSurfaceIframeRef={setChatSurfaceIframeRef}
-        />
-
-        <ChatComposerAttachments
           attachments={attachments}
-          fontMono={fontMono}
           onRemoveAttachment={removeAttachment}
-        />
-
-        <ChatComposerInput
           textareaRef={textareaRef}
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onKeyUp={handleKeyUp}
-          placeholder={isDictating ? 'Listening...' : 'Message the agent, or use /commands and /skills'}
+          input={input}
           fontSize={fontSize}
-          fontFamily={fontSans}
-          lineHeight={fontLineHeight}
-          minHeight={CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT}
-          textColor={theme.chat.text}
+          fontLineHeight={fontLineHeight}
+          onInputChange={handleInputChange}
+          onInputKeyDown={handleKeyDown}
+          onInputKeyUp={handleKeyUp}
+          insertMenuRef={insertMenuRef}
+          showInsertMenu={showInsertMenu}
+          onToggleMenu={toggleMenu}
+          onAttachFiles={openAttachmentPicker}
+          mcpEnabled={mcpEnabled}
+          onToggleMcpEnabled={() => setMcpEnabled(v => !v)}
+          mcpServers={mcpServers}
+          disabledServers={disabledServers}
+          setDisabledServers={setDisabledServers}
+          peerToolNames={peerToolNames}
+          onOpenChatSurface={openChatSurface}
+          showProviderPicker={messages.length === 0}
+          providerMenuRef={providerMenuRef}
+          showProviderMenu={showProviderMenu}
+          providerEntries={providerEntries}
+          provider={provider}
+          onProviderChange={handleProviderChange}
+          modelMenuRef={modelMenuRef}
+          showModelMenu={showModelMenu}
+          currentProviderEntry={currentProviderEntry}
+          currentModelLabel={currentModel.label}
+          model={model}
+          modelFilter={modelFilter}
+          onModelFilterChange={setModelFilter}
+          optionNoun={optionNoun}
+          onSelectModel={(id) => { setModel(id); setShowModelMenu(false); setModelFilter('') }}
+          thinkingMenuRef={thinkingMenuRef}
+          showThinkingMenu={showThinkingMenu}
+          thinking={thinking}
+          thinkingOptions={thinkingOptions}
+          onSelectThinking={(id) => { setThinking(id); setShowThinkingMenu(false) }}
+          onOpenMiniChat={openMiniChat}
+          isStreaming={isStreaming}
+          lastActivityAtRef={lastActivityAtRef}
+          onToggleDictation={toggleDictation}
+          hasSendableDraft={hasSendableDraft}
+          onStopStreaming={stopStreaming}
+          onSendMessage={sendMessage}
+          locationMenuRef={locationMenuRef}
+          showLocationMenu={showLocationMenu}
+          executionTarget={executionTarget}
+          locationLabel={locationLabel}
+          localExecutionLabel={localExecutionLabel}
+          normalizedRepoRoot={normalizedRepoRoot}
+          remoteHosts={remoteHosts}
+          activeCloudHost={activeCloudHost}
+          onSelectLocalExecution={() => {
+            setExecutionTarget('local')
+            setShowLocationMenu(false)
+          }}
+          onSelectCloudExecution={() => {
+            if (remoteHosts.length > 0) {
+              setExecutionTarget('cloud')
+              setCloudHostId(activeCloudHost?.id ?? remoteHosts[0].id)
+            }
+            setShowLocationMenu(false)
+          }}
+          onSelectRemoteHost={hostId => {
+            setExecutionTarget('cloud')
+            setCloudHostId(hostId)
+            setShowLocationMenu(false)
+          }}
+          branchMenuRef={branchMenuRef}
+          showBranchMenu={showBranchMenu}
+          isGitRepo={isGitRepo}
+          filteredBranches={filteredBranches}
+          branchFilter={branchFilter}
+          branchMenuCreateEnabled={branchMenuCreateEnabled}
+          currentBranchLabel={currentBranchLabel}
+          projectFolderName={projectFolderName}
+          changedCount={gitStatus.changedCount}
+          onBranchFilterChange={setBranchFilter}
+          onSelectBranch={handleBranchSelect}
+          onCreateBranch={handleCreateBranch}
+          activeProjectPathLabel={activeProjectPathLabel}
+          onProjectFolderSwitch={handleProjectFolderSwitch}
+          modeMenuRef={modeMenuRef}
+          showModeMenu={showModeMenu}
+          mode={mode}
+          currentMode={currentMode}
+          modeOptions={modeOptions}
+          onSelectMode={modeId => {
+            setMode(modeId)
+            onChatModePreferenceChange?.(provider, modeId)
+            setShowModeMenu(false)
+          }}
+          planTodos={planTodos}
+          isPlanOpen={isPlanOpen}
+          onTogglePlanOpen={() => setIsPlanOpen(v => !v)}
+          contextMenuRef={contextMenuRef}
+          showContextMenu={showContextMenu}
+          contextUsageRatio={contextUsageRatio}
+          contextUsagePercent={contextUsagePercent}
+          estimatedContextTokens={estimatedContextTokens}
+          contextWindowLimit={contextWindowLimit}
+          systemOverheadTokens={systemOverheadTokens}
         />
-
-        {/* Primary toolbar */}
-        <ChatComposerPrimaryToolbar>
-          {/* Insert menu */}
-          <div ref={insertMenuRef} style={{ position: 'relative' }}>
-            <button
-              type="button"
-              aria-label="Open attachments and tools menu"
-              title="Open attachments and tools menu"
-              onClick={() => toggleMenu('insert')}
-              onMouseDown={e => e.preventDefault()}
-              style={{
-                width: 28,
-                height: 28,
-                minWidth: 28,
-                borderRadius: '50%',
-                border: 'none',
-                background: 'transparent',
-                color: showInsertMenu ? theme.chat.text : theme.chat.muted,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 0,
-                transition: 'background 0.15s, color 0.15s',
-                flexShrink: 0,
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.color = theme.chat.text
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = 'transparent'
-                e.currentTarget.style.color = showInsertMenu ? theme.chat.text : theme.chat.muted
-              }}
-            >
-              <Plus size={16} strokeWidth={2.2} />
-            </button>
-            {showInsertMenu && (
-              <MenuPortal anchorRef={insertMenuRef}>
-                <ComposerInsertMenu
-                  onAttachFiles={openAttachmentPicker}
-                  mcpEnabled={mcpEnabled}
-                  onToggleMcpEnabled={() => setMcpEnabled(v => !v)}
-                  mcpServers={mcpServers}
-                  disabledServers={disabledServers}
-                  setDisabledServers={setDisabledServers}
-                  peerToolNames={peerToolNames}
-                  chatSurfaces={chatSurfaceMenu}
-                  activeChatSurfaceId={activeChatSurface ? `${activeChatSurface.extId}:${activeChatSurface.surfaceId}` : null}
-                  onOpenChatSurface={openChatSurface}
-                  renderChatSurfaceIcon={renderChatSurfaceIcon}
-                />
-              </MenuPortal>
-            )}
-          </div>
-
-          {/* Provider — shown only before the conversation starts. Different
-              CLI agents have incompatible session formats (Claude SDK session
-              resumption vs. Codex subprocess streams vs. OpenCode HTTP), so
-              swapping mid-conversation would break history continuity. The
-              current provider is still implicit in the Model pill's icon.
-              Clear the conversation to expose the picker again. */}
-          {messages.length === 0 && (
-            <div ref={providerMenuRef} style={{ position: 'relative' }}>
-              <ToolbarPill
-                prefix={currentProviderEntry?.icon ?? <Bot size={TOOLBAR_PILL_ICON_SIZE} />}
-                label={currentProviderEntry?.label ?? 'Provider'}
-                active={showProviderMenu}
-                onClick={() => toggleMenu('provider')}
-                title="Choose the CLI agent (hidden once the conversation starts)"
-              />
-              {showProviderMenu && (
-                <MenuPortal anchorRef={providerMenuRef}>
-                  <Dropdown>
-                    {providerEntries.map(entry => (
-                      <DropdownItem
-                        key={entry.id}
-                        icon={entry.icon}
-                        label={entry.label}
-                        sublabel={entry.description}
-                        active={provider === entry.id}
-                        onClick={() => handleProviderChange(entry.id)}
-                      />
-                    ))}
-                  </Dropdown>
-                </MenuPortal>
-              )}
-            </div>
-          )}
-
-          {/* Model */}
-          <div ref={modelMenuRef} style={{ position: 'relative' }}>
-            <ToolbarPill
-              prefix={currentProviderEntry?.icon ?? <Bot size={TOOLBAR_PILL_ICON_SIZE} />}
-              label={currentModel.label}
-              active={showModelMenu}
-              onClick={() => toggleMenu('model')}
-            />
-            {showModelMenu && (
-              <MenuPortal anchorRef={modelMenuRef}>
-                <ModelDropdown
-                  models={currentProviderEntry?.models ?? []}
-                  activeId={model}
-                  filter={modelFilter}
-                  onFilterChange={setModelFilter}
-                  providerIcon={currentProviderEntry?.icon ?? <Bot size={TOOLBAR_PILL_ICON_SIZE} />}
-                  noun={optionNoun}
-                  onSelect={(id) => { setModel(id); setShowModelMenu(false); setModelFilter('') }}
-                />
-              </MenuPortal>
-            )}
-          </div>
-
-          {/* Thinking — brain + signal bars icon, label in dropdown */}
-          <div ref={thinkingMenuRef} style={{ position: 'relative' }}>
-            <ToolbarBtn
-              icon={<ThinkingIcon level={thinking} />}
-              tooltip={`Thinking: ${THINKING_OPTIONS.find(t => t.id === thinking)?.label ?? 'Adaptive'}`}
-              color={thinking === 'none' ? theme.chat.muted : theme.chat.textSecondary}
-              onClick={() => toggleMenu('thinking')}
-            />
-            {showThinkingMenu && (
-              <MenuPortal anchorRef={thinkingMenuRef}>
-                <Dropdown>
-                  {THINKING_OPTIONS.map(t => (
-                    <DropdownItem
-                      key={t.id}
-                      icon={<Brain size={11} />}
-                      label={t.label}
-                      sublabel={t.description}
-                      active={thinking === t.id}
-                      onClick={() => { setThinking(t.id); setShowThinkingMenu(false) }}
-                    />
-                  ))}
-                </Dropdown>
-              </MenuPortal>
-            )}
-          </div>
-
-          <div style={{ marginLeft: 'auto' }}>
-          <ToolbarBtn
-            icon={<Maximize2 size={TOOLBAR_ICON_SIZE - 1} />}
-            tooltip="Open this chat in a mini window"
-            color={theme.chat.textSecondary}
-            onClick={openMiniChat}
-          />
-          </div>
-
-          {/* Subtle liveness indicator — a breathing dot that sits next to the
-              Stop button while streaming. If the server has been quiet for
-              >2.5s we also surface a tiny "Xs" counter so the user knows the
-              turn is still alive even when nothing visible has changed. */}
-          {isStreaming && <StreamingLivenessIndicator lastActivityAtMs={lastActivityAtRef.current} />}
-
-          {/* Voice dictation — sits next to send/stop. Click toggles, or
-              hold spacebar in the empty composer for push-to-talk. The
-              underlying recognizer is the existing toggleDictation/isDictating
-              flow (Web Speech API in Electron's Chromium). */}
-          {!isStreaming && (
-            <button
-              onClick={toggleDictation}
-              onMouseDown={e => e.preventDefault()}
-              style={{
-                width: 28, height: 28, minWidth: 28, borderRadius: '50%',
-                background: isDictating ? theme.status.danger : theme.surface.panelMuted,
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                padding: 0, transition: 'background 0.15s, transform 0.15s', flexShrink: 0,
-                transform: isDictating ? 'scale(1.05)' : 'scale(1)',
-                animation: isDictating ? 'chat-pulse 1.4s ease-in-out infinite' : 'none',
-              }}
-              onMouseEnter={e => {
-                if (!isDictating) e.currentTarget.style.background = theme.chat.inputBorder ?? theme.surface.panelMuted
-              }}
-              onMouseLeave={e => {
-                if (!isDictating) e.currentTarget.style.background = theme.surface.panelMuted
-              }}
-              title={isDictating ? 'Stop recording (or release Space)' : 'Hold Space (empty composer) or click to dictate'}
-            >
-              <Mic
-                size={14}
-                color={isDictating ? theme.text.inverse : theme.chat.muted}
-                strokeWidth={2.2}
-              />
-            </button>
-          )}
-
-          {/* Stop / Send */}
-          {isStreaming ? (
-            <button
-              onClick={stopStreaming}
-              onMouseDown={e => e.preventDefault()}
-              style={{
-                width: 28, height: 28, minWidth: 28, borderRadius: '50%',
-                background: theme.text.primary, border: 'none',
-                cursor: 'pointer', display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                padding: 0, transition: 'opacity 0.15s', flexShrink: 0,
-                opacity: 0.92,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-              onMouseLeave={e => (e.currentTarget.style.opacity = '0.92')}
-              title="Stop generation"
-            >
-              <Square size={10} fill={theme.chat.background} color={theme.chat.background} />
-            </button>
-          ) : (
-            <button
-              onClick={sendMessage}
-              onMouseDown={e => e.preventDefault()}
-              disabled={!hasSendableDraft}
-              style={{
-                width: 28, height: 28, minWidth: 28, borderRadius: '50%',
-                background: hasSendableDraft ? theme.accent.base : theme.surface.panelMuted,
-                border: 'none',
-                cursor: hasSendableDraft ? 'pointer' : 'default',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                padding: 0, transition: 'background 0.15s', flexShrink: 0,
-              }}
-              onMouseEnter={e => { if (hasSendableDraft) e.currentTarget.style.background = theme.accent.hover }}
-              onMouseLeave={e => { if (hasSendableDraft) e.currentTarget.style.background = theme.accent.base }}
-              title="Send message"
-            >
-              <ArrowUp size={16} color={theme.text.inverse} strokeWidth={2.5} style={{ opacity: hasSendableDraft ? 1 : 0.3 }} />
-            </button>
-          )}
-        </ChatComposerPrimaryToolbar>
-        </ChatComposerCard>
-
-        {/* Secondary toolbar */}
-        <ChatComposerSecondaryToolbar>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <ChatComposerLocationMenu
-              anchorRef={locationMenuRef}
-              showMenu={showLocationMenu}
-              executionTarget={executionTarget}
-              locationLabel={locationLabel}
-              localExecutionLabel={localExecutionLabel}
-              normalizedRepoRoot={normalizedRepoRoot}
-              remoteHosts={remoteHosts}
-              activeCloudHost={activeCloudHost}
-              fontSans={fontSans}
-              onToggleMenu={() => toggleMenu('location')}
-              onSelectLocal={() => {
-                setExecutionTarget('local')
-                setShowLocationMenu(false)
-              }}
-              onSelectCloud={() => {
-                if (remoteHosts.length > 0) {
-                  setExecutionTarget('cloud')
-                  setCloudHostId(activeCloudHost?.id ?? remoteHosts[0].id)
-                }
-                setShowLocationMenu(false)
-              }}
-              onSelectRemoteHost={hostId => {
-                setExecutionTarget('cloud')
-                setCloudHostId(hostId)
-                setShowLocationMenu(false)
-              }}
-            />
-
-            <ChatComposerBranchMenu
-              anchorRef={branchMenuRef}
-              showMenu={showBranchMenu}
-              isGitRepo={isGitRepo}
-              branches={filteredBranches}
-              branchFilter={branchFilter}
-              branchCreateEnabled={branchMenuCreateEnabled}
-              currentBranchLabel={currentBranchLabel}
-              projectFolderName={projectFolderName}
-              normalizedRepoRoot={normalizedRepoRoot}
-              changedCount={gitStatus.changedCount}
-              fontSans={fontSans}
-              nonSelectableStyle={NON_SELECTABLE_UI_STYLE}
-              onToggleMenu={() => toggleMenu('branch')}
-              onBranchFilterChange={setBranchFilter}
-              onSelectBranch={handleBranchSelect}
-              onCreateBranch={handleCreateBranch}
-            />
-
-            <ChatComposerProjectPathButton
-              title={executionTarget === 'cloud' ? activeProjectPathLabel : `${activeProjectPathLabel} — click to switch folder`}
-              disabled={executionTarget === 'cloud'}
-              label={activeProjectPathLabel}
-              fontSans={fontSans}
-              onClick={handleProjectFolderSwitch}
-            />
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            <ChatComposerModeMenu
-              anchorRef={modeMenuRef}
-              showMenu={showModeMenu}
-              mode={mode}
-              currentMode={currentMode}
-              modeOptions={modeOptions}
-              onToggleMenu={() => toggleMenu('mode')}
-              onSelectMode={modeId => {
-                setMode(modeId)
-                onChatModePreferenceChange?.(provider, modeId)
-                setShowModeMenu(false)
-              }}
-            />
-
-            {/* Plan / Tasks chip — only visible when the agent has emitted a
-                TodoWrite block. Toggles the right-docked PlanPane. */}
-            {planTodos && planTodos.length > 0 && (
-              <PlanChip
-                todos={planTodos}
-                active={isPlanOpen}
-                onClick={() => setIsPlanOpen(v => !v)}
-              />
-            )}
-
-            {/* Context indicator sits in a 28×28 hit-box so its centre-line
-                aligns with the Stop/Send button in the primary toolbar above
-                (both buttons are now 28px wide with matching 8px container
-                padding → same centre X). The 18×18 visible dial is centred
-                inside via flex alignment. */}
-            <ChatComposerContextUsageDial
-              anchorRef={contextMenuRef}
-              showMenu={showContextMenu}
-              contextUsageRatio={contextUsageRatio}
-              contextUsagePercent={contextUsagePercent}
-              estimatedContextTokens={estimatedContextTokens}
-              contextWindowLimit={contextWindowLimit}
-              systemOverheadTokens={systemOverheadTokens}
-              composerBackground={composerBackground}
-              fontSans={fontSans}
-              nonSelectableStyle={NON_SELECTABLE_UI_STYLE}
-              onToggleMenu={() => toggleMenu('context')}
-            />
-          </div>
-        </ChatComposerSecondaryToolbar>
-        </ChatComposerWrap>
-      </div>
-      </div>
+      </ChatTileTranscriptColumn>
       {isPlanOpen && planTodos && planTodos.length > 0 && (
         <PlanPane
           todos={planTodos}

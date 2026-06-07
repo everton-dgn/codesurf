@@ -1,0 +1,206 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { createChatJobManager } from '../../bin/chat-jobs.mjs'
+
+const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
+const TEST_TMP_ROOT = join(ROOT_DIR, '.tmp', 'daemon-tests')
+
+async function makeTestTempDir(prefix) {
+  await mkdir(TEST_TMP_ROOT, { recursive: true })
+  return await mkdtemp(join(TEST_TMP_ROOT, prefix))
+}
+
+async function waitFor(check, timeoutMs = 5_000, intervalMs = 15) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const value = await check()
+    if (value) return value
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms`)
+}
+
+async function waitForCompletedJob(manager, jobId) {
+  return await waitFor(async () => {
+    const state = await manager.getJobState(jobId)
+    if (!state || state.status === 'running' || state.status === 'queued') return null
+    return state
+  })
+}
+
+async function readTimeline(homeDir, jobId) {
+  return (await readFile(join(homeDir, 'timelines', `${jobId}.jsonl`), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line))
+}
+
+function textDelta(text) {
+  return {
+    type: 'stream_event',
+    event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
+  }
+}
+
+// daemon-07: the full metadata file is debounced during a streaming turn, but
+// terminal/session events flush immediately. This test proves the debounce
+// never drops the durable final state: status, sessionId, and a lastSequence
+// that exactly matches the timeline are all correct after completion.
+test('daemon-07: debounced metadata stays consistent with the timeline after a multi-delta stream', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-loop-07-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdir(workspaceDir, { recursive: true })
+  t.after(async () => { await rm(homeDir, { recursive: true, force: true }) })
+
+  const manager = createChatJobManager({
+    homeDir,
+    claudeQuery: () => (async function* () {
+      for (const chunk of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
+        yield { ...textDelta(chunk), session_id: 'thread-07' }
+      }
+      yield { type: 'result', result: 'ok', session_id: 'thread-07', total_cost_usd: 0, num_turns: 1 }
+    })(),
+  })
+
+  const job = await manager.startJob({
+    cardId: 'card-07',
+    workspaceId: 'ws-07',
+    provider: 'claude',
+    model: 'claude-test',
+    mode: 'bypassPermissions',
+    workspaceDir,
+    messages: [{ role: 'user', content: 'stream please' }],
+  })
+
+  const completed = await waitForCompletedJob(manager, job.id)
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.error, null)
+  assert.equal(completed.sessionId, 'thread-07')
+
+  const timeline = await readTimeline(homeDir, job.id)
+  const lastSeq = timeline.at(-1)?.sequence
+  // The debounced final flush (forced by the terminal 'done') must equal the
+  // timeline's last sequence — i.e. no event was lost from the metadata.
+  assert.equal(completed.lastSequence, lastSeq)
+  assert.equal(timeline.filter(e => e.type === 'text').length, 8)
+  assert.equal(timeline.some(e => e.type === 'done'), true)
+})
+
+// daemon-01: the manager caps how many jobs execute concurrently; the overflow
+// sits in status 'queued' and drains FIFO as slots free. This test holds every
+// in-flight query open on a gate, proves only `maxConcurrentJobs` run at once
+// (the rest are 'queued'), then releases and proves all of them complete and
+// the cap was never exceeded.
+test('daemon-01: concurrency cap bounds running jobs and queues the overflow', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-loop-01-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdir(workspaceDir, { recursive: true })
+
+  let running = 0
+  let maxObserved = 0
+  let released = false
+  const pendingResolvers = []
+  const gate = () => new Promise(resolve => {
+    if (released) resolve()
+    else pendingResolvers.push(resolve)
+  })
+  const releaseAll = () => {
+    released = true
+    pendingResolvers.splice(0).forEach(r => r())
+  }
+  t.after(async () => {
+    releaseAll()
+    await rm(homeDir, { recursive: true, force: true })
+  })
+
+  const manager = createChatJobManager({
+    homeDir,
+    maxConcurrentJobs: 2,
+    claudeQuery: () => (async function* () {
+      running += 1
+      maxObserved = Math.max(maxObserved, running)
+      await gate()
+      running -= 1
+      yield { type: 'result', result: 'ok', session_id: 'cap', total_cost_usd: 0, num_turns: 1 }
+    })(),
+  })
+
+  const jobs = []
+  for (let i = 0; i < 5; i += 1) {
+    jobs.push(await manager.startJob({
+      cardId: `cap-${i}`,
+      workspaceId: 'ws-cap',
+      provider: 'claude',
+      model: 'claude-test',
+      mode: 'bypassPermissions',
+      workspaceDir,
+      messages: [{ role: 'user', content: `go ${i}` }],
+    }))
+  }
+
+  // Exactly two queries enter; the cap holds the other three back.
+  await waitFor(() => running >= 2)
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.equal(running, 2)
+  assert.equal(maxObserved, 2)
+
+  const midStates = await Promise.all(jobs.map(j => manager.getJobState(j.id)))
+  assert.equal(midStates.filter(s => s.status === 'running').length, 2)
+  assert.equal(midStates.filter(s => s.status === 'queued').length, 3)
+
+  // Drain: every job must complete, and the cap must never have been exceeded.
+  releaseAll()
+  for (const job of jobs) {
+    const done = await waitForCompletedJob(manager, job.id)
+    assert.equal(done.status, 'completed')
+  }
+  assert.equal(maxObserved, 2)
+})
+
+// daemon-05: the retention sweep prunes old terminal jobs (metadata + timeline)
+// while protecting recent ones, never-expired ones, and live/active jobs.
+test('daemon-05: sweepJobRetention prunes old terminal jobs but keeps recent/active ones', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-loop-05-')
+  await mkdir(join(homeDir, 'jobs'), { recursive: true })
+  await mkdir(join(homeDir, 'timelines'), { recursive: true })
+  t.after(async () => { await rm(homeDir, { recursive: true, force: true }) })
+
+  const manager = createChatJobManager({ homeDir })
+
+  const writeJob = async (id, status, completedAt) => {
+    await writeFile(join(homeDir, 'jobs', `${id}.json`), JSON.stringify({ id, status, completedAt }), 'utf8')
+    await writeFile(join(homeDir, 'timelines', `${id}.jsonl`), '{"type":"done"}\n', 'utf8')
+  }
+  const old = '2020-01-01T00:00:00.000Z'
+  const now = new Date().toISOString()
+  await writeJob('old-completed', 'completed', old)
+  await writeJob('old-failed', 'failed', old)
+  await writeJob('fresh-completed', 'completed', now)
+  await writeJob('still-running', 'running', null)
+
+  const jobExists = id => existsSync(join(homeDir, 'jobs', `${id}.json`))
+  const timelineExists = id => existsSync(join(homeDir, 'timelines', `${id}.jsonl`))
+
+  // keepRecent 0 → recency protection off; only the age filter applies.
+  const result = await manager.sweepJobRetention({ maxAgeMs: 60_000, keepRecent: 0 })
+
+  assert.equal(result.pruned, 2)
+  // Old terminal jobs are gone, with their timelines.
+  assert.equal(jobExists('old-completed'), false)
+  assert.equal(timelineExists('old-completed'), false)
+  assert.equal(jobExists('old-failed'), false)
+  // Fresh terminal job is within the TTL → kept.
+  assert.equal(jobExists('fresh-completed'), true)
+  // Active (non-terminal) job is never prunable, regardless of age.
+  assert.equal(jobExists('still-running'), true)
+
+  // keepRecent protects the N newest terminal jobs even when they are old.
+  await writeJob('old-completed', 'completed', old)
+  const protectedSweep = await manager.sweepJobRetention({ maxAgeMs: 60_000, keepRecent: 10 })
+  assert.equal(protectedSweep.pruned, 0)
+  assert.equal(jobExists('old-completed'), true)
+})

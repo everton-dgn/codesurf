@@ -1,13 +1,66 @@
 # Contex — Full Code Review Report
 
-**Date:** 2026-03-21  
-**Codebase:** ~18.8K LOC across 52 files  
+**Date:** 2026-03-21 (original) · **Updated:** 2026-06-07
+**Codebase:** ~92K LOC (June 2026)  
 **Reviewers:** 4 specialized agents (correctness, security, performance, maintainability)  
 **Findings:** 7 Critical, 9 High, 19 Medium, 14 Low
 
 ---
 
-## 🔴 Top 5 Priority Fixes
+## ✅ Post-hardening status (2026-06-07, branch `feature/hardening-wave-1`)
+
+| Original ID | Status | Notes |
+|-------------|--------|-------|
+| SEC-01 MCP zero auth | **FIXED** | Bearer enforced on `/mcp`, `/push`, `/inject`, SSE |
+| SEC-02 `/inject` | **FIXED** | Same auth gate + expanded auth tests |
+| SEC-03 FS unrestricted | **IMPROVED** | Default-on + one-time legacy migration; settings copy reflects opt-out |
+| SEC-04 Terminal spawn | **FIXED** | Shell + agent CLI allowlists |
+| SEC-05 Git exec | **FIXED** | `execFile`, branch validation |
+| SEC-06 sandbox:false | **MITIGATED** | Guest webviews hardened; main window documented |
+| SEC-07 Stream SSRF | **FIXED** | `assertSafeStreamUrl` blocks private IPs |
+| SEC-08 MCP body limit | **FIXED** | 1MB cap |
+| SEC-09 CORS wildcard | **FIXED** | Origin reflection on MCP |
+| RISK-01 Extension activation | **FIXED** | Power-tier extensions default off until enabled |
+| BUG-01 Undo broken | **FIXED** | Pre-change snapshots |
+| BUG-02 removeAllListeners | **FIXED** | Per-handler `removeListener` |
+| BUG-03 Stale viewport undo | **FIXED** | Uses refs |
+| BUG-04 addTile race | **FIXED** | Functional `setTiles` |
+| BUG-05 closeTile race | **FIXED** | Functional updater + `viewportRef` in hook |
+| BUG-07 setTiles read abuse | **FIXED** | Uses refs |
+| PERF TileChrome re-render | **IMPROVED** | `React.memo` + snap RAF throttle |
+| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` + `useCanvasGlow` + group frames + keyboard/persist hooks |
+| BUG-13 canvas double-click | **FIXED** | Spawns terminal on empty canvas, not only bare surface element |
+| BUG-10 OpenCode start race | **FIXED** | `startPromise` retained until success; cleared on failure/shutdown |
+| BUG-06 Kanban terminal race | **FIXED** | `CardAgentRunner` uses cancel flag; no stale post-unmount writes |
+| BUG-16 Kanban listener churn | **FIXED** | MCP/SSE/bus handlers use refs; subscriptions stable across card edits |
+| BUG-17 workspaceDir ignored | **FIXED** | `CardAgentRunner` re-runs when `workspaceDir` or `launchCmd` changes |
+| PERF-03 dot grid glow | **FIXED** | RAF-throttled updates in `useCanvasGlow` (wave 10) |
+| PERF-04 drag auto-save | **FIXED** | Deferred canvas persist until drag ends |
+| ARCH mcp-server.ts | **IMPROVED** | Tool modules + registry (2237 → 791 LOC) |
+| ARCH ChatTile.tsx | **IMPROVED** | Composer menus, live activity, autocomplete hooks |
+| CI build + e2e | **FIXED** | PR workflow runs `npm run build` + `npm run test:e2e` |
+| TEST contex-relay | **FIXED** | Relay vitest suite wired into root `npm test` |
+
+**Tests:** 402 unit (incl. relay) · **E2E:** 10/10 · **Typecheck:** clean · **Build:** pass
+
+### Hardening waves (local commits on `feature/hardening-wave-1`)
+
+| Wave | Focus |
+|------|--------|
+| 1–2 | MCP auth, preload listener cleanup, undo fixes, canvas E2E |
+| 3 | Guest webview hardening (SEC-06), FS scoping defaults, ChatTile composer extraction |
+| 4 | Extension activation policy, CI build+e2e, MCP auth test expansion |
+| 5 | `useTileMounting` hook, relay in `npm test`, Electrobun security parity, audit refresh |
+| 6 | Panel tree utils, tile clipboard/shortcuts hooks, FS scoping migration, ChatTile dream/composer hooks, Electrobun extension policy bridge |
+| 7 | Group manager + canvas keyboard hooks, ChatTile attachment/autocomplete hooks, Electrobun ext:list scan, legacy FS migration E2E |
+| 8 | `CanvasGroupFrames` extraction, keyboard undo/redo, drag-deferred canvas persist, Electrobun ext:list-sidebar |
+| 9 | `useCanvasDragSync` extraction, skills skipped-location UX, SEC-03 settings copy, `fs:probeDir` IPC |
+| 10 | `useCanvasGlow` extraction, BUG-13 canvas double-click, BUG-10 OpenCode `startPromise` race |
+| 11 | Kanban listener stability (BUG-16), CardAgentRunner cleanup (BUG-06/17) |
+
+---
+
+## 🔴 Top 5 Priority Fixes (original — March 2026)
 
 1. **Add auth to MCP server** (SEC-01 + SEC-02 + SEC-09) — Bearer token + restricted CORS
 2. **Fix removeAllListeners in preload** (BUG-02) — Use removeListener(channel, handler)
@@ -141,7 +194,7 @@
 
 ### Medium Impact (3)
 
-- **PERF-04:** Auto-save can fire during drag operations
+- **PERF-04:** ~~Auto-save can fire during drag operations~~ **FIXED** (wave 8)
 - **PERF-05:** Full state snapshots in undo stack (~25MB with 50 tiles)
 - **PERF-06:** Minimap redraws 60x/sec during pan/zoom
 

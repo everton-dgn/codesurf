@@ -15,6 +15,7 @@ type ExtensionListEntry = {
   ui?: import('../../../shared/types').ExtensionManifest['ui']
   enabled: boolean
   contributes?: import('../../../shared/types').ExtensionManifest['contributes']
+  capabilities?: import('../../../shared/types').ExtensionCapabilityRequest[]
   dirPath?: string | null
 }
 
@@ -82,6 +83,28 @@ export function ExtensionsGallery({ onClose, workspacePath, onSettingsChange }: 
       requestAnimationFrame(() => setReady(true))
     }
   }, [workspacePath])
+
+  const [installing, setInstalling] = useState(false)
+  // Marketplace: install a plugin the user picks from disk (.vsix / .zip). The
+  // native file dialog runs in main; on success we force a rescan so the new
+  // plugin appears (disabled by default, capability-gated) and notify the app.
+  const installFromFile = useCallback(async () => {
+    setInstalling(true)
+    setError(null)
+    try {
+      const result = await window.electron.extensions.installFromFile?.()
+      if (result?.ok) {
+        await load({ force: true })
+        notify()
+      } else if (result && !result.canceled && result.error) {
+        setError(result.error)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setInstalling(false)
+    }
+  }, [load])
 
   const enableExtensionsGlobally = useCallback(async () => {
     setEnablingGlobal(true)
@@ -185,7 +208,7 @@ export function ExtensionsGallery({ onClose, workspacePath, onSettingsChange }: 
       <div
         onClick={e => e.stopPropagation()}
         role="dialog"
-        aria-label="Extensions Gallery"
+        aria-label="Plugins Gallery"
         style={{
           // Fixed footprint so the dialog doesn't snap to a larger size
           // the moment the first `extensions.list()` call resolves.
@@ -215,11 +238,26 @@ export function ExtensionsGallery({ onClose, workspacePath, onSettingsChange }: 
         }}>
           <Package size={20} style={{ color: theme.accent.base }} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: fonts.size + 2, fontWeight: 700 }}>Extensions</div>
+            <div style={{ fontSize: fonts.size + 2, fontWeight: 700 }}>Plugins</div>
             <div style={{ fontSize: fonts.secondarySize, color: theme.text.secondary }}>
-              Browse and install capabilities. Extensions integrate into toolbars, menus and context actions once enabled.
+              Browse and install capabilities. Plugins integrate into toolbars, menus and context actions once enabled.
             </div>
           </div>
+          <button
+            onClick={installFromFile}
+            disabled={installing}
+            title="Install a plugin from a .vsix or .zip file"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', borderRadius: 8,
+              border: `1px solid ${theme.border.default}`,
+              background: theme.surface.panelMuted,
+              color: theme.text.primary, cursor: installing ? 'progress' : 'pointer',
+              fontSize: fonts.size, fontWeight: 600, opacity: installing ? 0.6 : 1,
+            }}
+          >
+            <Plus size={14} /> {installing ? 'Installing…' : 'Add from file'}
+          </button>
           <button
             onClick={onClose}
             title="Close"
@@ -302,7 +340,7 @@ export function ExtensionsGallery({ onClose, workspacePath, onSettingsChange }: 
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Search extensions"
+              placeholder="Search plugins"
               style={{
                 flex: 1,
                 border: 'none',
@@ -333,9 +371,9 @@ export function ExtensionsGallery({ onClose, workspacePath, onSettingsChange }: 
             }}>
               <AlertTriangle size={15} style={{ color: theme.status.warning, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>Extensions are globally disabled</div>
+                <div style={{ fontWeight: 600 }}>Plugins are globally disabled</div>
                 <div style={{ fontSize: fonts.secondarySize, color: theme.text.secondary }}>
-                  Turn them back on to browse, add, and use available extensions.
+                  Turn them back on to browse, add, and use available plugins.
                 </div>
               </div>
               <button
@@ -462,6 +500,36 @@ function ExtensionCard({
       }}>
         {ext.description ?? 'No description provided.'}
       </div>
+      {ext.capabilities && ext.capabilities.length > 0 && (
+        <div
+          title={ext.capabilities.map(c => `${c.name}${c.reason ? ` — ${c.reason}` : ''}`).join('\n')}
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: Math.max(9, fonts.secondarySize - 2),
+            color: theme.text.disabled,
+          }}
+        >
+          <span style={{ letterSpacing: 0.3 }}>Wants</span>
+          {ext.capabilities.map(c => (
+            <span
+              key={c.name}
+              style={{
+                padding: '1px 5px',
+                borderRadius: 4,
+                background: theme.surface.panel,
+                border: `1px solid ${theme.border.subtle}`,
+                color: theme.text.secondary,
+                fontWeight: 600,
+              }}
+            >
+              {c.name}
+            </span>
+          ))}
+        </div>
+      )}
       <button
         onClick={onToggle}
         disabled={busy}

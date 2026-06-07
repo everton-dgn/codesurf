@@ -180,6 +180,59 @@ export function closeToRightInLeaf(root: PanelNode, panelId: string, tileId: str
   return update(root)
 }
 
+export function findFirstLeafId(node: PanelNode): string | null {
+  if (node.type === 'leaf') return node.id
+  for (const child of node.children) {
+    const found = findFirstLeafId(child)
+    if (found) return found
+  }
+  return null
+}
+
+export function findLeafIdContainingTile(root: PanelNode, tileId: string): string | null {
+  return findLeafByTileId(root, tileId)?.id ?? null
+}
+
+export function collectPanelLeaves(root: PanelNode): PanelLeaf[] {
+  if (root.type === 'leaf') return [root]
+  return root.children.flatMap(collectPanelLeaves)
+}
+
+export function replaceLeafInPanelTree(
+  root: PanelNode,
+  targetPanelId: string,
+  replacement: PanelNode,
+): PanelNode {
+  if (root.type === 'leaf') {
+    return root.id === targetPanelId ? replacement : root
+  }
+  return {
+    ...root,
+    children: root.children.map(child => replaceLeafInPanelTree(child, targetPanelId, replacement)),
+  }
+}
+
+export function sanitizePanelLayout(
+  root: PanelNode | null | undefined,
+  tileIds: string[],
+): { layout: PanelNode | null, fallbackActivePanelId: string | null } {
+  if (!root) return { layout: null, fallbackActivePanelId: null }
+
+  const validTileIds = new Set(tileIds)
+  let next: PanelNode | null = root
+
+  for (const tileId of getAllTileIds(root)) {
+    if (!validTileIds.has(tileId)) {
+      next = next ? (removeTileFromTree(next, tileId) ?? createLeaf([])) : createLeaf([])
+    }
+  }
+
+  return {
+    layout: next,
+    fallbackActivePanelId: next ? findFirstLeafId(next) : null,
+  }
+}
+
 export function splitLeaf(node: PanelNode, targetPanelId: string, tileId: string, zone: DockZone): PanelNode {
   if (node.type === 'leaf') {
     if (node.id !== targetPanelId) return node

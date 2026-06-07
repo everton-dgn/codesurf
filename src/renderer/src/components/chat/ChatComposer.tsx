@@ -483,7 +483,7 @@ export function ChatComposerAutocompletePopup({
   onHoverIndex,
   onSelect,
 }: {
-  popupRef: React.RefObject<HTMLDivElement>
+  popupRef: React.RefObject<HTMLDivElement | null>
   autocompleteType: 'slash' | 'mention' | null
   query: string
   items: ChatComposerAutocompleteItem[]

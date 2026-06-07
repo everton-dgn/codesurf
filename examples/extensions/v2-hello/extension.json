@@ -1,0 +1,59 @@
+{
+  "id": "v2-hello",
+  "name": "Hello (v2)",
+  "version": "1.0.0",
+  "description": "Reference plugin showing the v2 manifest: commands (palette + /slash), a footer item, a settings section, and a layout preset. Copy into ~/.codesurf/extensions or a workspace .contex/extensions to try it.",
+  "author": "codesurf",
+  "manifestVersion": 2,
+  "kind": "community",
+  "engines": { "codesurf": ">=0.1.0" },
+  "tier": "safe",
+  "execution": "iframe",
+  "render": "mcp-ui",
+  "capabilities": [
+    { "name": "chat", "reason": "insert a greeting into the active chat" }
+  ],
+  "contributes": {
+    "commands": [
+      { "id": "hello.greet", "title": "Hello: Say hi", "slash": "hi", "keybinding": "mod+k h", "category": "Hello", "run": { "method": "greet" } },
+      { "id": "hello.openPanel", "title": "Hello: Open panel", "category": "Hello", "run": { "action": "openPanel" } }
+    ],
+    "footer": [
+      { "id": "hello.status", "label": "Hello", "icon": "sparkles", "render": "mcp-ui", "position": "right", "order": 10 }
+    ],
+    "panels": [
+      { "id": "hello.side", "title": "Hello", "icon": "sparkles", "region": "right", "render": "mcp-ui", "order": 20 }
+    ],
+    "settingsSections": [
+      {
+        "id": "hello",
+        "title": "Hello",
+        "order": 10,
+        "items": [
+          { "kind": "toggle", "key": "loud", "label": "Loud mode", "default": false, "description": "Greet in uppercase." },
+          { "kind": "text", "key": "name", "label": "Your name", "default": "world", "placeholder": "world" },
+          { "kind": "select", "key": "tone", "label": "Tone", "default": "friendly", "options": [ { "value": "friendly", "label": "Friendly" }, { "value": "formal", "label": "Formal" } ] },
+          { "kind": "button", "label": "Say hi now", "command": "hello.greet" }
+        ]
+      }
+    ],
+    "layoutPresets": [
+      {
+        "id": "hello.review",
+        "title": "Hello Review",
+        "icon": "layout",
+        "layout": {
+          "type": "split",
+          "direction": "horizontal",
+          "sizes": [0.3, 0.7],
+          "children": [
+            { "type": "leaf", "slots": [ { "tileType": "chat", "label": "Sessions" } ] },
+            { "type": "leaf", "slots": [ { "tileType": "chat", "label": "Chat" } ] }
+          ]
+        }
+      }
+    ]
+  },
+  "main": "main.js",
+  "permissions": ["network"]
+}

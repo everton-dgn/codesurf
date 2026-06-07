@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { ContexRelay } from './relay'
 import { RelayRuntime } from './runtime'
-import type { RelayAgentExecutor, RelayTurnInput } from './types'
+import type { RelayAgentExecutor } from './types'
 
 /**
  * Integration tests for the relay system.
@@ -378,7 +378,6 @@ describe('integration', () => {
     it('should spawn agents and send initial task', async () => {
       await relay.init()
 
-      const executorCalls: string[] = []
       const mockExecutor: RelayAgentExecutor = {
         runTurn: vi.fn().mockResolvedValue(JSON.stringify({ ready: true, status: 'ready' })),
       }
@@ -411,10 +410,8 @@ describe('integration', () => {
     it('should trigger agent on direct message via event', async () => {
       await relay.init()
 
-      let executorCalled = false
       const mockExecutor: RelayAgentExecutor = {
         runTurn: vi.fn().mockImplementation(async () => {
-          executorCalled = true
           return JSON.stringify({ ready: true, status: 'ready' })
         }),
       }

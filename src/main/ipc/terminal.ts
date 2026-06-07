@@ -275,7 +275,7 @@ function flushTerminalToBus(tileId: string): void {
 
 export function registerTerminalIPC(): void {
   // Register PTY notifier — updates tmux status bar for peer state
-  setTerminalNotifier((tileId: string, line: string) => {
+  setTerminalNotifier((tileId: string, _line: string) => {
     const session = terminals.get(tileId)
     if (!session?.tmuxSession) return
     updateTmuxStatus(session.tmuxSession, tileId)
@@ -364,7 +364,7 @@ export function registerTerminalIPC(): void {
       } catch { /* no skills config */ }
 
       // Auto-allow contex MCP tools for Claude Code CLI launches
-      const isClaude = launchBin.includes('claude')
+      const isClaude = launchBin?.includes('claude') ?? false
       if (isClaude) {
         const mcpToolNames = [
           'mcp__contex__canvas_create_tile', 'mcp__contex__canvas_open_file',

@@ -4,16 +4,16 @@ import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { initWorkspaces, registerWorkspaceIPC } from './ipc/workspace'
+import { initWorkspaces, registerWorkspaceIPC, migrateFsScopingIfNeeded, migrateGenerationKeysToKeychain } from './ipc/workspace'
 import { registerFsIPC } from './ipc/fs'
 import { registerCanvasIPC } from './ipc/canvas'
 import { registerTerminalIPC } from './ipc/terminal'
-import { startMCPServer, getMCPPort, setExtensionRegistryProvider } from './mcp-server'
+import { startMCPServer, getMCPPort, getMCPToken, buildContexHttpMcpServerEntry, setExtensionRegistryProvider } from './mcp-server'
 import { registerAgentsIPC } from './ipc/agents'
 import { registerStreamIPC } from './ipc/stream'
 import { registerGitIPC } from './ipc/git'
 import { registerBusIPC } from './ipc/bus'
-import { registerChatIPC } from './ipc/chat'
+import { registerChatIPC, killAllChatProcesses } from './ipc/chat'
 import { registerActivityIPC } from './ipc/activity'
 import { registerCollabIPC, stopAllCollabWatchers } from './ipc/collab'
 import { registerTileContextIPC } from './ipc/tile-context'
@@ -45,6 +45,10 @@ import { ensureInitialIndex } from './db/thread-indexer'
 import { ensureInitialJobIndex } from './db/job-indexer'
 import { stopAllRelayServices } from './relay/service'
 import { normalizeSafeExternalUrl } from './utils/externalUrl'
+import {
+  attachGuestWebviewSecurityHandlers,
+  createMainWindowWebPreferences,
+} from './secure-web-preferences'
 // browserTile BrowserView IPC was removed — renderer uses <webview> tag directly
 
 const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 8192
@@ -116,6 +120,8 @@ interface MainWindowOptions {
   workspaceId?: string | null
   workspacePicker?: boolean
   nativeTabOwner?: BrowserWindow | null
+  /** Dev Sandbox: an isolated CodeSurf instance for testing plugins (dashed border). */
+  devSandbox?: boolean
 }
 
 interface MiniChatWindowRequest {
@@ -138,6 +144,7 @@ function getMainWindowQuery(opts?: MainWindowOptions): Record<string, string> | 
   const workspaceId = typeof opts?.workspaceId === 'string' ? opts.workspaceId.trim() : ''
   if (workspaceId) query.workspaceId = workspaceId
   if (opts?.workspacePicker) query.workspacePicker = '1'
+  if (opts?.devSandbox) query.devSandbox = '1'
   return Object.keys(query).length > 0 ? query : undefined
 }
 
@@ -292,7 +299,7 @@ function applyRuntimeAppBranding(): void {
   const iconPath = resolveAppIconPath()
   if (iconPath && process.platform === 'darwin') {
     try {
-      app.dock.setIcon(nativeImage.createFromPath(iconPath))
+      app.dock?.setIcon(nativeImage.createFromPath(iconPath))
     } catch (err) {
       console.warn('[app] Failed to set dock icon:', err)
     }
@@ -351,7 +358,7 @@ function installMediaPermissionHandlers(): void {
   if (!defaultSession) return
 
   defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return permission === 'media' || permission === 'display-capture'
+    return permission === 'media' || (permission as string) === 'display-capture'
   })
 
   defaultSession.setPermissionRequestHandler(async (_webContents, permission, callback) => {
@@ -411,14 +418,9 @@ function createWindow(opts?: MainWindowOptions): BrowserWindow {
     ...(process.platform === 'darwin'
       ? { transparent: false, backgroundColor: '#1e1e1e', vibrancy: undefined, visualEffectState: undefined }
       : getWindowAppearanceOptions()),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webviewTag: true
-    }
+    webPreferences: createMainWindowWebPreferences(join(__dirname, '../preload/index.js')),
   })
+  attachGuestWebviewSecurityHandlers(win.webContents)
   const windowId = win.webContents.id
   installRenderPerfProbe(win)
 
@@ -523,14 +525,9 @@ function createMiniChatWindow(owner: BrowserWindow | null, request: MiniChatWind
     skipTaskbar: false,
     ...(iconPath ? { icon: iconPath } : {}),
     ...getWindowAppearanceOptions(),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webviewTag: true,
-    },
+    webPreferences: createMainWindowWebPreferences(join(__dirname, '../preload/index.js')),
   })
+  attachGuestWebviewSecurityHandlers(win.webContents)
 
   miniChatWindows.set(key, win)
   windowTitles.set(win.webContents.id, typeof request.title === 'string' && request.title.trim() ? request.title.trim() : 'Mini Chat')
@@ -694,6 +691,11 @@ app.whenReady().then(async () => {
   registerChromeSyncIPC()
   registerLocalProxyIPC()
 
+  // gap-03: migrate any pre-existing plaintext generation keys into the keychain
+  // in the background (idempotent; never blocks boot).
+  void migrateGenerationKeysToKeychain()
+  void migrateFsScopingIfNeeded()
+
   // Keep the extension system fully lazy. Do not scan or boot extension hosts
   // at startup; load them only when an extension tile or explicit management UI asks.
   extensionRegistry = new ExtensionRegistry({
@@ -725,8 +727,10 @@ app.whenReady().then(async () => {
     console.log(`[MCP] Kanban tools available at http://127.0.0.1:${port}`)
   }).catch(err => console.error('[MCP] Failed to start:', err))
 
-  // Expose MCP port to renderer
+  // Expose MCP port + bearer token to renderer (token stays in main; renderer
+  // uses it only for loopback HTTP calls that cannot set EventSource headers).
   ipcMain.handle('mcp:getPort', () => getMCPPort())
+  ipcMain.handle('mcp:getToken', () => getMCPToken())
 
   // MCP config read/write
   const { join: pjoin } = await import('path')
@@ -788,8 +792,11 @@ app.whenReady().then(async () => {
         if (name === 'contex' && contexBase) return contexBase
         return undefined
       })
-      if (contexBase && !normalizedServers['contex']) {
-        normalizedServers['contex'] = { type: 'http', url: contexBase }
+      if (contexBase) {
+        normalizedServers['contex'] = {
+          ...(normalizedServers['contex'] ?? {}),
+          ...buildContexHttpMcpServerEntry(contexBase),
+        }
       }
       return { ...cfg, mcpServers: normalizedServers }
     } catch { return null }
@@ -808,7 +815,8 @@ app.whenReady().then(async () => {
         ...customServers
       }
       cfg.updatedAt = new Date().toISOString()
-      await fsP.writeFile(mcpConfigPath, JSON.stringify(cfg, null, 2))
+      await fsP.writeFile(mcpConfigPath, JSON.stringify(cfg, null, 2), { mode: 0o600 })
+      await fsP.chmod(mcpConfigPath, 0o600).catch(() => {})
       return cfg
     } catch (e) { return null }
   })
@@ -865,8 +873,11 @@ app.whenReady().then(async () => {
         if (name === 'contex' && contexBase) return contexBase
         return undefined
       })
-      if (contexBase && !normalizedGlobal['contex']) {
-        normalizedGlobal['contex'] = { type: 'http', url: contexBase }
+      if (contexBase) {
+        normalizedGlobal['contex'] = {
+          ...(normalizedGlobal['contex'] ?? {}),
+          ...buildContexHttpMcpServerEntry(contexBase),
+        }
       }
       const normalizedWorkspace = normalizeMcpServers(wsServers)
 
@@ -937,6 +948,8 @@ app.whenReady().then(async () => {
 
   // Window management
   ipcMain.handle('window:new', () => { createWindow({ fresh: true }); return null })
+  // Dev Sandbox: a fresh, visibly-marked instance for testing plugins in isolation.
+  ipcMain.handle('window:openDevSandbox', () => { createWindow({ fresh: true, devSandbox: true, workspacePicker: true }); return null })
   ipcMain.handle('window:newTab', (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender) ?? getFocusedMainWindow()
     if (process.platform === 'darwin') {
@@ -1125,6 +1138,7 @@ app.on('before-quit', () => {
   stopAllCollabWatchers()
   extensionRegistry?.deactivateAll()
   stopAllRelayServices()
+  killAllChatProcesses()
   closeDb()
 })
 

@@ -208,6 +208,25 @@ export interface ExtensionManifest {
   author?: string
   tier: 'safe' | 'power'
   ui?: ExtensionUIContrib
+
+  // ─── v2 plugin fields (all optional; absent ⇒ legacy v1 behaviour) ──────────
+  // See docs/plugins/00-architecture.md. The two trust/render axes are orthogonal
+  // and derived from tier/ui.mode when omitted (see normalizeManifestAxes).
+  /** Schema/format version. Absent or 1 ⇒ legacy v1 manifest. */
+  manifestVersion?: 1 | 2
+  /** Gallery classification. */
+  kind?: PluginKind
+  /** Host compatibility (semver range), e.g. ">=0.1.0". */
+  engines?: { codesurf?: string }
+  /** Trust/runtime of plugin logic. Alias of tier: safe⇒iframe, power⇒node. */
+  execution?: PluginExecutionMode
+  /** Default surface render mode. Alias of ui.mode: custom⇒iframe, native⇒mcp-ui. */
+  render?: PluginRenderMode
+  /** Host capabilities requested; consented at enable/install time. Supersedes permissions[]. */
+  capabilities?: ExtensionCapabilityRequest[]
+  /** Other plugin ids this plugin needs loaded first (load order + typed access). */
+  dependsOn?: string[]
+
   contributes?: {
     tiles?: ExtensionTileEntry[]
     chatSurfaces?: ExtensionChatSurfaceEntry[]
@@ -216,12 +235,110 @@ export interface ExtensionManifest {
     settings?: ExtensionSettingContrib[]
     actions?: ExtensionActionContrib[]
     context?: ExtensionContextDeclaration
+    // ─── v2 contributions (all optional) ──────────────────────────────────────
+    commands?: ExtensionCommandContrib[]
+    footer?: ExtensionFooterContrib[]
+    panels?: ExtensionPanelContrib[]
+    settingsSections?: ExtensionSettingsSectionContrib[]
+    layoutPresets?: ExtensionLayoutPresetContrib[]
+    agentExtensions?: ExtensionAgentExtensionContrib[]
   }
   main?: string
   permissions?: string[]
   _path?: string
   _enabled?: boolean
   _adapter?: string
+}
+
+// ─── v2 plugin enums + contribution shapes ───────────────────────────────────
+
+export type PluginKind = 'codesurf' | 'community' | 'agent'
+/** Trust/runtime axis (orthogonal to render). worker = utilityProcess (future). */
+export type PluginExecutionMode = 'iframe' | 'node' | 'worker'
+/** Paint axis (orthogonal to execution). mcp-ui = MCP-UI resource themed by the host. */
+export type PluginRenderMode = 'iframe' | 'component' | 'mcp-ui'
+
+/** Named host capabilities a plugin can request (consented at enable time). */
+export type PluginCapabilityName =
+  | 'fs' | 'network' | 'shell' | 'chat' | 'daemon' | 'chrome' | 'secrets' | 'relay' | 'canvas'
+
+export interface ExtensionCapabilityRequest {
+  name: PluginCapabilityName | string
+  /** Shown to the user at the consent step. */
+  reason?: string
+  /** Optional scoping hint (e.g. fs path globs). Interpretation is capability-specific. */
+  scope?: string[]
+}
+
+/** A named action: appears in the Command Palette and optionally as a /slash command. */
+export interface ExtensionCommandContrib {
+  id: string
+  title: string
+  /** Show in the command palette (default true). */
+  palette?: boolean
+  /** Expose as a composer /slash command (the token after the slash). */
+  slash?: string
+  icon?: string
+  category?: string
+  /** Default keybinding, e.g. "mod+k c". User-rebindable. */
+  keybinding?: string
+  /** Focus/context predicate controlling availability. */
+  when?: string
+  /** What runs: a power-tier ipc method on this plugin, or a declared action name. */
+  run?: { method?: string; action?: string }
+}
+
+/** Status-bar / footer item. */
+export interface ExtensionFooterContrib {
+  id: string
+  entry?: string
+  label?: string
+  icon?: string
+  render?: PluginRenderMode
+  position?: 'left' | 'right'
+  order?: number
+}
+
+/** A panel mounted in a host region (sidebar / bottom). */
+export interface ExtensionPanelContrib {
+  id: string
+  title: string
+  entry?: string
+  icon?: string
+  region?: 'left' | 'right' | 'bottom'
+  render?: PluginRenderMode
+  order?: number
+}
+
+export type ExtensionSettingControl =
+  | { kind: 'toggle'; key: string; label: string; default?: boolean; description?: string }
+  | { kind: 'text'; key: string; label: string; default?: string; placeholder?: string; description?: string }
+  | { kind: 'number'; key: string; label: string; default?: number; min?: number; max?: number; step?: number; description?: string }
+  | { kind: 'select'; key: string; label: string; default?: string; options: Array<{ value: string; label: string }>; description?: string }
+  | { kind: 'button'; label: string; command: string; description?: string }
+
+/** A settings section a plugin contributes to the Settings surface. */
+export interface ExtensionSettingsSectionContrib {
+  id: string
+  title: string
+  icon?: string
+  order?: number
+  items: ExtensionSettingControl[]
+}
+
+/** A named, reusable layout a plugin can register and users/agents can open. */
+export interface ExtensionLayoutPresetContrib {
+  id: string
+  title: string
+  icon?: string
+  /** Reuses the existing LayoutTemplate tree shape (view kinds resolved via the registry). */
+  layout: LayoutTemplateNode
+}
+
+/** A module that shapes the in-process agent runtime (guardrails / custom tools). */
+export interface ExtensionAgentExtensionContrib {
+  /** Path (relative to the plugin root) to the agent-extension entry module. */
+  path: string
 }
 
 export interface ExtensionTileEntry {
@@ -236,6 +353,8 @@ export interface ExtensionTileEntry {
 export interface ExtensionTileContrib extends ExtensionTileEntry {
   extId: string
   uiMode?: 'native' | 'custom'
+  /** v2 render mode (iframe|component|mcp-ui); resolved from tier/ui.mode when absent. */
+  render?: PluginRenderMode
 }
 
 export interface ExtensionChatSurfaceEntry {
@@ -443,6 +562,10 @@ export interface AppSettings {
   // Chrome sync
   chromeSyncEnabled: boolean
   chromeSyncProfileDir: string | null
+  // risk-06: when non-empty, cookie injection into browser-tile partitions is
+  // scoped to these domains (and their subdomains). Empty = inject all (the
+  // pre-scoping behavior) with a warning until the approval UI populates it.
+  chromeSyncApprovedDomains: string[]
   // Where rendered links should open by default.
   linkOpenMode: 'browser-block' | 'external-browser'
   // Host-selection policy for chat and background execution.
@@ -466,6 +589,8 @@ export interface AppSettings {
   settingsPanelExtIds: string[]
   // Master kill-switch: hide all extensions from sidebar and footer
   extensionsDisabled: boolean
+  // First-run onboarding: true once the user has dismissed the welcome flow.
+  onboardingComplete?: boolean
   // Status bar health readout: 'compact' (default) shows a dot + HEALTH label
   // with hover detail; 'verbose' shows the full heap bar and numbers inline.
   statusBarHealth: 'compact' | 'verbose'
@@ -483,6 +608,14 @@ export interface AppSettings {
   // separately in the encrypted secrets store; this struct holds only the
   // non-secret configuration (provider choice, voice id, lang, etc.).
   voice?: VoiceSettings
+  security: {
+    /** When true, fs IPC paths must fall under a workspace project root or CONTEX_HOME. */
+    restrictFsToWorkspaceRoots: boolean
+    /** One-time marker after legacy default-off installs are migrated to scoping-on. */
+    fsScopingMigrated?: boolean
+    /** Set when the user explicitly disables scoping in Settings. */
+    fsScopingUserOptedOut?: boolean
+  }
 }
 
 export interface VoiceSettings {
@@ -566,6 +699,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   chromeSyncEnabled: false,
   chromeSyncProfileDir: null,
+  chromeSyncApprovedDomains: [],
   linkOpenMode: 'browser-block',
   execution: {
     mode: 'auto',
@@ -670,6 +804,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hiddenFromSidebarExtIds: [],
   settingsPanelExtIds: [],
   extensionsDisabled: false,
+  onboardingComplete: false,
   statusBarHealth: 'compact',
   extensionsGalleryEnabled: true,
   storage: {
@@ -685,6 +820,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     spokifyModel: 'claude-haiku-4-5-20251001',
     autoSpeak: 'off',
     bargeIn: true,
+  },
+  security: {
+    restrictFsToWorkspaceRoots: false,
   },
 }
 
@@ -779,6 +917,10 @@ export function withDefaultSettings(input: Partial<AppSettings> | null | undefin
       ...DEFAULT_SETTINGS.storage,
       ...(settings.storage ?? {}),
     },
+    security: {
+      ...DEFAULT_SETTINGS.security,
+      ...(settings.security ?? {}),
+    },
     generationProviders,
     // Resolve fonts: new 3-token system, with legacy migration
     fonts: resolveFonts(
@@ -791,6 +933,64 @@ export function withDefaultSettings(input: Partial<AppSettings> | null | undefin
   base.canvasGlowRadius = Math.max(50, Math.min(200, base.canvasGlowRadius ?? DEFAULT_SETTINGS.canvasGlowRadius))
   base.themeContrast = Math.max(-1, Math.min(1, Number.isFinite(base.themeContrast) ? base.themeContrast : 0))
   return base
+}
+
+/** Defaults for first launch when no settings.json exists yet. */
+export function withFreshInstallDefaults(): AppSettings {
+  return withDefaultSettings({
+    security: {
+      restrictFsToWorkspaceRoots: true,
+      fsScopingMigrated: true,
+    },
+  })
+}
+
+/** Turn on workspace FS scoping during first-run before onboarding completes. */
+export function applyNewInstallSecurityDefaults(settings: AppSettings): AppSettings {
+  if (settings.security.restrictFsToWorkspaceRoots) return settings
+  if (settings.onboardingComplete !== false) return settings
+  return {
+    ...settings,
+    security: {
+      ...settings.security,
+      restrictFsToWorkspaceRoots: true,
+    },
+  }
+}
+
+/** One-time migration: legacy installs that never opted out get workspace scoping enabled. */
+export function applyFsScopingMigration(settings: AppSettings): AppSettings {
+  if (settings.security.fsScopingMigrated) return settings
+  if (settings.security.fsScopingUserOptedOut) {
+    return {
+      ...settings,
+      security: {
+        ...settings.security,
+        fsScopingMigrated: true,
+      },
+    }
+  }
+  if (settings.security.restrictFsToWorkspaceRoots) {
+    return {
+      ...settings,
+      security: {
+        ...settings.security,
+        fsScopingMigrated: true,
+      },
+    }
+  }
+  return {
+    ...settings,
+    security: {
+      ...settings.security,
+      restrictFsToWorkspaceRoots: true,
+      fsScopingMigrated: true,
+    },
+  }
+}
+
+export function normalizeLoadedSettings(settings: AppSettings): AppSettings {
+  return applyFsScopingMigration(applyNewInstallSecurityDefaults(settings))
 }
 
 export interface Config {
@@ -817,6 +1017,11 @@ export interface TileState {
   borderRadius?: number
   launchBin?: string
   launchArgs?: string[]
+  // Set/read at runtime by App.tsx's auto-agent discovery loop (it writes
+  // `autoAgentMode: true/false` onto tiles and reads `tile.autoAgentMode`), but
+  // was never declared here — so the reads at App.tsx:4093/5198 were typed as a
+  // non-existent property. Declared to match the established runtime behavior.
+  autoAgentMode?: boolean
 }
 
 const CURVIER_BLOCK_RADIUS_STEPS = [0, 3, 4, 6, 8, 12, 16, 24, 32, 40] as const

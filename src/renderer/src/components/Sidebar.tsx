@@ -750,7 +750,7 @@ function SidebarSearchPalette({
               }}
             >
               <span style={{ display: 'flex', color: 'currentColor', opacity: 0.75 }}>{getSessionAgentIcon(session)}</span>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: Math.max(12, fonts.size), fontWeight: 650 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: Math.max(12, fonts.size), fontWeight: 400 }}>
                 {formatSessionTitleForSidebar(session.title, 90)}
               </span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: theme.text.disabled, fontSize: Math.max(11, fonts.secondarySize), maxWidth: 150 }}>
@@ -1502,11 +1502,19 @@ export function Sidebar({
       }
 
       const results = await Promise.all(
-        [...targets.values()].map(target =>
-          window.electron.canvas.setSessionArchived(target.workspaceId, target.id, archived)
+        [...targets.values()].map(target => {
+          // Stable identity key so archive state survives the main-process
+          // session merge (which can re-key the same chat under a different
+          // entry id). Mirrors the server's sessionArchiveIdentityKey and the
+          // dedup keyFor above. Undefined when there's no sessionId → server
+          // falls back to the raw entry id.
+          const targetKey = target.sessionId
+            ? `sid:${getSessionAgentKey(target)}:${target.sessionId}`
+            : undefined
+          return window.electron.canvas.setSessionArchived(target.workspaceId, target.id, archived, targetKey)
             .catch(() => ({ ok: false }))
             .then(result => ({ target, ok: Boolean(result?.ok) }))
-        ),
+        }),
       )
 
       const succeeded = new Set(

@@ -8,7 +8,6 @@
  * Keep visually consistent: all icons render at 24x24 viewBox so the caller
  * can request any pixel size without re-tuning paths.
  */
-import React from 'react'
 import { Bot, FileText } from 'lucide-react'
 
 export interface BrandIconProps {
@@ -33,13 +32,24 @@ export function CodexIcon({ size = 12, color = 'currentColor' }: BrandIconProps)
 }
 
 export function HermesIcon({ size = 12, color = 'currentColor' }: BrandIconProps): JSX.Element {
+  // Hermes' winged helmet (petasos): dome + brim with wings sweeping off each side.
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2L9 7h6l-3-5z" />
-      <path d="M4 10c0-1 .5-2 2-2h12c1.5 0 2 1 2 2v2c0 1-.5 2-2 2H6c-1.5 0-2-1-2-2v-2z" />
-      <path d="M8 14v5M16 14v5" />
-      <path d="M6 19h4M14 19h4" />
-      <circle cx="12" cy="11" r="1" fill={color} />
+      <path d="M6.5 13a5.5 5.5 0 0 1 11 0" />
+      <path d="M5 13h14" />
+      <path d="M6.5 9.5C3.5 8 1.5 8.5 1 9c1.2.4 2.4.7 3.6.8" />
+      <path d="M17.5 9.5C20.5 8 22.5 8.5 23 9c-1.2.4-2.4.7-3.6.8" />
+    </svg>
+  )
+}
+
+export function PiIcon({ size = 12, color = 'currentColor' }: BrandIconProps): JSX.Element {
+  // The Greek letter π — the agent's namesake.
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7h16" />
+      <path d="M8 7v10" />
+      <path d="M16 7v7c0 1.5.8 2.5 2.5 2.5" />
     </svg>
   )
 }
@@ -84,6 +94,8 @@ export const SESSION_SOURCE_BRAND_ICONS: Record<string, (props: BrandIconProps) 
   openclaw: OpenClawIcon,
   opencode: OpenCodeIcon,
   hermes: HermesIcon,
+  csagent: PiIcon,
+  pi: PiIcon,
 }
 
 export function getSessionSourceIcon(source: string, size = 14, color = 'currentColor'): JSX.Element {

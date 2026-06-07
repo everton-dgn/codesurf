@@ -5,7 +5,6 @@ import { useAppFonts } from '../FontContext'
 import { renderExtensionIcon } from './extensionIcons'
 import { useTileTodos, type TileTodoItem } from '../state/tileTodosStore'
 import {
-  addTabToLeaf,
   createLeaf,
   pinTabInLeaf,
   removeTileFromTree,
@@ -18,8 +17,6 @@ import {
 
 const PANEL_SPLIT_GUTTER_PX = 6
 const PANEL_SHELL_RADIUS_PX = 16
-const PANEL_LEAF_RADIUS_PX = 12
-
 interface PanelCornerRadii {
   topLeft: number
   topRight: number
@@ -244,7 +241,6 @@ interface CtxMenu { tileId: string; tileType: string; x: number; y: number }
 
 function TabBar({ tabs, activeTab, previewTabId = null, panelId, onActivate, onPinTab, onClose, onTabMouseDown, getTileType, getTileIcon, onSplitNew, onCloseOthers, onCloseToRight }: TabBarProps): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Selected tab fill: in light mode it's a slightly tinted paper (anchor on

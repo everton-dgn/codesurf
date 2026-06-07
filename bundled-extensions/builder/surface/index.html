@@ -103,17 +103,13 @@
     flex-shrink: 0;
   }
 
+  /* history-select = themed base <select> (bg/border/color/focus from the kit) + pill shape. */
   .history-select {
     max-width: 190px;
     height: 26px;
     padding: 0 8px;
     border-radius: 999px;
-    border: 1px solid var(--ct-border, rgba(0,0,0,.1));
-    background: var(--ct-panel-2, rgba(0,0,0,.06));
-    color: var(--ct-text, #111);
-    font: inherit;
     font-size: 11px;
-    outline: none;
   }
 
   .history-select:disabled {
@@ -190,29 +186,10 @@
     flex-shrink: 0;
   }
 
-  .control-btn,
-  .segment-btn,
-  .send-btn {
-    appearance: none;
-    border: 1px solid var(--ct-border, rgba(0,0,0,.1));
-    background: var(--ct-panel-2, rgba(0,0,0,.06));
-    color: var(--ct-text, #111);
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
-  }
-
-  .control-btn:hover,
-  .segment-btn:hover,
-  .send-btn:hover {
-    background: var(--ct-hover, rgba(0,0,0,.08));
-    border-color: var(--ct-border-2, rgba(0,0,0,.16));
-  }
-
+  /* control-btn = themed base <button> (bg/border/color/hover from the kit) + compact geometry. */
   .control-btn {
     height: 28px;
     padding: 0 9px;
-    border-radius: 10px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -473,6 +450,11 @@
     flex-shrink: 0;
   }
 
+  .send-btn:hover:not(:disabled) {
+    background: var(--ct-accent, #4f46e5);
+    opacity: 0.88;
+  }
+
   .send-btn:disabled {
     opacity: 0.5;
     cursor: default;
@@ -699,18 +681,18 @@
         <div class="ct-toolbar-title">⚙ Builder settings</div>
       </div>
       <div class="settings-body">
-        <label>
-          <div class="ct-toolbar-title" style="font-size:11px;margin-bottom:6px;">API Key</div>
+        <div class="ct-field">
+          <label class="ct-field-label" for="settApiKey">API Key</label>
           <input id="settApiKey" type="password" placeholder="sk-or-... or sk-...">
-        </label>
-        <label>
-          <div class="ct-toolbar-title" style="font-size:11px;margin-bottom:6px;">Model</div>
+        </div>
+        <div class="ct-field">
+          <label class="ct-field-label" for="settModel">Model</label>
           <input id="settModel" type="text" placeholder="anthropic/claude-sonnet-4">
-        </label>
-        <label>
-          <div class="ct-toolbar-title" style="font-size:11px;margin-bottom:6px;">API Base URL</div>
+        </div>
+        <div class="ct-field">
+          <label class="ct-field-label" for="settBaseUrl">API Base URL</label>
           <input id="settBaseUrl" type="text" placeholder="https://openrouter.ai/api/v1">
-        </label>
+        </div>
       </div>
       <div class="settings-actions">
         <button id="settingsCancelBtn" type="button">Cancel</button>

@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useTheme } from '../ThemeContext'
 import { useAppFonts } from '../FontContext'
 import { useLayoutTemplates } from '../hooks/useLayoutTemplates'
-import type { LayoutTemplate, LayoutTemplateNode, LayoutTemplateSlot, TileType } from '../../../shared/types'
+import type { LayoutTemplate, LayoutTemplateNode, TileType } from '../../../shared/types'
 
 
 // ─── Tile definitions ────────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ function InteractiveTree({ node, path, onDropOnLeaf, onDragLeaf, hoverPath, hove
 
 // ─── Mini preview for saved templates ────────────────────────────────────────
 
-function MiniPreview({ node }: { node: LayoutTemplateNode }): JSX.Element {
+export function MiniPreview({ node }: { node: LayoutTemplateNode }): JSX.Element {
   const theme = useTheme()
   const dividerColor = theme.border.strong
   if (node.type === 'leaf') {
@@ -313,7 +313,7 @@ function MiniPreview({ node }: { node: LayoutTemplateNode }): JSX.Element {
 
 // ─── Main LayoutBuilder ─────────────────────────────────────────────────────
 
-export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Element {
+export function LayoutBuilder({ onAddTile: _onAddTile, onLaunchTemplate }: Props): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
   const { templates, addTemplate, updateTemplate, deleteTemplate } = useLayoutTemplates()
@@ -324,7 +324,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
 
   // Drag state — either from picker or from within a card
   const [dragType, setDragType] = useState<string | null>(null)
-  const [dragFrom, setDragFrom] = useState<{ cardIdx: number; path: number[] } | null>(null)
+  const [, setDragFrom] = useState<{ cardIdx: number; path: number[] } | null>(null)
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null)
   const [hoverCard, setHoverCard] = useState<number | null>(null)
   const [hoverLeafPath, setHoverLeafPath] = useState<number[] | null>(null)
@@ -364,7 +364,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
     autoSaveTimer.current = setTimeout(async () => {
       const currentCards = cardsRef.current
-      const existingIds = templates.map(t => t.id)
+      void templates.map(t => t.id)
       for (let i = 0; i < currentCards.length; i++) {
         const card = currentCards[i]
         const existingTemplate = templates[i]
@@ -506,7 +506,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
   const totalPages = Math.max(1, Math.ceil(cards.length / CARDS_PER_PAGE))
   const [currentPage, setCurrentPage] = useState(0)
   const pageStart = currentPage * CARDS_PER_PAGE
-  const pageCards = cards.slice(pageStart, pageStart + CARDS_PER_PAGE)
+  void cards.slice(pageStart, pageStart + CARDS_PER_PAGE)
 
   // Add a new page if all cards on the last page have content
   const addPageIfNeeded = useCallback(() => {
@@ -557,7 +557,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
           gridTemplateRows: 'repeat(3, auto)',
           gap: 10, width: '100%',
         }}>
-          {GRID_MAP.map((relIdx, gridPos) => {
+          {GRID_MAP.map((relIdx, _gridPos) => {
             if (relIdx === -1) {
               // Center: tile picker
               return (
@@ -687,7 +687,7 @@ export function LayoutBuilder({ onAddTile, onLaunchTemplate }: Props): JSX.Eleme
                   ) : (
                     <div style={{ flex: 1, display: 'flex', padding: 3, position: 'relative' }}>
                       <InteractiveTree
-                        node={card.tree}
+                        node={card.tree!}
                         path={[]}
                         onDropOnLeaf={() => {}}
                         onDragLeaf={isEditing ? (type, path) => startDrag(type, { preventDefault: () => {}, stopPropagation: () => {}, clientX: 0, clientY: 0 } as any, cardIdx, path) : () => {}}

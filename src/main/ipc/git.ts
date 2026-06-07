@@ -6,6 +6,17 @@ import path from 'node:path'
 
 const execFileAsync = promisify(execFile)
 
+// Reject branch names that git would parse as options (leading '-') or that
+// contain control characters. execFile already prevents shell-metachar
+// injection, but a name like `--foo` would still be interpreted as a git flag.
+function assertSafeBranchName(name: string): string {
+  const trimmed = String(name ?? '').trim()
+  if (!trimmed) throw new Error('Empty branch name')
+  if (trimmed.startsWith('-')) throw new Error('Invalid branch name: leading dash')
+  if (/\p{Cc}/u.test(trimmed)) throw new Error('Invalid branch name: control character')
+  return trimmed
+}
+
 export type GitStatus = 'modified' | 'untracked' | 'added' | 'deleted' | 'renamed' | 'conflict'
 
 export interface GitFileStatus {
@@ -109,9 +120,10 @@ export function registerGitIPC(): void {
       if (!existsSync(resolvedDir) || !statSync(resolvedDir).isDirectory()) {
         return { ok: false, error: 'Directory not found' }
       }
+      const branch = assertSafeBranchName(branchName)
       const { stdout: rootRaw } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: resolvedDir })
       const root = rootRaw.trim()
-      await execFileAsync('git', ['checkout', branchName], { cwd: root })
+      await execFileAsync('git', ['checkout', '--end-of-options', branch], { cwd: root })
       return { ok: true }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : 'checkout-failed' }
@@ -124,9 +136,10 @@ export function registerGitIPC(): void {
       if (!existsSync(resolvedDir) || !statSync(resolvedDir).isDirectory()) {
         return { ok: false, error: 'Directory not found' }
       }
+      const branch = assertSafeBranchName(branchName)
       const { stdout: rootRaw } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd: resolvedDir })
       const root = rootRaw.trim()
-      await execFileAsync('git', ['checkout', '-b', branchName], { cwd: root })
+      await execFileAsync('git', ['checkout', '-b', branch], { cwd: root })
       return { ok: true }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : 'create-branch-failed' }

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '../ThemeContext'
 import { useFontTokens, useAppFonts } from '../FontContext'
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT } from '../utils/appLaunchRequests'
+import { PluginSurface } from './PluginSurface'
 
 const el = (window as any).electron
 
@@ -52,8 +53,13 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
   const pendingActionResultsRef = useRef<Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>>(new Map())
   const extensionChatCardsRef = useRef<Set<string>>(new Set())
   const handleRpcRef = useRef<((method: string, params: any) => Promise<any>) | null>(null)
+  // P1 capability gate — host-side enforcement for gated RPC namespaces. Fetched
+  // once extId resolves; null means "not yet known" (treated as ungated).
+  const capabilityGateRef = useRef<{ enforced: boolean; granted: string[] } | null>(null)
 
   const [entryUrl, setEntryUrl] = useState<string | null>(null)
+  const [renderMode, setRenderMode] = useState<string>('iframe')
+  const [mcpHtml, setMcpHtml] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [extId, setExtId] = useState<string | null>(null)
@@ -202,7 +208,28 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
     return peers.filter(peer => peer.peerId)
   }, [connectedPeers, workspaceId])
 
+  // Fetch the plugin's capability gate once its id is known, so handleRpc can
+  // reject gated namespaces the plugin wasn't granted (P1 host-side enforcement).
+  useEffect(() => {
+    if (!extId) return
+    let cancelled = false
+    void el.extensions?.capabilityGate?.(extId)
+      .then((gate: { enforced: boolean; granted: string[] }) => { if (!cancelled) capabilityGateRef.current = gate })
+      .catch(() => { /* default ungated on failure */ })
+    return () => { cancelled = true }
+  }, [extId])
+
   const handleRpc = useCallback(async (method: string, params: any) => {
+    // P1 capability gate: chat/relay/canvas RPCs require the same-named
+    // capability. The sandboxed iframe can only reach these via this dispatcher,
+    // so rejecting here is authoritative. Ungated plugins (no declared caps) pass.
+    const ns = method.split('.')[0]
+    if ((ns === 'chat' || ns === 'relay' || ns === 'canvas')) {
+      const gate = capabilityGateRef.current
+      if (gate?.enforced && !gate.granted.includes(ns)) {
+        throw new Error(`Plugin "${extId}" is not granted the "${ns}" capability`)
+      }
+    }
     switch (method) {
       case 'tile.getState':
         if (!workspaceId) return null
@@ -287,6 +314,21 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
         if (!extId) return false
         await el.extensions?.setSettings?.(extId, params ?? {})
         return true
+      }
+
+      case 'store.get': {
+        if (!extId) return {}
+        return el.extensions?.storeGet?.(extId)
+      }
+
+      case 'store.set': {
+        if (!extId) return {}
+        return el.extensions?.storeSet?.(extId, params?.patch ?? {})
+      }
+
+      case 'store.replace': {
+        if (!extId) return {}
+        return el.extensions?.storeReplace?.(extId, params?.value ?? {})
       }
 
       case 'ext.invoke': {
@@ -484,6 +526,17 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
         }
 
         setExtId(match.extId)
+        setRenderMode(match.render ?? 'iframe')
+
+        // render:'mcp-ui' tiles paint via PluginSurface (AppRenderer) instead of a
+        // raw iframe — fetch the guest HTML and skip the contex-ext:// url path.
+        if (match.render === 'mcp-ui') {
+          const h = await el.extensions?.surfaceHtml?.(match.extId, 'tile', extType)
+          setMcpHtml(typeof h === 'string' ? h : '')
+          setError(null)
+          setLoading(false)
+          return
+        }
 
         // Read manifest actions and register them immediately (no iframe RPC needed)
         if (match.actions && Array.isArray(match.actions)) {
@@ -707,6 +760,19 @@ export function ExtensionTile({ tileId, extType, width, height, workspaceId, wor
         background: extensionSurfaceBackground,
       }}>
         {error}
+      </div>
+    )
+  }
+
+  if (renderMode === 'mcp-ui') {
+    return (
+      <div ref={containerRef} style={{
+        position: 'relative',
+        width: '100%', height: '100%',
+        overflow: 'hidden',
+        background: extensionSurfaceBackground,
+      }}>
+        <PluginSurface extId={extId ?? extType} render="mcp-ui" html={mcpHtml ?? ''} surfaceId={extType} />
       </div>
     )
   }

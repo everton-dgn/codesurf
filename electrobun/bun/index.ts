@@ -7,10 +7,15 @@ import { basename, dirname, join } from 'node:path'
 import { ApplicationMenu, BrowserView, BrowserWindow, Utils } from 'electrobun/bun'
 import type { CodeSurfElectrobunRPC } from '../../src/shared/electrobun-rpc.ts'
 import type { ExecutionHostRecord, ExecutionPreference, ProjectRecord, Workspace, WorkspaceRecord } from '../../src/shared/types.ts'
-import { DEFAULT_SETTINGS, withDefaultSettings } from '../../src/shared/types.ts'
+import { DEFAULT_SETTINGS, normalizeLoadedSettings, withDefaultSettings, withFreshInstallDefaults } from '../../src/shared/types.ts'
 import { buildHermesChatArgs, buildOpenClawAgentArgs, buildOpenCodeRunArgs, sanitizeAgentCliDiagnostic } from '../../src/main/agents/agent-cli-contracts.ts'
 import { CONTEX_HOME, WORKSPACES_DIR } from '../../src/main/paths.ts'
 import { getDefaultElectrobunInvokeResponse } from '../../src/electrobun/browser/electron-facade.ts'
+import {
+  formatExtensionSidebarResponse,
+  listExtensionsForBridge,
+  scanExtensionManifests,
+} from '../../src/main/extensions/light-scan.ts'
 import { createElectrobunDbRuntime } from './runtime-db.ts'
 import { builtInDaemonHosts, createElectrobunDaemonRuntime, sanitizeDaemonStatusError, summarizeDaemonDashboard } from './runtime-daemon.ts'
 import { parseClaudeStreamJsonLine, parseCodexJsonLine, parseOpenClawOutput, parseOpenCodeJsonLine, type ElectrobunStreamEvent } from './chat-streams.ts'
@@ -471,11 +476,15 @@ async function appendQueuedMessageEvent(payload: any): Promise<boolean> {
 }
 
 async function readSettings(): Promise<unknown> {
-  const raw = await readJson<{ settings?: Partial<typeof DEFAULT_SETTINGS> } | Partial<typeof DEFAULT_SETTINGS>>(SETTINGS_PATH, DEFAULT_SETTINGS)
-  if (raw && typeof raw === 'object' && 'settings' in raw) {
-    return withDefaultSettings(raw.settings ?? {})
+  try {
+    const raw = await readJson<{ settings?: Partial<typeof DEFAULT_SETTINGS> } | Partial<typeof DEFAULT_SETTINGS>>(SETTINGS_PATH, DEFAULT_SETTINGS)
+    if (raw && typeof raw === 'object' && 'settings' in raw) {
+      return normalizeLoadedSettings(withDefaultSettings(raw.settings ?? {}))
+    }
+    return normalizeLoadedSettings(withDefaultSettings(raw as Partial<typeof DEFAULT_SETTINGS>))
+  } catch {
+    return withFreshInstallDefaults()
   }
-  return withDefaultSettings(raw as Partial<typeof DEFAULT_SETTINGS>)
 }
 
 async function writeSettings(settings: unknown): Promise<unknown> {
@@ -1550,11 +1559,37 @@ async function handleInvoke(channel: string, args: unknown[] = []): Promise<unkn
         return { ok: false, error: 'Electrobun packaging does not use electron-updater.' }
 
       case 'ext:list':
-      case 'ext:list-sidebar':
-      case 'ext:list-tiles':
-      case 'ext:list-chat-surfaces':
-      case 'ext:context-menu-items':
       case 'extensions:list':
+        return await listExtensionsForBridge()
+      case 'ext:list-sidebar': {
+        const workspacePath = typeof args[0] === 'string' ? args[0] : null
+        return formatExtensionSidebarResponse(await scanExtensionManifests(workspacePath))
+      }
+      case 'ext:list-tiles':
+        return (await scanExtensionManifests())
+          .filter(manifest => manifest._enabled !== false)
+          .flatMap(manifest => (manifest.contributes?.tiles ?? []).map(tile => ({
+            extId: manifest.id,
+            type: tile.type,
+            label: tile.label,
+            icon: tile.icon,
+            defaultSize: tile.defaultSize ?? { w: 400, h: 300 },
+            minSize: tile.minSize ?? { w: 200, h: 150 },
+            uiMode: manifest.ui?.mode,
+          })))
+      case 'ext:list-chat-surfaces':
+        return (await scanExtensionManifests())
+          .filter(manifest => manifest._enabled !== false)
+          .flatMap(manifest => (manifest.contributes?.chatSurfaces ?? []).map(surface => ({
+            extId: manifest.id,
+            id: surface.id,
+            label: surface.label,
+            icon: surface.icon,
+            defaultHeight: surface.defaultHeight ?? 280,
+            minHeight: surface.minHeight ?? 180,
+            emits: surface.emits ?? [],
+          })))
+      case 'ext:context-menu-items':
         return []
       case 'ext:enable':
       case 'ext:disable':

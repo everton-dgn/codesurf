@@ -232,10 +232,23 @@ function buildDiscoveredSkill(filePath, content, dirPath, metadata, includeConte
   }
 }
 
+function isUnreadableDirectoryError(error) {
+  const code = error?.code
+  return code === 'ENOENT' || code === 'EPERM' || code === 'EACCES' || code === 'ENOTDIR'
+}
+
 async function scanSkillDirectory(rootPath, metadata, includeContent) {
-  if (!(await pathExists(rootPath))) return []
+  if (!(await pathExists(rootPath))) return { skills: [], skipped: null }
   const skills = []
-  const entries = await fs.readdir(rootPath, { withFileTypes: true })
+  let entries
+  try {
+    entries = await fs.readdir(rootPath, { withFileTypes: true })
+  } catch (error) {
+    if (isUnreadableDirectoryError(error)) {
+      return { skills: [], skipped: { path: rootPath, code: error?.code ?? 'UNKNOWN' } }
+    }
+    throw error
+  }
   for (const entry of entries) {
     const entryPath = join(rootPath, entry.name)
     if (entry.isDirectory()) {
@@ -265,7 +278,7 @@ async function scanSkillDirectory(rootPath, metadata, includeContent) {
       description: parsed.description,
     }, includeContent))
   }
-  return skills
+  return { skills, skipped: null }
 }
 
 async function readTileSkillSelection(workspaceDir, cardId) {
@@ -415,6 +428,13 @@ export function createSkillsIndex({ homeDir, userHomeDir }) {
     }
     const roots = []
     const skills = []
+    const skippedLocations = []
+
+    const appendScan = async (rootPath, scanMeta) => {
+      const result = await scanSkillDirectory(rootPath, scanMeta, includeContent)
+      skills.push(...result.skills)
+      if (result.skipped) skippedLocations.push(result.skipped)
+    }
 
     const globalCodesurfRoot = join(normalizedHome, 'skills')
     roots.push(buildRoot({
@@ -424,11 +444,11 @@ export function createSkillsIndex({ homeDir, userHomeDir }) {
       exists: await pathExists(globalCodesurfRoot),
       ...context,
     }))
-    skills.push(...await scanSkillDirectory(globalCodesurfRoot, {
+    await appendScan(globalCodesurfRoot, {
       scope: 'global',
       rootKind: 'codesurf',
       ...context,
-    }, includeContent))
+    })
 
     if (normalizedWorkspace) {
       const workspaceCodesurfRoot = join(normalizedWorkspace, '.codesurf', 'skills')
@@ -439,11 +459,11 @@ export function createSkillsIndex({ homeDir, userHomeDir }) {
         exists: await pathExists(workspaceCodesurfRoot),
         ...context,
       }))
-      skills.push(...await scanSkillDirectory(workspaceCodesurfRoot, {
+      await appendScan(workspaceCodesurfRoot, {
         scope: 'workspace',
         rootKind: 'codesurf',
         ...context,
-      }, includeContent))
+      })
 
       const savedSkillsFile = join(normalizedWorkspace, '.contex', 'customisation', 'skills.json')
       roots.push(buildRoot({
@@ -472,11 +492,11 @@ export function createSkillsIndex({ homeDir, userHomeDir }) {
           exists: await pathExists(location),
           ...context,
         }))
-        skills.push(...await scanSkillDirectory(location, {
+        await appendScan(location, {
           scope: location.startsWith(`${normalizedWorkspace}${sep}`) ? 'workspace' : 'global',
           rootKind,
           ...context,
-        }, includeContent))
+        })
       }
     }
 
@@ -493,6 +513,7 @@ export function createSkillsIndex({ homeDir, userHomeDir }) {
       workspaceDir: normalizedWorkspace,
       roots: dedupeRoots(roots),
       skills: includeContent ? skills : skills.map(stripSkillContent),
+      skippedLocations,
       selection,
     }
   }

@@ -18,7 +18,7 @@
  */
 import { readCodexUsageSnapshot } from './codex-reader'
 import { readClaudeUsageSnapshot } from './claude-reader'
-import { writeSnapshot, listIndexRows, readSnapshot } from './snapshot-store'
+import { writeSnapshot } from './snapshot-store'
 import type { UsageProviderId, UsageSnapshot } from './types'
 
 export type { UsageSnapshot, UsageWindow, UsageTotals, UsageIndexRow, UsageProviderId } from './types'

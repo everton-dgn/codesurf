@@ -39,7 +39,13 @@ const checkpointStore = createCheckpointStore({
   runtimeSessionStatePath,
   workspaceContexDir,
 })
-const chatJobs = createChatJobManager({ homeDir: HOME, checkpointStore })
+const chatJobs = createChatJobManager({
+  homeDir: HOME,
+  checkpointStore,
+  // daemon-01: bound concurrent agent jobs on this shared daemon. Tunable via
+  // env for hosts that want a higher/lower ceiling; defaults to 4.
+  maxConcurrentJobs: Number(process.env.CODESURF_MAX_CONCURRENT_JOBS) || 4,
+})
 const skillsIndex = createSkillsIndex({
   homeDir: HOME,
   userHomeDir: homedir(),
@@ -59,7 +65,7 @@ function makeId(prefix) {
 
 function atomicWriteJson(filePath, value) {
   ensureDir(dirname(filePath))
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
   renameSync(tempPath, filePath)
 }
@@ -3815,14 +3821,22 @@ async function start() {
     } catch (error) {
       console.error('[codesurfd] cleanupOldDeletedFiles failed:', error)
     }
+    // daemon-05: prune old terminal job metadata + timelines so ~/.codesurf/jobs
+    // does not grow without bound (and slow the dashboard poll).
+    void chatJobs.sweepJobRetention().catch((error) => {
+      console.error('[codesurfd] sweepJobRetention failed:', error)
+    })
   }, 24 * 60 * 60 * 1000)
-  
+
   // Run cleanup once on startup
   try {
     cleanupOldDeletedFiles(30)
   } catch (error) {
     console.error('[codesurfd] initial cleanupOldDeletedFiles failed:', error)
   }
+  void chatJobs.sweepJobRetention().catch((error) => {
+    console.error('[codesurfd] initial sweepJobRetention failed:', error)
+  })
 }
 
 let shuttingDown = false
@@ -3841,6 +3855,11 @@ async function shutdown() {
   shuttingDown = true
   try {
     removeOwnedPidFile()
+  } catch {}
+  // Cancel in-flight jobs (and kill their CLI children) before closing the
+  // server, so a restart/SIGTERM does not orphan agent subprocesses.
+  try {
+    await chatJobs.shutdown()
   } catch {}
   await new Promise(resolve => server.close(() => resolve()))
 }

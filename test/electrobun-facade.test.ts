@@ -25,6 +25,8 @@ describe('Electrobun window.electron facade', () => {
     await facade.shell.openExternal('https://example.com')
     await facade.canvas.queuedMessages.append({ id: 'msg-1' })
     await facade.terminal.updatePeers('tile-1', '/tmp/project', [])
+    await facade.fs.readFile('/tmp/project/README.md', 'ws-1')
+    await facade.fs.watch('/tmp/project', () => {}, 'ws-1')()
 
     expect(calls).toEqual([
       { channel: 'workspace:list', args: [] },
@@ -33,6 +35,9 @@ describe('Electrobun window.electron facade', () => {
       { channel: 'shell:openExternal', args: ['https://example.com'] },
       { channel: 'canvas:queuedMessages:append', args: [{ id: 'msg-1' }] },
       { channel: 'terminal:update-peers', args: ['tile-1', '/tmp/project', []] },
+      { channel: 'fs:readFile', args: ['/tmp/project/README.md', 'ws-1'] },
+      { channel: 'fs:watchStart', args: ['/tmp/project', 'ws-1'] },
+      { channel: 'fs:watchStop', args: ['/tmp/project', 'ws-1'] },
     ])
   })
 
@@ -50,7 +55,10 @@ describe('Electrobun window.electron facade', () => {
 
   test('returns startup-safe defaults if the Electrobun runtime is temporarily unavailable', () => {
     expect(getDefaultElectrobunInvokeResponse('workspace:list')).toEqual([])
-    expect(getDefaultElectrobunInvokeResponse('settings:get')).toMatchObject({ appearance: 'light' })
+    expect(getDefaultElectrobunInvokeResponse('settings:get')).toMatchObject({
+      appearance: 'light',
+      security: { restrictFsToWorkspaceRoots: true, fsScopingMigrated: true },
+    })
     expect(getDefaultElectrobunInvokeResponse('window:isFresh')).toBe(false)
     expect(getDefaultElectrobunInvokeResponse('canvas:load')).toBe(null)
     expect(getDefaultElectrobunInvokeResponse('bus:publish')).toBe(true)

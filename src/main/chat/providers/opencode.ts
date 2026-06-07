@@ -1,0 +1,713 @@
+/**
+ * OpenCode provider — uses @opencode-ai/sdk against a local `opencode serve` process.
+ */
+
+import { spawn, ChildProcess, execFileSync } from 'child_process'
+import * as net from 'net'
+import { BrowserWindow } from 'electron'
+import { buildOpenCodeSessionPermissions } from '../../agents/opencode-permissions'
+import { getAgentPath, getShellEnvPath } from '../../agent-paths'
+import {
+  persistGrant,
+  resolveStoredPermission,
+  storeSessionGrant,
+  type ToolPermissionRequest,
+} from '../../permissions'
+import type { ToolPermissionDecision } from '../../ipc/chat'
+import { buildCodeSurfOutputConvention } from '../prompt-conventions'
+import type { ChatRequest } from '../types'
+import { log, sendStream, getPreparedMessages } from '../runtime'
+
+// Lazy-loaded: @opencode-ai/sdk only exports ESM, Electron main is CJS.
+// externalizeDepsPlugin converts dynamic import() to require() which can't
+// resolve ESM-only exports — wrap in try/catch so the app still starts.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _createOpencodeClient: any = null
+async function getOpencodeClient(): Promise<any> {
+  if (!_createOpencodeClient) {
+    try {
+      const mod = await import('@opencode-ai/sdk/v2/client')
+      _createOpencodeClient = mod.createOpencodeClient
+    } catch {
+      throw new Error(
+        'OpenCode SDK could not be loaded (ESM/CJS mismatch). ' +
+        'Use the opencode CLI directly or check @opencode-ai/sdk compatibility.'
+      )
+    }
+  }
+  return _createOpencodeClient
+}
+
+// --- OpenCode Server Manager (spawns `opencode serve`, manages lifecycle) --------
+
+function findAvailablePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address() as net.AddressInfo
+      server.close(() => resolve(addr.port))
+    })
+    server.on('error', reject)
+  })
+}
+
+function resolveOpenCodeBinary(): string | null {
+  // Use startup-detected path first
+  const detected = getAgentPath('opencode')
+  if (detected) return detected
+  // Fallback to which
+  try {
+    const shellPath = getShellEnvPath()
+    return execFileSync('which', ['opencode'], {
+      encoding: 'utf-8',
+      env: { ...process.env, ...(shellPath && { PATH: shellPath }) },
+    }).trim() || null
+  } catch {
+    return null
+  }
+}
+
+class OpenCodeServerManager {
+  private static instance: OpenCodeServerManager | null = null
+  private server: ChildProcess | null = null
+  private port: number | null = null
+  private startPromise: Promise<{ port: number; url: string }> | null = null
+
+  static getInstance(): OpenCodeServerManager {
+    if (!OpenCodeServerManager.instance) {
+      OpenCodeServerManager.instance = new OpenCodeServerManager()
+    }
+    return OpenCodeServerManager.instance
+  }
+
+  async ensureRunning(): Promise<{ port: number; url: string }> {
+    if (this.server && this.port && !this.server.killed) {
+      return { port: this.port, url: `http://127.0.0.1:${this.port}` }
+    }
+
+    if (!this.startPromise) {
+      this.startPromise = this.startServer().catch((err) => {
+        this.startPromise = null
+        throw err
+      })
+    }
+
+    return this.startPromise
+  }
+
+  private async startServer(): Promise<{ port: number; url: string }> {
+    const binary = resolveOpenCodeBinary()
+    if (!binary) throw new Error('opencode CLI not found. Install: go install github.com/opencodeco/opencode@latest')
+
+    this.port = await findAvailablePort()
+    const url = `http://127.0.0.1:${this.port}`
+
+    return new Promise((resolve, reject) => {
+      const shellPath = getShellEnvPath()
+      this.server = spawn(binary, ['serve', '--port', String(this.port)], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, ...(shellPath && { PATH: shellPath }) },
+      })
+
+      let started = false
+      const timeout = setTimeout(() => {
+        if (!started) reject(new Error('OpenCode server startup timeout (30s)'))
+      }, 30_000)
+
+      this.server.stdout?.on('data', (data: Buffer) => {
+        const output = data.toString()
+        log('opencode stdout:', output.trim().slice(0, 200))
+        if (output.includes('listening on') && !started) {
+          started = true
+          clearTimeout(timeout)
+          resolve({ port: this.port!, url })
+        }
+      })
+
+      this.server.stderr?.on('data', (data: Buffer) => {
+        log('opencode stderr:', data.toString().trim().slice(0, 200))
+      })
+
+      this.server.on('error', (err) => {
+        clearTimeout(timeout)
+        reject(err)
+      })
+
+      this.server.on('exit', (code) => {
+        if (!started) {
+          clearTimeout(timeout)
+          reject(new Error(`OpenCode server exited with code ${code}`))
+        }
+        this.server = null
+        this.port = null
+      })
+    })
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.server && !this.server.killed) {
+      this.server.kill('SIGTERM')
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => { this.server?.kill('SIGKILL'); resolve() }, 5000)
+        this.server?.on('exit', () => { clearTimeout(t); resolve() })
+      })
+    }
+    this.server = null
+    this.port = null
+    this.startPromise = null
+  }
+
+  isRunning(): boolean {
+    return !!(this.server && this.port && !this.server.killed)
+  }
+}
+
+export function shutdownOpenCodeServer(): void {
+  void OpenCodeServerManager.getInstance().shutdown()
+}
+
+// Cached model list
+const OPEN_CODE_FALLBACK_MODELS: Array<{ id: string; label: string; description?: string }> = [
+  { id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  { id: 'openai/gpt-5.4', label: 'GPT-5.4' },
+  { id: 'openai/o4-mini', label: 'o4-mini' },
+  { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+]
+
+let cachedOpenCodeModels: Array<{ id: string; label: string; description?: string }> = []
+let openCodeModelsInflight: Promise<Array<{ id: string; label: string; description?: string }>> | null = null
+let openCodeModelsRefreshPromise: Promise<void> | null = null
+let cachedOpenCodeModelsAt = 0
+const OPEN_CODE_MODELS_CACHE_MS = 15_000
+
+function getOpenCodeFallbackModels(): Array<{ id: string; label: string; description?: string }> {
+  return OPEN_CODE_FALLBACK_MODELS.map(model => ({ ...model }))
+}
+
+function broadcastOpenCodeModelsUpdated(payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    win.webContents.send('chat:opencodeModelsUpdated', payload)
+  }
+}
+
+function refreshOpenCodeModelsInBackground(force = false): Promise<void> {
+  if (openCodeModelsRefreshPromise && !force) return openCodeModelsRefreshPromise
+
+  const isFresh = cachedOpenCodeModels.length > 0 && (Date.now() - cachedOpenCodeModelsAt) < OPEN_CODE_MODELS_CACHE_MS
+  if (isFresh && !force) return Promise.resolve()
+
+  openCodeModelsRefreshPromise = (async () => {
+    try {
+      const models = await fetchOpenCodeModels()
+      const nextModels = models.length > 0 ? models : getOpenCodeFallbackModels()
+      broadcastOpenCodeModelsUpdated({
+        models: nextModels,
+        source: models.length > 0 ? 'opencode' : 'fallback',
+      })
+    } catch (err: any) {
+      log('refreshOpenCodeModelsInBackground error:', err.message ?? String(err))
+      const nextModels = cachedOpenCodeModels.length > 0 ? cachedOpenCodeModels : getOpenCodeFallbackModels()
+      broadcastOpenCodeModelsUpdated({
+        models: nextModels,
+        source: cachedOpenCodeModels.length > 0 ? 'cache' : 'fallback',
+        error: err.message ?? String(err),
+      })
+    } finally {
+      openCodeModelsRefreshPromise = null
+    }
+  })()
+
+  return openCodeModelsRefreshPromise
+}
+
+export function warmOpenCodeModelsOnStartup(): void {
+  // Startup warmup intentionally disabled.
+}
+
+async function fetchOpenCodeModels(): Promise<Array<{ id: string; label: string; description?: string }>> {
+  const now = Date.now()
+  if (cachedOpenCodeModels.length > 0 && (now - cachedOpenCodeModelsAt) < OPEN_CODE_MODELS_CACHE_MS) {
+    return cachedOpenCodeModels
+  }
+  if (openCodeModelsInflight) return openCodeModelsInflight
+  openCodeModelsInflight = (async () => {
+    const { client } = await getOrCreateOpencodeClient()
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('OpenCode provider.list timed out after 10s')), 10_000)
+    })
+
+    const response = await Promise.race([
+      client.provider.list(),
+      timeoutPromise,
+    ])
+
+    if ((response as any).error) {
+      throw new Error(`Failed to fetch OpenCode providers: ${JSON.stringify((response as any).error)}`)
+    }
+
+    const providers = (response as any).data
+    if (!providers) return []
+
+    const connectedIds = new Set<string>(providers.connected ?? [])
+    if (connectedIds.size === 0) {
+      log('OpenCode: no connected providers found')
+      return []
+    }
+
+    const models: Array<{ id: string; label: string; description?: string }> = []
+    for (const provider of (providers.all ?? [])) {
+      if (!connectedIds.has(provider.id)) continue
+
+      for (const [modelId, model] of Object.entries(provider.models ?? {})) {
+        const m = model as any
+        models.push({
+          id: `${provider.id}/${modelId}`,
+          label: m.name ?? modelId,
+          description: `${provider.name ?? provider.id} - ${m.family ?? ''}`.trim(),
+        })
+      }
+    }
+
+    log(`OpenCode: fetched ${models.length} models from ${connectedIds.size} connected providers`)
+    cachedOpenCodeModels = models
+    cachedOpenCodeModelsAt = Date.now()
+    return models
+  })()
+
+  try {
+    return await openCodeModelsInflight
+  } finally {
+    openCodeModelsInflight = null
+  }
+}
+
+export function getOpenCodeModelsSnapshot(): {
+  models: Array<{ id: string; label: string; description?: string }>
+  source: string
+  loading: boolean
+} {
+  const isFresh = cachedOpenCodeModels.length > 0 && (Date.now() - cachedOpenCodeModelsAt) < OPEN_CODE_MODELS_CACHE_MS
+  if (!isFresh) void refreshOpenCodeModelsInBackground()
+  const models = isFresh
+    ? cachedOpenCodeModels
+    : (cachedOpenCodeModels.length > 0 ? cachedOpenCodeModels : getOpenCodeFallbackModels())
+
+  return {
+    models,
+    source: isFresh ? 'cache' : (cachedOpenCodeModels.length > 0 ? 'stale-cache' : 'fallback'),
+    loading: openCodeModelsRefreshPromise !== null,
+  }
+}
+
+// --- OpenCode via @opencode-ai/sdk SSE streaming ---------------------------------
+
+// Store opencode session IDs separately (keyed by cardId)
+const opencodeSessionIds = new Map<string, string>()
+
+export function clearOpenCodeSession(cardId: string): void {
+  opencodeSessionIds.delete(cardId)
+}
+
+export async function abortOpenCodeSession(cardId: string): Promise<void> {
+  const ocSessionId = opencodeSessionIds.get(cardId)
+  if (!ocSessionId) return
+  try {
+    const mgr = OpenCodeServerManager.getInstance()
+    if (mgr.isRunning()) {
+      const createClient = await getOpencodeClient()
+      const { url } = await mgr.ensureRunning()
+      const client = createClient({ baseUrl: url })
+      await client.session.abort({ sessionID: ocSessionId })
+      log('opencode session aborted:', ocSessionId)
+    }
+  } catch (err: any) {
+    log('opencode abort error (non-fatal):', err.message)
+  }
+}
+
+// Cached SDK client — avoid re-creating on every message
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _cachedOpencodeClient: any = null
+let _cachedClientUrl: string | null = null
+
+async function getOrCreateOpencodeClient(): Promise<{ client: any; url: string }> {
+  const mgr = OpenCodeServerManager.getInstance()
+  const { url } = await mgr.ensureRunning()
+
+  // Reuse client if server URL hasn't changed
+  if (_cachedOpencodeClient && _cachedClientUrl === url) {
+    return { client: _cachedOpencodeClient, url }
+  }
+
+  const createClient = await getOpencodeClient()
+  _cachedOpencodeClient = createClient({ baseUrl: url })
+  _cachedClientUrl = url
+  return { client: _cachedOpencodeClient, url }
+}
+
+export function chatOpencode(req: ChatRequest): void {
+  const lastUserMsg = [...getPreparedMessages(req)].reverse().find(m => m.role === 'user')
+  if (!lastUserMsg) {
+    sendStream(req.cardId, { type: 'error', error: 'No user message' })
+    return
+  }
+
+  // Parse model string like "anthropic/claude-sonnet-4-6" into providerID + modelID
+  const slashIdx = req.model.indexOf('/')
+  const providerID = slashIdx > 0 ? req.model.slice(0, slashIdx) : 'anthropic'
+  const modelID = slashIdx > 0 ? req.model.slice(slashIdx + 1) : req.model
+
+  if (req.sessionId && !opencodeSessionIds.has(req.cardId)) {
+    opencodeSessionIds.set(req.cardId, req.sessionId)
+  }
+  const existingSessionId = opencodeSessionIds.get(req.cardId)
+  log('chatOpencode starting', {
+    model: req.model,
+    providerID,
+    modelID,
+    prompt: lastUserMsg.content.slice(0, 100),
+    resuming: !!existingSessionId,
+  })
+
+  ;(async () => {
+    try {
+      // 1. Get cached client (server already warm from model list fetch)
+      const { client } = await getOrCreateOpencodeClient()
+
+      // 2. Create or reuse session
+      let sessionID = existingSessionId
+      if (!sessionID) {
+        const permission = buildOpenCodeSessionPermissions(req.mode)
+        const sessionRes = await client.session.create({
+          title: `Chat ${req.cardId.slice(0, 8)}`,
+          permission,
+          ...(req.workspaceDir && { directory: req.workspaceDir }),
+        })
+        const sessionData = (sessionRes as any).data ?? sessionRes
+        sessionID = sessionData?.info?.id ?? sessionData?.id
+        if (!sessionID) {
+          throw new Error('Failed to create OpenCode session — no session ID returned')
+        }
+        opencodeSessionIds.set(req.cardId, sessionID)
+        log('opencode session created:', sessionID, req.mode === 'plan'
+          ? '(plan mode)'
+          : req.mode === 'bypassPermissions'
+            ? '(bypass mode)'
+            : '(default ask mode)')
+      }
+
+      // 3. Subscribe to SSE + send prompt concurrently
+      const sseResult = await client.event.subscribe()
+      const stream = (sseResult as any).stream
+
+      // Track state for this response
+      let assistantMessageId: string | null = null
+      let isDone = false
+      const seenParts = new Map<string, string>() // partID -> accumulated text
+      const assistantPartIds = new Set<string>() // part IDs belonging to assistant messages
+      const userMessageIds = new Set<string>() // message IDs that are user messages
+
+      // Fire prompt without waiting — response arrives via SSE.
+      // On the first turn of a fresh session we prepend the CodeSurf output
+      // convention so OpenCode matches the structured-summary behaviour of
+      // Claude/Codex. On subsequent turns the session already carries the
+      // convention in its running history.
+      const isFirstTurn = !existingSessionId
+      const promptText = isFirstTurn
+        ? `${buildCodeSurfOutputConvention()}\n\n---\n\n${lastUserMsg.content}`
+        : lastUserMsg.content
+      const promptPromise = client.session.prompt({
+        sessionID,
+        model: { providerID, modelID },
+        parts: [{ type: 'text', text: promptText }],
+      }).catch((err: any) => {
+        if (!isDone) {
+          log('opencode prompt error:', err.message)
+          sendStream(req.cardId, { type: 'error', error: err.message ?? String(err) })
+        }
+      })
+
+      // 4. Consume SSE stream for real-time updates
+      const streamTimeout = setTimeout(() => {
+        if (!isDone) {
+          log('opencode SSE stream timeout (5min)')
+          isDone = true
+          sendStream(req.cardId, { type: 'done' })
+        }
+      }, 5 * 60_000)
+
+      try {
+        for await (const event of stream) {
+          if (isDone) break
+          const evt = event as any
+          const evtType: string = evt?.type ?? ''
+
+          // Skip noisy file-watcher events (git index.lock churn, etc.)
+          if (evtType.startsWith('file.watcher')) continue
+
+          // Log all event types for debugging (except high-frequency deltas)
+          if (evtType !== 'message.part.delta') {
+            log('opencode SSE event:', evtType, JSON.stringify(evt?.properties ?? {}).slice(0, 300))
+          }
+
+          // Filter events to our session
+          const props = evt?.properties ?? {}
+          const evtSessionID = props.sessionID ?? props.info?.sessionID ?? ''
+          if (evtSessionID && evtSessionID !== sessionID) continue
+
+          switch (evtType) {
+            case 'message.updated': {
+              const info = props.info
+              if (info?.role === 'user') {
+                // Track user message IDs so we can skip their parts
+                userMessageIds.add(info.id)
+              } else if (info?.role === 'assistant') {
+                assistantMessageId = info.id
+                // Report cost/token info when message completes
+                if (info.finish) {
+                  sendStream(req.cardId, {
+                    type: 'done',
+                    cost: info.cost,
+                    tokens: info.tokens,
+                    sessionId: sessionID,
+                  })
+                  isDone = true
+                }
+              }
+              break
+            }
+
+            case 'message.part.updated': {
+              const part = props.part
+              if (!part) break
+              // Skip parts from user messages (don't echo user input back)
+              if (userMessageIds.has(part.messageID)) break
+              // If we know the assistant message ID, only accept parts from it
+              if (assistantMessageId && part.messageID !== assistantMessageId) break
+              // Track this as an assistant part
+              assistantPartIds.add(part.id)
+
+              if (part.type === 'text') {
+                const prev = seenParts.get(part.id) ?? ''
+                if (part.text && part.text.length > prev.length) {
+                  const newText = part.text.slice(prev.length)
+                  seenParts.set(part.id, part.text)
+                  sendStream(req.cardId, { type: 'text', text: newText })
+                }
+              } else if (part.type === 'tool') {
+                const toolId = part.callID ?? part.id
+                const toolName = part.tool ?? 'tool'
+                const state = part.state
+                const seenKey = `tool:${part.id}`
+                const prevStatus = seenParts.get(seenKey)
+
+                if (!prevStatus) {
+                  // First time seeing this tool — send tool_start
+                  sendStream(req.cardId, { type: 'tool_start', toolId, toolName })
+                  if (state?.input) {
+                    const inputStr = typeof state.input === 'string' ? state.input : JSON.stringify(state.input, null, 2)
+                    sendStream(req.cardId, { type: 'tool_input', text: inputStr })
+                  }
+                }
+
+                if (state?.status === 'running' && prevStatus !== 'running') {
+                  // Tool started running — update with title if available
+                  if (state.title) {
+                    sendStream(req.cardId, { type: 'tool_use', toolName, toolInput: state.title })
+                  }
+                } else if (state?.status === 'completed') {
+                  // Tool finished — send summary with output
+                  const summary = state.title
+                    ? `${state.title}${state.output ? '\n' + state.output.slice(0, 500) : ''}`
+                    : state.output?.slice(0, 500) ?? 'Done'
+                  sendStream(req.cardId, { type: 'tool_summary', text: summary, toolName })
+                } else if (state?.status === 'error') {
+                  sendStream(req.cardId, { type: 'tool_summary', text: `Error: ${state.error}`, toolName })
+                }
+
+                seenParts.set(seenKey, state?.status ?? 'unknown')
+              } else if (part.type === 'reasoning') {
+                const prev = seenParts.get(part.id) ?? ''
+                if (part.text && part.text.length > prev.length) {
+                  const newText = part.text.slice(prev.length)
+                  seenParts.set(part.id, part.text)
+                  sendStream(req.cardId, { type: 'reasoning', text: newText })
+                }
+              } else if (part.type === 'step-finish') {
+                sendStream(req.cardId, {
+                  type: 'step_finish',
+                  cost: part.cost,
+                  tokens: part.tokens,
+                  reason: part.reason,
+                })
+              }
+              break
+            }
+
+            case 'message.part.delta': {
+              // Incremental text delta — most efficient streaming path
+              const { partID, field, delta, messageID } = props
+              // Skip deltas for user messages
+              if (messageID && userMessageIds.has(messageID)) break
+              // Only accept deltas for parts we've seen from assistant
+              if (partID && !assistantPartIds.has(partID)) {
+                // Could be a part we haven't seen via part.updated yet — but
+                // if the messageID matches a user message, skip it
+                if (messageID && assistantMessageId && messageID !== assistantMessageId) break
+              }
+              if (field === 'text' && delta) {
+                const prev = seenParts.get(partID) ?? ''
+                seenParts.set(partID, prev + delta)
+                sendStream(req.cardId, { type: 'text', text: delta })
+              }
+              break
+            }
+
+            case 'session.status': {
+              if (props.status?.type === 'idle' && assistantMessageId) {
+                if (!isDone) {
+                  isDone = true
+                  sendStream(req.cardId, { type: 'done', sessionId: sessionID })
+                }
+              }
+              break
+            }
+
+            case 'session.error': {
+              isDone = true
+              sendStream(req.cardId, {
+                type: 'error',
+                error: props.error ?? 'OpenCode session error',
+              })
+              break
+            }
+
+            case 'permission.asked': {
+              const permReq = props as any
+              log('opencode permission asked:', permReq.permission, 'id:', permReq.id)
+              try {
+                const toolUseID = typeof permReq.id === 'string' && permReq.id.trim()
+                  ? permReq.id
+                  : `opencode-permission-${Date.now()}`
+                const permissionRequest: ToolPermissionRequest = {
+                  provider: 'opencode',
+                  toolName: typeof permReq.permission === 'string' ? permReq.permission : 'tool',
+                  // Prefer a structured summary if OpenCode supplies one —
+                  title: typeof permReq.title === 'string' ? permReq.title : null,
+                  description: typeof permReq.description === 'string'
+                    ? permReq.description
+                    : (typeof permReq.command === 'string' ? permReq.command : null),
+                  blockedPath: typeof permReq.path === 'string' ? permReq.path : null,
+                  workspaceDir: req.workspaceDir,
+                }
+
+                const storedDecision = resolveStoredPermission(permissionRequest)
+                let decision: ToolPermissionDecision
+                let fromStored = false
+                if (storedDecision === 'allow') {
+                  decision = 'once'
+                  fromStored = true
+                } else if (storedDecision === 'deny') {
+                  decision = 'never'
+                  fromStored = true
+                } else {
+                  sendStream(req.cardId, {
+                    type: 'tool_permission_request',
+                    toolId: toolUseID,
+                    provider: 'opencode',
+                    toolName: permissionRequest.toolName,
+                    title: permissionRequest.title,
+                    description: permissionRequest.description,
+                    blockedPath: permissionRequest.blockedPath,
+                    workspaceDir: permissionRequest.workspaceDir,
+                  })
+                  const { awaitToolPermissionAnswer } = await import('../../ipc/chat')
+                  decision = await awaitToolPermissionAnswer(req.cardId, toolUseID, permissionRequest)
+                }
+
+                sendStream(req.cardId, {
+                  type: 'tool_permission_resolved',
+                  toolId: toolUseID,
+                  toolName: permissionRequest.toolName,
+                  decision,
+                })
+
+                if (!fromStored) {
+                  if (decision === 'never') {
+                    persistGrant(permissionRequest, 'never')
+                  } else if (decision === 'session') {
+                    storeSessionGrant(permissionRequest)
+                  } else if (decision === 'today' || decision === 'forever') {
+                    persistGrant(permissionRequest, decision)
+                  }
+                }
+
+                // Map our richer scope model to OpenCode's three-value enum.
+                //   forever        → 'always'   (persistent approval; OpenCode's own state mirrors ours)
+                //   today/session/once → 'once' (auto-approved but per-call on OpenCode side; our own
+                //                                 grant store still short-circuits subsequent calls)
+                //   deny / never   → 'reject'  (never also persists a deny-grant so future calls
+                //                                 are auto-rejected via stored lookup)
+                const allowed = decision !== 'deny' && decision !== 'never'
+                const reply: 'once' | 'always' | 'reject' = allowed
+                  ? (decision === 'forever' ? 'always' : 'once')
+                  : 'reject'
+                await client.permission.reply({
+                  requestID: toolUseID,
+                  reply,
+                  ...(allowed ? {} : { message: decision === 'never'
+                    ? 'Tool permission permanently denied. Future calls will be auto-rejected.'
+                    : 'Tool permission denied by the user.' }),
+                })
+                log('opencode permission decision:', permReq.id, reply, decision ? `(scope=${decision})` : '')
+              } catch (permErr: any) {
+                log('opencode permission reply error:', permErr.message)
+              }
+              break
+            }
+
+            case 'question.asked': {
+              // Auto-answer questions from the model
+              const qReq = props as any
+              log('opencode question asked:', qReq.id, JSON.stringify(qReq.questions ?? []).slice(0, 200))
+              try {
+                // Each question needs an answer array; default to first option or "yes"
+                const answers = (qReq.questions ?? []).map((q: any) => {
+                  if (q.options?.length > 0) return [q.options[0].value ?? q.options[0].label ?? 'yes']
+                  return ['yes']
+                })
+                await client.question.reply({
+                  requestID: qReq.id,
+                  answers,
+                })
+                log('opencode question auto-answered:', qReq.id)
+              } catch (qErr: any) {
+                log('opencode question reply error:', qErr.message)
+              }
+              break
+            }
+          }
+        }
+      } finally {
+        clearTimeout(streamTimeout)
+      }
+
+      await promptPromise
+
+      if (!isDone) {
+        sendStream(req.cardId, { type: 'done', sessionId: sessionID })
+      }
+    } catch (err: any) {
+      log('chatOpencode error:', err.message ?? String(err))
+      const errorMsg = err.message?.includes('opencode CLI not found')
+        ? 'OpenCode CLI not found. Install: go install github.com/opencodeco/opencode@latest'
+        : err.message?.includes('ESM/CJS')
+          ? 'OpenCode SDK could not be loaded. Check @opencode-ai/sdk compatibility.'
+          : err.message ?? String(err)
+      sendStream(req.cardId, { type: 'error', error: errorMsg })
+      sendStream(req.cardId, { type: 'done' })
+    }
+  })()
+}

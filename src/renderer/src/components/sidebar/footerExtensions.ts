@@ -33,17 +33,18 @@ export function buildFooterExtensions(
   const withEntries = extensionEntries.length > 0
     ? extensionEntries
       .filter(entry => entry.enabled !== false)
-      .map(entry => {
+      .map((entry): FooterExtensionAction | null => {
         const tile = extensionTileById.get(entry.id)
         if (!tile?.type) return null
+        const icon = tile.icon ?? entry.icon ?? undefined
         return {
           id: entry.id,
           label: entry.name,
-          icon: tile.icon ?? entry.icon ?? undefined,
+          icon: icon ?? undefined,
           tileType: tile.type,
         }
       })
-      .filter((entry): entry is FooterExtensionAction => Boolean(entry))
+      .filter((entry): entry is FooterExtensionAction => entry !== null)
     : extensionTiles.map(ext => ({
       id: ext.extId,
       label: ext.label,
@@ -51,5 +52,5 @@ export function buildFooterExtensions(
       tileType: ext.type,
     }))
 
-  return withEntries.filter((entry, index, list) => list.findIndex(other => other.id === entry.id) === index)
+  return withEntries.filter((entry, index, list) => list.findIndex((other) => other.id === entry.id) === index)
 }

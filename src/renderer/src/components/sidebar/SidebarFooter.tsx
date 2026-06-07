@@ -26,12 +26,12 @@ export interface SidebarFooterProps {
 }
 
 export function SidebarFooter({
-  onNewTerminal, onNewKanban, onNewBrowser, onNewChat, onNewFiles,
+  onNewTerminal, onNewKanban, onNewBrowser, onNewChat: _onNewChat, onNewFiles,
   onOpenSettings,
   extensionTiles, extensionEntries, onAddExtensionTile,
   collapsed,
   galleryEnabled,
-  onOpenGallery,
+  onOpenGallery: _onOpenGallery,
 }: SidebarFooterProps): React.JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
@@ -147,7 +147,7 @@ export function SidebarFooter({
 
         {!galleryEnabled && footerExtensions.length > 0 && (
           <div style={{ position: 'relative' }} ref={extMenuRef}>
-            <button title="Extensions" style={{
+            <button title="Plugins" style={{
               width: 28, height: 28, borderRadius: 6, border: 'none', background: footerButtonBackground,
               boxShadow: footerButtonEdge, color: showExtMenu ? theme.text.primary : footerIconColor, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',

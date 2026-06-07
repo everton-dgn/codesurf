@@ -43,7 +43,7 @@ function readPermissionGrants(homeDir) {
 function writePermissionGrants(homeDir, grants) {
   ensureDir(homeDir)
   const filePath = join(homeDir, 'permissions.json')
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   writeFileSync(tempPath, `${JSON.stringify({ version: 1, grants }, null, 2)}\n`, 'utf8')
   renameSync(tempPath, filePath)
 }
@@ -716,19 +716,58 @@ function extractOpenCodeTextPayload(event) {
 }
 
 function writeSseEvent(res, payload) {
-  res.write(`data: ${JSON.stringify(payload)}\n\n`)
+  // Isolate per-subscriber failures: a throwing/closed socket must not starve
+  // sibling subscribers of the same event. Returns the write() backpressure
+  // signal (false = buffer full) so callers can react if needed.
+  try {
+    return res.write(`data: ${JSON.stringify(payload)}\n\n`)
+  } catch {
+    return false
+  }
 }
 
-export function createChatJobManager({ homeDir, checkpointStore = null, claudeQuery = query }) {
+export function createChatJobManager({ homeDir, checkpointStore = null, claudeQuery = query, maxConcurrentJobs = 4 }) {
   const jobsDir = join(homeDir, 'jobs')
   const timelinesDir = join(homeDir, 'timelines')
   ensureDir(jobsDir)
   ensureDir(timelinesDir)
 
+  // daemon-01: bound how many jobs actually execute at once. The daemon is a
+  // single process shared by every host; an unthrottled burst of chat:send
+  // (e.g. a kanban board auto-running many cards) would otherwise spawn N
+  // concurrent SDK queries / CLI children and exhaust CPU/memory/FDs/rate
+  // limits. Jobs over the cap sit in status 'queued' (already a recognized
+  // status) and start FIFO as slots free in runJob's finally.
+  const MAX_CONCURRENT_JOBS = Math.max(1, Number(maxConcurrentJobs) || 4)
+  let activeJobCount = 0
+  const jobQueue = [] // { live, request, workspaceDir }
+
   const liveJobs = new Map()
   const subscribers = new Map()
   const sessionPermissionGrants = new Map()
   const pendingToolPermissions = new Map()
+
+  // daemon-07: debounce the full metadata rewrite. The timeline jsonl is still
+  // appended on every event (cheap, append-only), but the whole-object
+  // metadata file is only rewritten at most every METADATA_FLUSH_MS during a
+  // streaming turn. Terminal/session events flush immediately so the final
+  // status + sessionId are always durable; lastSequence is recoverable from the
+  // timeline if a crash loses the last sub-flush window.
+  const METADATA_FLUSH_MS = 250
+  const metadataFlushTimers = new Map() // jobId -> timeout
+
+  // Periodic SSE heartbeat so clients can detect a silently-dead stream (e.g. a
+  // half-open socket, or the post-crash wedge that streamJob's liveness guard
+  // also defends against). One unref'd timer for the manager's lifetime.
+  const SSE_HEARTBEAT_MS = 15000
+  const heartbeatTimer = setInterval(() => {
+    for (const listeners of subscribers.values()) {
+      for (const res of listeners) {
+        try { res.write(': ping\n\n') } catch { /* dropped; close handler cleans up */ }
+      }
+    }
+  }, SSE_HEARTBEAT_MS)
+  heartbeatTimer.unref?.()
 
   function jobMetaPath(jobId) {
     return join(jobsDir, `${jobId}.json`)
@@ -750,10 +789,37 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     await fs.writeFile(jobMetaPath(job.id), `${JSON.stringify(job, null, 2)}\n`, 'utf8')
   }
 
+  function clearMetadataFlush(jobId) {
+    const timer = metadataFlushTimers.get(jobId)
+    if (timer) {
+      clearTimeout(timer)
+      metadataFlushTimers.delete(jobId)
+    }
+  }
+
+  function scheduleMetadataFlush(jobId) {
+    if (metadataFlushTimers.has(jobId)) return
+    const timer = setTimeout(() => {
+      metadataFlushTimers.delete(jobId)
+      const live = liveJobs.get(jobId)
+      if (live?.metadata) void writeJobMetadata(live.metadata).catch(() => {})
+    }, METADATA_FLUSH_MS)
+    timer.unref?.()
+    metadataFlushTimers.set(jobId, timer)
+  }
+
   async function appendEvent(jobId, event) {
     const live = liveJobs.get(jobId)
     const metadata = live?.metadata ?? await readJobMetadata(jobId)
     if (!metadata) return null
+
+    // Idempotent terminals: once a 'done' has fired for a job, ignore further
+    // terminal appends. Prevents the duplicate error+done pair when cancelJob
+    // and the runner's own catch both emit terminals (the second pair would
+    // otherwise write a confusing duplicate timeline + re-run status logic).
+    if ((event.type === 'done' || event.type === 'error') && live?.terminalEmitted) {
+      return null
+    }
 
     metadata.lastSequence = Number(metadata.lastSequence ?? 0) + 1
     metadata.updatedAt = new Date().toISOString()
@@ -763,6 +829,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     } else if (event.type === 'done') {
       metadata.status = metadata.error ? 'failed' : 'completed'
       metadata.completedAt = new Date().toISOString()
+      if (live) live.terminalEmitted = true
     }
 
     const payload = {
@@ -773,10 +840,20 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     }
 
     await fs.appendFile(jobTimelinePath(jobId), `${JSON.stringify(payload)}\n`, 'utf8')
-    await writeJobMetadata(metadata)
 
     if (live) {
       live.metadata = metadata
+    }
+
+    // daemon-07: flush metadata immediately on terminal/session events (status,
+    // completedAt, sessionId must be durable right away) or when the job has no
+    // live record to debounce against; otherwise coalesce rapid delta writes.
+    const isTerminalEvent = event.type === 'done' || event.type === 'error'
+    if (isTerminalEvent || event.sessionId || !live) {
+      clearMetadataFlush(jobId)
+      await writeJobMetadata(metadata)
+    } else {
+      scheduleMetadataFlush(jobId)
     }
 
     const listeners = subscribers.get(jobId)
@@ -1605,6 +1682,25 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       }
     } finally {
       liveJobs.delete(job.id)
+      clearMetadataFlush(job.id)
+      activeJobCount = Math.max(0, activeJobCount - 1)
+      pumpJobQueue()
+    }
+  }
+
+  // daemon-01: dispatch queued jobs while a concurrency slot is free. Called
+  // after every enqueue (startJob) and every job completion (runJob finally).
+  function pumpJobQueue() {
+    while (activeJobCount < MAX_CONCURRENT_JOBS && jobQueue.length > 0) {
+      const next = jobQueue.shift()
+      if (!next?.live || !liveJobs.has(next.live.id)) continue // cancelled while queued
+      activeJobCount += 1
+      if (next.live.metadata?.status === 'queued') {
+        next.live.metadata.status = 'running'
+        next.live.metadata.updatedAt = new Date().toISOString()
+        void writeJobMetadata(next.live.metadata).catch(() => {})
+      }
+      void runJob(next.live, next.request, next.workspaceDir)
     }
   }
 
@@ -1616,10 +1712,14 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     })
     const workspaceDir = await ensureProvisionedWorkspace(homeDir, effectiveProjectContext)
     const initialPrompt = extractTaskLabelFromRequest(request)
+    // daemon-01: if every slot is busy, persist as 'queued' from the start so
+    // the dashboard/getJobState reflect reality; pumpJobQueue flips it to
+    // 'running' the moment a slot frees.
+    const startStatus = activeJobCount >= MAX_CONCURRENT_JOBS ? 'queued' : 'running'
     const metadata = {
       id,
       taskLabel: initialPrompt,
-      status: 'running',
+      status: startStatus,
       provider: request.provider,
       model: request.model,
       runMode: request.runMode === 'background' ? 'background' : 'foreground',
@@ -1638,13 +1738,24 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     await fs.writeFile(jobTimelinePath(id), '', 'utf8')
     const live = { id, metadata, cancel: null, proc: null, query: null }
     liveJobs.set(id, live)
-    void runJob(live, request, workspaceDir)
+    jobQueue.push({ live, request, workspaceDir })
+    pumpJobQueue()
     return metadata
   }
 
   async function cancelJob(jobId) {
     const live = liveJobs.get(jobId)
     cancelPendingToolPermissionsForJob(jobId, 'Job cancelled')
+    // daemon-01: a job still waiting in the queue has no live.cancel yet —
+    // remove it from the queue and terminate it cleanly so it never starts.
+    const queueIdx = jobQueue.findIndex(item => item.live?.id === jobId)
+    if (queueIdx !== -1) {
+      jobQueue.splice(queueIdx, 1)
+      liveJobs.delete(jobId)
+      await appendEvent(jobId, { type: 'error', error: 'Job cancelled' })
+      await appendEvent(jobId, { type: 'done' })
+      return { ok: true }
+    }
     if (live?.cancel) {
       live.cancel()
       await appendEvent(jobId, { type: 'error', error: 'Job cancelled' })
@@ -1678,7 +1789,22 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       }
     }
 
-    if (metadata.status === 'running') {
+    // Post-crash wedge guard: metadata may say 'running'/'queued' for a job
+    // that is no longer live (daemon crashed/restarted). Registering a
+    // subscriber would hang the client forever on a stream that never fires.
+    // Emit a terminal pair and close instead.
+    const statusActive = metadata.status === 'running' || metadata.status === 'queued'
+    if (statusActive && !liveJobs.has(jobId)) {
+      const baseSeq = Number(metadata.lastSequence ?? 0)
+      writeSseEvent(res, { jobId, sequence: baseSeq + 1, timestamp: Date.now(), type: 'error', error: 'Job was interrupted (the daemon restarted)' })
+      writeSseEvent(res, { jobId, sequence: baseSeq + 2, timestamp: Date.now(), type: 'done' })
+      return false
+    }
+
+    // Hold the stream open for live jobs that are running OR still queued
+    // (daemon-01): a queued job has no events yet, but it is live and will emit
+    // once a concurrency slot frees, so the subscriber must wait, not close.
+    if (metadata.status === 'running' || metadata.status === 'queued') {
       const listeners = subscribers.get(jobId) ?? new Set()
       listeners.add(res)
       subscribers.set(jobId, listeners)
@@ -1696,12 +1822,78 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     return false
   }
 
+  // daemon-05 (core): prune terminal job metadata + timeline jsonl past a TTL
+  // so ~/.codesurf/jobs and /timelines do not grow without bound. Keeps the
+  // newest `keepRecent` terminal jobs regardless of age, then deletes terminal
+  // jobs older than `maxAgeMs`. Never touches live or active-status
+  // (running/queued) jobs. Checkpoint-record retention is deliberately out of
+  // scope here — it crosses into checkpoints.mjs + per-workspace dirs.
+  async function sweepJobRetention({ maxAgeMs = 30 * 24 * 60 * 60 * 1000, keepRecent = 200 } = {}) {
+    let entries
+    try {
+      entries = await fs.readdir(jobsDir)
+    } catch {
+      return { pruned: 0 }
+    }
+    const now = Date.now()
+    const terminal = []
+    for (const name of entries) {
+      if (!name.endsWith('.json')) continue
+      const id = name.slice(0, -'.json'.length)
+      if (liveJobs.has(id)) continue
+      let meta
+      try {
+        meta = JSON.parse(await fs.readFile(join(jobsDir, name), 'utf8'))
+      } catch {
+        continue
+      }
+      // Only genuinely terminal jobs are prunable; running/queued (and any
+      // crashed-but-still-'running' record daemon-04 will reconcile) are left.
+      if (meta?.status !== 'completed' && meta?.status !== 'failed') continue
+      terminal.push({ id, completedAt: Date.parse(meta?.completedAt ?? '') || 0 })
+    }
+    terminal.sort((a, b) => b.completedAt - a.completedAt)
+    let pruned = 0
+    for (const { id, completedAt } of terminal.slice(keepRecent)) {
+      if (completedAt && now - completedAt < maxAgeMs) continue
+      try {
+        await fs.rm(jobMetaPath(id), { force: true })
+        await fs.rm(jobTimelinePath(id), { force: true })
+        pruned += 1
+      } catch { /* best effort */ }
+    }
+    return { pruned }
+  }
+
+  // Cancel every in-flight job and stop the heartbeat. Called from the daemon's
+  // shutdown() so SIGTERM/SIGINT/uncaught errors do not orphan Claude SDK
+  // queries or spawned codex/opencode/hermes CLI children (which run with
+  // file-write access and would otherwise keep running, reparented to init).
+  async function shutdown() {
+    clearInterval(heartbeatTimer)
+    for (const timer of metadataFlushTimers.values()) clearTimeout(timer)
+    metadataFlushTimers.clear()
+    const jobs = Array.from(liveJobs.values())
+    for (const live of jobs) {
+      try { live.cancel?.() } catch { /* already gone */ }
+      try { live.proc?.kill('SIGTERM') } catch { /* already gone */ }
+    }
+    if (jobs.some((j) => j.proc)) {
+      await new Promise((r) => setTimeout(r, 500))
+      for (const live of jobs) {
+        try { if (live.proc && !live.proc.killed) live.proc.kill('SIGKILL') } catch { /* already gone */ }
+      }
+    }
+  }
+
   return {
     startJob,
     cancelJob,
     answerToolPermission,
     getJobState,
     streamJob,
+    shutdown,
+    sweepJobRetention,
     listLiveJobIds() {
       return Array.from(liveJobs.keys())
     },

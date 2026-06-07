@@ -349,7 +349,15 @@ export class RelayRuntime {
         timestamp: Date.now(),
         payload: { participantId, error: errorMessage },
       } satisfies RelayEvent)
-      await this.relay.setParticipantStatus(participantId, 'error')
+      // The participant may have been removed between scheduling and this tick;
+      // setParticipantStatus throws on an unknown id. This handler runs detached
+      // from schedule() (not awaited), so a throw here becomes an unhandled
+      // rejection — guard it so error recovery can never itself reject.
+      try {
+        await this.relay.setParticipantStatus(participantId, 'error')
+      } catch {
+        // Participant gone — nothing left to mark.
+      }
       state.running = false
     }
   }

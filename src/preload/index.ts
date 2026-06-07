@@ -41,28 +41,29 @@ contextBridge.exposeInMainWorld('electron', {
 
   // File system operations
   fs: {
-    readDir: (path: string) => ipcRenderer.invoke('fs:readDir', path),
-    readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
-    writeFile: (path: string, content: string) => ipcRenderer.invoke('fs:writeFile', path, content),
-    createFile: (path: string) => ipcRenderer.invoke('fs:createFile', path),
-    createDir: (path: string) => ipcRenderer.invoke('fs:createDir', path),
-    deleteFile: (path: string) => ipcRenderer.invoke('fs:deleteFile', path),
-    renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:renameFile', oldPath, newPath),
-    watch: (dirPath: string, callback: () => void) => {
+    readDir: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:readDir', path, workspaceId),
+    readFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:readFile', path, workspaceId),
+    writeFile: (path: string, content: string, workspaceId?: string) => ipcRenderer.invoke('fs:writeFile', path, content, workspaceId),
+    createFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:createFile', path, workspaceId),
+    createDir: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:createDir', path, workspaceId),
+    deleteFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:deleteFile', path, workspaceId),
+    renameFile: (oldPath: string, newPath: string, workspaceId?: string) => ipcRenderer.invoke('fs:renameFile', oldPath, newPath, workspaceId),
+    watch: (dirPath: string, callback: () => void, workspaceId?: string) => {
       const channel = `fs:watch:${dirPath}`
       const handler = () => callback()
       ipcRenderer.on(channel, handler)
-      ipcRenderer.invoke('fs:watchStart', dirPath)
+      ipcRenderer.invoke('fs:watchStart', dirPath, workspaceId)
       return () => {
         ipcRenderer.removeListener(channel, handler)
-        ipcRenderer.invoke('fs:watchStop', dirPath)
+        ipcRenderer.invoke('fs:watchStop', dirPath, workspaceId)
       }
     },
-    revealInFinder: (path: string) => ipcRenderer.invoke('fs:revealInFinder', path),
+    revealInFinder: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:revealInFinder', path, workspaceId),
     writeBrief: (cardId: string, content: string) => ipcRenderer.invoke('fs:writeBrief', cardId, content),
-    stat: (path: string) => ipcRenderer.invoke('fs:stat', path),
-    isProbablyTextFile: (path: string) => ipcRenderer.invoke('fs:isProbablyTextFile', path),
-    copyIntoDir: (sourcePath: string, destDir: string) => ipcRenderer.invoke('fs:copyIntoDir', sourcePath, destDir),
+    stat: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:stat', path, workspaceId),
+    probeDir: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:probeDir', path, workspaceId) as Promise<{ ok: true } | { ok: false, code: string }>,
+    isProbablyTextFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:isProbablyTextFile', path, workspaceId),
+    copyIntoDir: (sourcePath: string, destDir: string, workspaceId?: string) => ipcRenderer.invoke('fs:copyIntoDir', sourcePath, destDir, workspaceId),
     selectDir: () => ipcRenderer.invoke('workspace:openFolder'),
   },
 
@@ -135,7 +136,7 @@ contextBridge.exposeInMainWorld('electron', {
       },
     ) => ipcRenderer.invoke('canvas:getSessionState', workspaceId, sessionEntryId, options),
     deleteSession: (workspaceId: string, sessionEntryId: string) => ipcRenderer.invoke('canvas:deleteSession', workspaceId, sessionEntryId),
-    setSessionArchived: (workspaceId: string, sessionEntryId: string, archived: boolean) => ipcRenderer.invoke('canvas:setSessionArchived', workspaceId, sessionEntryId, archived),
+    setSessionArchived: (workspaceId: string, sessionEntryId: string, archived: boolean, identityKey?: string | null) => ipcRenderer.invoke('canvas:setSessionArchived', workspaceId, sessionEntryId, archived, identityKey),
     renameSession: (workspaceId: string, sessionEntryId: string, title: string) => ipcRenderer.invoke('canvas:renameSession', workspaceId, sessionEntryId, title),
     generateSessionTitle: (workspaceId: string, sessionEntryId: string, entryHint?: SessionEntryHint | null) => ipcRenderer.invoke('canvas:generateSessionTitle', workspaceId, sessionEntryId, entryHint),
     listCheckpoints: (workspaceId: string, sessionEntryId: string) => ipcRenderer.invoke('canvas:listCheckpoints', workspaceId, sessionEntryId),
@@ -229,6 +230,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('chat:steer', payload) as Promise<{ ok: boolean; error?: string }>,
     stop: (cardId: string) => ipcRenderer.invoke('chat:stop', cardId),
     clearSession: (cardId: string) => ipcRenderer.invoke('chat:clearSession', cardId),
+    disposeCard: (cardId: string) => ipcRenderer.invoke('chat:disposeCard', cardId),
     opencodeModels: () => ipcRenderer.invoke('chat:opencodeModels'),
     onOpencodeModelsUpdated: (cb: (payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }) => void) => {
       const handler = (_: unknown, payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }) => cb(payload)
@@ -236,6 +238,7 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('chat:opencodeModelsUpdated', handler)
     },
     openclawAgents: () => ipcRenderer.invoke('chat:openclawAgents'),
+    csagentModels: () => ipcRenderer.invoke('chat:csagentModels'),
     selectFiles: () => ipcRenderer.invoke('chat:selectFiles') as Promise<string[]>,
     writeTempAttachment: (payload: { data: string; mime?: string; ext?: string; filenameHint?: string }) =>
       ipcRenderer.invoke('chat:writeTempAttachment', payload) as Promise<{ ok: true; path: string } | { ok: false; error: string }>,
@@ -295,6 +298,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Window management
   window: {
     new: () => ipcRenderer.invoke('window:new'),
+    openDevSandbox: () => ipcRenderer.invoke('window:openDevSandbox'),
     newTab: () => ipcRenderer.invoke('window:newTab'),
     newWorkspaceTab: (workspaceId?: string | null) => ipcRenderer.invoke('window:newWorkspaceTab', workspaceId ?? null),
     list: () => ipcRenderer.invoke('window:list'),
@@ -404,6 +408,7 @@ contextBridge.exposeInMainWorld('electron', {
   // MCP server
   mcp: {
     getPort: () => ipcRenderer.invoke('mcp:getPort'),
+    getToken: () => ipcRenderer.invoke('mcp:getToken') as Promise<string>,
     getConfig: () => ipcRenderer.invoke('mcp:getConfig'),
     saveServers: (servers: Record<string, unknown>) => ipcRenderer.invoke('mcp:saveServers', servers),
     getWorkspaceServers: (workspaceId: string) => ipcRenderer.invoke('mcp:getWorkspaceServers', workspaceId),
@@ -519,13 +524,23 @@ contextBridge.exposeInMainWorld('electron', {
     tileEntry: (extId: string, tileType: string, tileId?: string) => ipcRenderer.invoke('ext:tile-entry', extId, tileType, tileId),
     chatSurfaceEntry: (extId: string, surfaceId: string, instanceId?: string) => ipcRenderer.invoke('ext:chat-surface-entry', extId, surfaceId, instanceId),
     getBridgeScript: (tileId: string, extId: string) => ipcRenderer.invoke('ext:get-bridge-script', tileId, extId),
+    capabilityGate: (extId: string) => ipcRenderer.invoke('ext:capability-gate', extId),
     enable: (extId: string) => ipcRenderer.invoke('ext:enable', extId),
     disable: (extId: string) => ipcRenderer.invoke('ext:disable', extId),
+    installFromFile: () => ipcRenderer.invoke('ext:install-from-file'),
     refresh: (workspacePath?: string | null) => ipcRenderer.invoke('ext:refresh', workspacePath),
     invoke: (extId: string, method: string, ...args: unknown[]) => ipcRenderer.invoke(`ext:${extId}:${method}`, ...args),
     getSettings: (extId: string) => ipcRenderer.invoke('ext:settings-get', extId),
     setSettings: (extId: string, settings: Record<string, unknown>) => ipcRenderer.invoke('ext:settings-set', extId, settings),
     contextMenuItems: () => ipcRenderer.invoke('ext:context-menu-items'),
+    // v2: aggregated contributions (omit kind for all groups, or pass one kind)
+    contributions: (kind?: string) => ipcRenderer.invoke('ext:contributions', kind),
+    // v2: resolve a contribution entry to HTML (render:'mcp-ui' / 'iframe' feed)
+    surfaceHtml: (extId: string, kind: string, surfaceId: string) => ipcRenderer.invoke('ext:surface-html', extId, kind, surfaceId),
+    // v2: durable reactive per-plugin store
+    storeGet: (extId: string) => ipcRenderer.invoke('ext:store-get', extId),
+    storeSet: (extId: string, patch: Record<string, unknown>) => ipcRenderer.invoke('ext:store-set', extId, patch),
+    storeReplace: (extId: string, value: Record<string, unknown>) => ipcRenderer.invoke('ext:store-replace', extId, value),
   },
 
   // Event bus

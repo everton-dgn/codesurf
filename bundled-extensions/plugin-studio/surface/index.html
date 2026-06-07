@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plugin Studio</title>
+  <style>
+    /* Structural only — colours/typography come from the host --ct-* base stylesheet
+       the bridge injects, so this matches the app theme automatically (point 8). */
+    body { padding: 16px; }
+    h2 { margin: 0 0 2px; font-size: 15px; }
+    .sub { color: var(--ct-text-muted, #888); font-size: 12px; margin-bottom: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .card { border: 1px solid var(--ct-border, rgba(127,127,127,0.25)); border-radius: var(--ct-radius, 8px); padding: 12px; margin-bottom: 14px; }
+    .card h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ct-text-muted, #888); }
+    label { display: block; font-size: 12px; margin: 8px 0 3px; }
+    input, textarea { width: 100%; box-sizing: border-box; }
+    textarea { min-height: 200px; font-family: var(--ct-font-mono, monospace); font-size: 12px; }
+    .hint { font-size: 11px; color: var(--ct-text-muted, #888); margin-top: 6px; line-height: 1.5; }
+    code { background: var(--ct-panel, rgba(127,127,127,0.1)); padding: 1px 4px; border-radius: 4px; font-family: var(--ct-font-mono, monospace); }
+    .recents { display: flex; flex-wrap: wrap; gap: 6px; }
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--ct-border, rgba(127,127,127,0.25)); }
+  </style>
+</head>
+<body>
+  <h2>Plugin Studio</h2>
+  <div class="sub">Author CodeSurf plugins — compose a dev workspace, scaffold a v2 manifest, launch the sandbox.</div>
+
+  <div class="card">
+    <h3>Dev workspace</h3>
+    <div class="row">
+      <button id="open-files">Open File Tree</button>
+      <button id="open-code">Open Code Editor</button>
+      <button id="open-terminal">Open Terminal</button>
+      <button id="open-notes">Open Notes</button>
+    </div>
+    <div class="hint">Spawns the matching tiles next to this one — arrange/snap them and (once Layouts land) save the arrangement as a reusable "Plugin Dev" layout preset.</div>
+  </div>
+
+  <div class="card">
+    <h3>Scaffold a new plugin</h3>
+    <label for="pid">Plugin id (kebab-case)</label>
+    <input id="pid" placeholder="my-plugin" />
+    <label for="pname">Display name</label>
+    <input id="pname" placeholder="My Plugin" />
+    <div class="row" style="margin-top:10px">
+      <button id="gen">Generate manifest</button>
+      <button id="copy">Copy</button>
+    </div>
+    <label for="out">plugin.json</label>
+    <textarea id="out" spellcheck="false" readonly></textarea>
+    <div class="hint">Save as <code>~/.codesurf/extensions/&lt;id&gt;/extension.json</code> (+ a <code>surface/index.html</code>), then it loads on next rescan. Recent: <span id="recents" class="recents"></span></div>
+  </div>
+
+  <script>
+    const cx = window.codesurf || window.contex
+    const $ = (id) => document.getElementById(id)
+
+    function openTile(type) {
+      try { cx && cx.canvas && cx.canvas.createTile(type) } catch (e) { console.warn(e) }
+    }
+    $('open-files').onclick = () => openTile('files')
+    $('open-code').onclick = () => openTile('code')
+    $('open-terminal').onclick = () => openTile('terminal')
+    $('open-notes').onclick = () => openTile('note')
+
+    function manifestFor(id, name) {
+      return JSON.stringify({
+        id: id || 'my-plugin',
+        name: name || 'My Plugin',
+        version: '1.0.0',
+        manifestVersion: 2,
+        kind: 'community',
+        engines: { codesurf: '>=0.1.0' },
+        tier: 'safe',
+        execution: 'iframe',
+        render: 'iframe',
+        contributes: {
+          tiles: [{ type: id || 'my-plugin', label: name || 'My Plugin', icon: 'box', entry: 'surface/index.html', defaultSize: { w: 480, h: 360 } }],
+          commands: [{ id: (id || 'my-plugin') + '.hello', title: (name || 'My Plugin') + ': Hello', slash: 'hello', category: name || 'My Plugin', run: { method: 'hello' } }],
+          footer: [{ id: (id || 'my-plugin') + '.status', label: name || 'My Plugin', position: 'right', order: 50 }]
+        },
+        permissions: []
+      }, null, 2)
+    }
+
+    function regen() {
+      const id = $('pid').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
+      $('out').value = manifestFor(id, $('pname').value.trim())
+    }
+    $('gen').onclick = () => {
+      regen()
+      const id = $('pid').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-')
+      if (id && cx && cx.store) {
+        cx.store.get().then((s) => {
+          const recents = Array.isArray(s.recents) ? s.recents : []
+          const next = [id, ...recents.filter((r) => r !== id)].slice(0, 8)
+          cx.store.set({ recents: next })
+          renderRecents(next)
+        })
+      }
+    }
+    $('copy').onclick = () => { regen(); navigator.clipboard && navigator.clipboard.writeText($('out').value) }
+
+    function renderRecents(list) {
+      $('recents').innerHTML = (list || []).map((r) => '<span class="pill">' + r + '</span>').join('')
+    }
+    if (cx && cx.store) {
+      cx.store.get().then((s) => renderRecents(s.recents))
+      cx.store.subscribe && cx.store.subscribe((s) => renderRecents(s.recents))
+    }
+    regen()
+  </script>
+</body>
+</html>

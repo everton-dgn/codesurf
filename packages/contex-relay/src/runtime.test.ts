@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { RelayParticipant, RelayAgentExecutor, RelayTurnInput, RelayMessage, ContexRelay, RelayEvent } from './types'
+import type { RelayParticipant, RelayAgentExecutor, RelayTurnInput, RelayMessage, RelayEvent } from './types'
+import type { ContexRelay } from './relay'
 import { RelayRuntime, RelayTimeoutError } from './runtime'
 
 // Mock relay that properly handles events

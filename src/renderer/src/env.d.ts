@@ -25,22 +25,23 @@ interface ElectronAPI {
     delete(id: string): Promise<void>
   }
   fs: {
-    readDir(path: string): Promise<Array<{ name: string; path: string; isDir: boolean; ext: string }>>
-    readFile(path: string): Promise<string>
-    writeFile(path: string, content: string): Promise<void>
-    createFile(path: string): Promise<void>
-    createDir(path: string): Promise<void>
-    deleteFile(path: string): Promise<void>
-    delete(path: string): Promise<void>
-    rename(oldPath: string, newPath: string): Promise<void>
-    renameFile(oldPath: string, newPath: string): Promise<void>
+    readDir(path: string, workspaceId?: string): Promise<Array<{ name: string; path: string; isDir: boolean; ext: string }>>
+    readFile(path: string, workspaceId?: string): Promise<string>
+    writeFile(path: string, content: string, workspaceId?: string): Promise<void>
+    createFile(path: string, workspaceId?: string): Promise<void>
+    createDir(path: string, workspaceId?: string): Promise<void>
+    deleteFile(path: string, workspaceId?: string): Promise<void>
+    delete(path: string, workspaceId?: string): Promise<void>
+    rename(oldPath: string, newPath: string, workspaceId?: string): Promise<void>
+    renameFile(oldPath: string, newPath: string, workspaceId?: string): Promise<void>
     basename(path: string): Promise<string>
-    revealInFinder?(path: string): Promise<void>
+    revealInFinder?(path: string, workspaceId?: string): Promise<void>
     writeBrief(cardId: string, content: string): Promise<string>
-    stat(path: string): Promise<{ size: number; mtimeMs: number; isFile: boolean; isDir: boolean } | null>
-    isProbablyTextFile(path: string): Promise<boolean>
-    copyIntoDir(sourcePath: string, destDir: string): Promise<{ path: string }>
-    watch(dirPath: string, callback: () => void): () => void
+    stat(path: string, workspaceId?: string): Promise<{ size: number; mtimeMs: number; isFile: boolean; isDir: boolean } | null>
+    probeDir(path: string, workspaceId?: string): Promise<{ ok: true } | { ok: false, code: string }>
+    isProbablyTextFile(path: string, workspaceId?: string): Promise<boolean>
+    copyIntoDir(sourcePath: string, destDir: string, workspaceId?: string): Promise<{ path: string }>
+    watch(dirPath: string, callback: () => void, workspaceId?: string): () => void
   }
   git?: {
     status(dirPath: string): Promise<{ isRepo: boolean; root: string; files: Array<{ path: string; status: string }> }>
@@ -55,6 +56,7 @@ interface ElectronAPI {
   }
   mcp?: {
     getPort(): Promise<number>
+    getToken(): Promise<string>
     getConfig(): Promise<unknown>
     saveServers(servers: Record<string, unknown>): Promise<void>
     getWorkspaceServers(workspaceId: string): Promise<Record<string, unknown>>
@@ -80,9 +82,11 @@ interface ElectronAPI {
     steer?(payload: { cardId: string; message: string }): Promise<{ ok: boolean; error?: string }>
     stop(cardId: string): Promise<void>
     clearSession(cardId: string): Promise<{ ok: boolean }>
+    disposeCard(cardId: string): Promise<{ ok: boolean }>
     opencodeModels(): Promise<{ models: Array<{ id: string; label: string; description?: string }>; source?: string; loading?: boolean }>
     onOpencodeModelsUpdated(cb: (payload: { models: Array<{ id: string; label: string; description?: string }>; source: string; error?: string }) => void): () => void
     openclawAgents(): Promise<{ agents: Array<{ id: string; label: string; description?: string }> }>
+    csagentModels(): Promise<{ models: Array<{ id: string; label: string; description?: string }> }>
     selectFiles(): Promise<string[]>
     writeTempAttachment(payload: { data: string; mime?: string; ext?: string; filenameHint?: string }): Promise<{ ok: true; path: string } | { ok: false; error: string }>
     answerUserQuestion(payload: {
@@ -235,6 +239,7 @@ interface ElectronAPI {
   }
   window: {
     new(): Promise<void>
+    openDevSandbox(): Promise<null>
     newTab(): Promise<void>
     newWorkspaceTab(workspaceId?: string | null): Promise<{ id: number }>
     isFresh(): Promise<boolean>
@@ -266,7 +271,7 @@ interface ElectronAPI {
       },
     ): Promise<any>
     deleteSession(workspaceId: string, sessionEntryId: string): Promise<{ ok: boolean; error?: string }>
-    setSessionArchived(workspaceId: string, sessionEntryId: string, archived: boolean): Promise<{ ok: boolean; changed?: boolean; archived?: boolean; error?: string }>
+    setSessionArchived(workspaceId: string, sessionEntryId: string, archived: boolean, identityKey?: string | null): Promise<{ ok: boolean; changed?: boolean; archived?: boolean; error?: string }>
     renameSession(workspaceId: string, sessionEntryId: string, title: string): Promise<{ ok: boolean; error?: string; title?: string }>
     generateSessionTitle(workspaceId: string, sessionEntryId: string, entryHint?: SessionEntryHint | null): Promise<{ ok: boolean; error?: string; title?: string }>
     listCheckpoints(workspaceId: string, sessionEntryId: string): Promise<Array<{ id: string; sessionEntryId: string; createdAt: string; restoredAt?: string | null; label: string; reason?: string | null; fileCount: number; files: string[] }>>
@@ -285,6 +290,7 @@ interface ElectronAPI {
     updatePeers(tileId: string, workspaceDir: string, peers: Array<{ peerId: string; peerType: string; tools: string[] }>): Promise<void>
     onData(tileId: string, cb: (data: string) => void): () => void
     onActive(tileId: string, cb: () => void): () => void
+    cd?(tileId: string, dir: string): Promise<void>
   }
   browserTile: {
     sync(payload: { tileId: string; url: string; mode: 'desktop' | 'mobile'; zIndex: number; visible: boolean; bounds: { left: number; top: number; width: number; height: number } }): Promise<unknown>
@@ -294,6 +300,13 @@ interface ElectronAPI {
   }
   agents: {
     detect(): Promise<Array<{ id: string; label: string; cmd: string; path?: string; version?: string; available: boolean }>>
+  }
+  agentPaths?: {
+    get(): Promise<Record<string, string | null>>
+    detect(): Promise<Record<string, string | null>>
+    set(agentId: string, path: string | null): Promise<{ ok: boolean; error?: string }>
+    needsSetup(): Promise<boolean>
+    confirmAll(): Promise<void>
   }
   updater: {
     check(): Promise<{ ok: boolean; currentVersion: string; status: string; updateAvailable: boolean; updateInfo?: { version?: string; releaseName?: string; releaseDate?: string } }>
@@ -412,13 +425,28 @@ interface ElectronAPI {
     tileEntry(extId: string, tileType: string, tileId?: string): Promise<string | null>
     chatSurfaceEntry(extId: string, surfaceId: string, instanceId?: string): Promise<string | null>
     getBridgeScript(tileId: string, extId: string): Promise<string>
+    capabilityGate(extId: string): Promise<{ enforced: boolean; granted: string[] }>
     enable(extId: string): Promise<boolean>
     disable(extId: string): Promise<boolean>
+    installFromFile(): Promise<{ ok: boolean; extId?: string; name?: string; error?: string; canceled?: boolean }>
+    installVsix?(vsixPath: string): Promise<{ ok: boolean; extId?: string; name?: string; error?: string; tiles?: import('../../shared/types').ExtensionTileContrib[] }>
     refresh(workspacePath?: string | null): Promise<Array<{ id: string; name: string; version: string; description?: string; author?: string; tier: 'safe' | 'power'; ui?: import('../../shared/types').ExtensionManifest['ui']; enabled: boolean; contributes?: import('../../shared/types').ExtensionManifest['contributes'] }>>
     invoke(extId: string, method: string, ...args: unknown[]): Promise<unknown>
     getSettings(extId: string): Promise<Record<string, unknown>>
     setSettings(extId: string, settings: Record<string, unknown>): Promise<boolean>
     contextMenuItems(): Promise<import('../../shared/types').ExtensionContextMenuContrib[]>
+    contributions(): Promise<{
+      commands: Array<import('../../shared/types').ExtensionCommandContrib & { extId: string }>
+      footer: Array<import('../../shared/types').ExtensionFooterContrib & { extId: string }>
+      panels: Array<import('../../shared/types').ExtensionPanelContrib & { extId: string }>
+      settingsSections: Array<import('../../shared/types').ExtensionSettingsSectionContrib & { extId: string }>
+      layoutPresets: Array<import('../../shared/types').ExtensionLayoutPresetContrib & { extId: string }>
+    }>
+    contributions(kind: string): Promise<Array<{ extId: string } & Record<string, unknown>>>
+    surfaceHtml(extId: string, kind: string, surfaceId: string): Promise<string | null>
+    storeGet(extId: string): Promise<Record<string, unknown>>
+    storeSet(extId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>
+    storeReplace(extId: string, value: Record<string, unknown>): Promise<Record<string, unknown>>
   }
   chromeSync: {
     listProfiles(): Promise<Array<{ name: string; dir: string; email?: string; avatarIcon?: string }>>
@@ -595,9 +623,26 @@ declare global {
     electron: ElectronAPI
   }
 
-  // Allow <webview> tag in JSX (Electron webview)
+  // Global `JSX` namespace shim → React.JSX.
+  //
+  // @types/react@19 dropped the global `JSX` namespace (it now lives under
+  // `React.JSX`, and JSX *syntax* resolves via `react/jsx-runtime`). But this
+  // codebase has ~58 files with bare `JSX.Element` / `JSX.IntrinsicElements`
+  // type annotations that reference the GLOBAL `JSX` namespace. Previously that
+  // global was supplied only transitively by `react-jsx-parser`'s nested
+  // `@types/react@18`; removing that dependency (dup-04) deletes the global,
+  // so we re-provide it here, mirroring `react/jsx-runtime`'s mapping exactly.
+  // The Electron <webview> augmentation is folded into IntrinsicElements below.
   namespace JSX {
-    interface IntrinsicElements {
+    type ElementType = React.JSX.ElementType
+    interface Element extends React.JSX.Element {}
+    interface ElementClass extends React.JSX.ElementClass {}
+    interface ElementAttributesProperty extends React.JSX.ElementAttributesProperty {}
+    interface ElementChildrenAttribute extends React.JSX.ElementChildrenAttribute {}
+    type LibraryManagedAttributes<C, P> = React.JSX.LibraryManagedAttributes<C, P>
+    interface IntrinsicAttributes extends React.JSX.IntrinsicAttributes {}
+    interface IntrinsicClassAttributes<T> extends React.JSX.IntrinsicClassAttributes<T> {}
+    interface IntrinsicElements extends React.JSX.IntrinsicElements {
       webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
         src?: string
         useragent?: string

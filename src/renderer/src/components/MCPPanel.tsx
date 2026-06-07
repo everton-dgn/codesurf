@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useAppFonts } from '../FontContext'
 import { useTheme } from '../ThemeContext'
 
@@ -137,14 +137,14 @@ export function MCPPanel({ onClose }: Props): JSX.Element {
         ...(s.cmd ? { cmd: s.cmd } : {}),
         ...(s.args?.length ? { args: s.args } : {}),
         ...(s.description ? { description: s.description } : {}),
-        enabled: s.enabled
       }
       userServers[s.name] = entry
     }
 
     let updatedCfg: MCPConfig | null = null
     if (window.electron?.mcp?.saveServers) {
-      updatedCfg = await window.electron.mcp.saveServers(userServers) as MCPConfig
+      await window.electron.mcp.saveServers(userServers)
+      updatedCfg = config
     } else if (config) {
       // Fallback legacy path if IPC changed in future
       const mcpServers: MCPConfig['mcpServers'] = {}
@@ -298,8 +298,8 @@ export function MCPPanel({ onClose }: Props): JSX.Element {
               installed={servers.map(s => s.name)}
               onAdd={s => {
                 if (servers.find(x => x.name === s.name)) return
-                const type = s.url ? 'http' : 'stdio'
-                const updated = [...servers, { ...s, type, enabled: true }]
+                const type: MCPServer['type'] = s.url ? 'http' : 'stdio'
+                const updated: MCPServer[] = [...servers, { ...s, type, enabled: true }]
                 setServers(updated)
                 save(updated)
               }}
@@ -331,7 +331,6 @@ export function MCPPanel({ onClose }: Props): JSX.Element {
 
 function Section({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{ fontSize: 9, color: theme.accent.base, fontFamily: 'inherit', letterSpacing: 1, fontWeight: 700, marginBottom: 8 }}>{label}</div>

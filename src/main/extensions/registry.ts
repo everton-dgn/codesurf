@@ -15,7 +15,20 @@ import { ExtensionContext } from './context'
 import { loadPowerExtension } from './loader'
 import { bus } from '../event-bus'
 import { adapters, tryAdaptExtension } from './adapters'
-import type { ExtensionManifest, ExtensionTileContrib, ExtensionChatSurfaceContrib, ExtensionMCPToolContrib, ExtensionContextMenuContrib } from '../../shared/types'
+import type { ExtensionManifest, ExtensionTileContrib, ExtensionChatSurfaceContrib, ExtensionMCPToolContrib, ExtensionContextMenuContrib, ExtensionCommandContrib, ExtensionFooterContrib, ExtensionPanelContrib, ExtensionSettingsSectionContrib, ExtensionLayoutPresetContrib } from '../../shared/types'
+import { resolveExtensionEnabled } from './activation-policy'
+
+/** A v2 contribution tagged with its owning plugin id. */
+export type OwnedContribution<T> = T & { extId: string }
+
+/** All v2 contributions aggregated across enabled plugins, grouped by surface kind. */
+export interface AggregatedContributions {
+  commands: OwnedContribution<ExtensionCommandContrib>[]
+  footer: OwnedContribution<ExtensionFooterContrib>[]
+  panels: OwnedContribution<ExtensionPanelContrib>[]
+  settingsSections: OwnedContribution<ExtensionSettingsSectionContrib>[]
+  layoutPresets: OwnedContribution<ExtensionLayoutPresetContrib>[]
+}
 
 // ── Persisted disabled-extension set ──────────────────────────────────────────
 
@@ -24,6 +37,8 @@ const DISABLED_EXTS_PATH = join(CONTEX_HOME, 'disabled-extensions.json')
  *  this, a rescan would re-apply the catalog default-off and silently
  *  uninstall what the user just installed. */
 const ENABLED_CATALOG_PATH = join(CONTEX_HOME, 'enabled-catalog-extensions.json')
+/** Capability grants (P1): extId -> consented capability names (see loadGrantsMap). */
+const GRANTS_PATH = join(CONTEX_HOME, 'plugin-capability-grants.json')
 
 async function loadDisabledSet(): Promise<Set<string>> {
   try {
@@ -55,6 +70,27 @@ async function saveEnabledCatalogSet(ids: Set<string>): Promise<void> {
   await fs.writeFile(ENABLED_CATALOG_PATH, JSON.stringify([...ids], null, 2))
 }
 
+/**
+ * Capability grants (P1). Maps extId -> the capability names the user consented
+ * to at enable time. Authoritative + persisted so activation/the bridge gate
+ * survive restarts. A plugin update that adds a capability is NOT auto-granted —
+ * the new capability stays ungranted until the user re-enables (re-consents).
+ */
+async function loadGrantsMap(): Promise<Record<string, string[]>> {
+  try {
+    const raw = await fs.readFile(GRANTS_PATH, 'utf8')
+    const obj = JSON.parse(raw)
+    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {}
+  } catch {
+    return {}
+  }
+}
+
+async function saveGrantsMap(grants: Record<string, string[]>): Promise<void> {
+  await fs.mkdir(CONTEX_HOME, { recursive: true })
+  await fs.writeFile(GRANTS_PATH, JSON.stringify(grants, null, 2))
+}
+
 export interface LoadedExtension {
   manifest: ExtensionManifest
   deactivate?: () => void
@@ -67,6 +103,21 @@ function normalizeManifestUi(manifest: ExtensionManifest): void {
   if (!manifest.ui.mode) {
     manifest.ui.mode = manifest.tier === 'safe' ? 'native' : 'custom'
   }
+  // ── v2 axis derivation (back-compat aliases; see docs/plugins/00-architecture.md) ──
+  // execution and render are orthogonal; when omitted they derive from tier/ui.mode so
+  // every existing (v1) manifest resolves to its exact current behaviour.
+  if (!manifest.execution) {
+    manifest.execution = manifest.tier === 'power' ? 'node' : 'iframe'
+  }
+  if (!manifest.render) {
+    // v1 'native' was never implemented and actually rendered as an iframe — keep that.
+    // Only v2 plugins opt into the real mcp-ui path via ui.mode:'native' or render:'mcp-ui'.
+    manifest.render = manifest.manifestVersion === 2 && manifest.ui.mode === 'native'
+      ? 'mcp-ui'
+      : manifest.ui.mode === 'custom'
+        ? 'iframe'
+        : 'iframe'
+  }
 }
 
 export class ExtensionRegistry {
@@ -75,6 +126,8 @@ export class ExtensionRegistry {
   private activeWorkspacePath: string | null = null
   private disabledIds: Set<string> = new Set()
   private enabledCatalogIds: Set<string> = new Set()
+  /** P1 capability grants: extId -> consented capability names. */
+  private grants: Record<string, string[]> = {}
   private bundledDirs: string[]
   /** Catalog dirs: scanned for manifests but extensions default to DISABLED
    *  so their power-tier main scripts do not execute. They appear in the
@@ -89,6 +142,7 @@ export class ExtensionRegistry {
   async scan(): Promise<void> {
     this.disabledIds = await loadDisabledSet()
     this.enabledCatalogIds = await loadEnabledCatalogSet()
+    this.grants = await loadGrantsMap()
     for (const bundledDir of this.bundledDirs) {
       await this.scanDir(bundledDir)
     }
@@ -103,7 +157,10 @@ export class ExtensionRegistry {
 
   async scanWorkspace(workspacePath: string): Promise<void> {
     const wsDir = join(workspacePath, '.contex', EXTENSIONS_DIRNAME)
-    await this.scanDir(wsDir)
+    // A workspace's .contex/extensions dir is attacker-controllable (it ships
+    // with any cloned repo). Mark the scan untrusted so power-tier extensions
+    // there require explicit user enablement instead of auto-activating.
+    await this.scanDir(wsDir, { untrustedScope: true })
   }
 
   async rescan(workspacePath?: string | null): Promise<void> {
@@ -127,7 +184,7 @@ export class ExtensionRegistry {
     }
     await this.scanDirLight(join(CONTEX_HOME, EXTENSIONS_DIRNAME), manifests, disabledIds)
     if (targetWorkspacePath) {
-      await this.scanDirLight(join(targetWorkspacePath, '.contex', EXTENSIONS_DIRNAME), manifests, disabledIds)
+      await this.scanDirLight(join(targetWorkspacePath, '.contex', EXTENSIONS_DIRNAME), manifests, disabledIds, { untrustedScope: true })
     }
     // Catalog dirs — scanned last, default-disabled unless the user has
     // explicitly enabled the id (reflected in disabledIds set membership).
@@ -142,7 +199,7 @@ export class ExtensionRegistry {
     return this.activeWorkspacePath
   }
 
-  private async scanDir(dir: string, opts?: { defaultEnabled?: boolean }): Promise<void> {
+  private async scanDir(dir: string, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<void> {
     let entries: string[]
     try {
       entries = await fs.readdir(dir)
@@ -176,7 +233,7 @@ export class ExtensionRegistry {
     dir: string,
     manifests: Map<string, ExtensionManifest>,
     disabledIds: Set<string>,
-    opts?: { defaultEnabled?: boolean },
+    opts?: { defaultEnabled?: boolean; untrustedScope?: boolean },
   ): Promise<void> {
     let entries: string[]
     try {
@@ -200,7 +257,7 @@ export class ExtensionRegistry {
     }
   }
 
-  private async readManifestLight(extDir: string, disabledIds: Set<string>, opts?: { defaultEnabled?: boolean }): Promise<ExtensionManifest | null> {
+  private async readManifestLight(extDir: string, disabledIds: Set<string>, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<ExtensionManifest | null> {
     try {
       const raw = await fs.readFile(join(extDir, 'extension.json'), 'utf8')
       const manifest: ExtensionManifest = JSON.parse(raw)
@@ -213,10 +270,15 @@ export class ExtensionRegistry {
       // Catalog entries default to disabled unless the user has explicitly
       // flipped them (persisted disabledIds treats presence==disabled; absence
       // normally means enabled — for catalog we invert that default).
-      const defaultEnabled = opts?.defaultEnabled !== false
-      manifest._enabled = disabledIds.has(manifest.id)
-        ? false
-        : (defaultEnabled ? (manifest._enabled !== false) : false)
+      manifest._enabled = resolveExtensionEnabled({
+        untrustedScope: opts?.untrustedScope,
+        defaultEnabledOption: opts?.defaultEnabled,
+        tier: manifest.tier,
+        disabled: disabledIds.has(manifest.id),
+        enabledCatalogIds: this.enabledCatalogIds,
+        extensionId: manifest.id,
+        manifestEnabled: manifest._enabled,
+      })
       if (manifest.contributes?.tiles) {
         for (const tile of manifest.contributes.tiles) {
           if (!tile.type.startsWith('ext:')) {
@@ -255,7 +317,7 @@ export class ExtensionRegistry {
     }
   }
 
-  private async loadExtension(extDir: string, opts?: { defaultEnabled?: boolean }): Promise<void> {
+  private async loadExtension(extDir: string, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<void> {
     const manifestPath = join(extDir, 'extension.json')
     const raw = await fs.readFile(manifestPath, 'utf8')
     const manifest: ExtensionManifest = JSON.parse(raw)
@@ -271,13 +333,20 @@ export class ExtensionRegistry {
     // user has explicitly enabled them via the gallery (tracked in the
     // enabledCatalogIds set, which is persisted).
     manifest._path = resolve(extDir)
-    const defaultEnabled = opts?.defaultEnabled !== false
-    const catalogUserEnabled = !defaultEnabled && this.enabledCatalogIds.has(manifest.id)
-    manifest._enabled = this.disabledIds.has(manifest.id)
-      ? false
-      : (defaultEnabled
-          ? (manifest._enabled !== false)
-          : catalogUserEnabled)
+    // Power-tier extensions found in an untrusted scope (a workspace's
+    // .contex/extensions dir) run Node in the main process, so they must be
+    // explicitly enabled by the user before activation — never auto-run on
+    // workspace open. They reuse the same persisted enabled set as catalog
+    // entries.
+    manifest._enabled = resolveExtensionEnabled({
+      untrustedScope: opts?.untrustedScope,
+      defaultEnabledOption: opts?.defaultEnabled,
+      tier: manifest.tier,
+      disabled: this.disabledIds.has(manifest.id),
+      enabledCatalogIds: this.enabledCatalogIds,
+      extensionId: manifest.id,
+      manifestEnabled: manifest._enabled,
+    })
 
     // Namespace tile types with ext: prefix
     if (manifest.contributes?.tiles) {
@@ -320,15 +389,21 @@ export class ExtensionRegistry {
   }
 
   /** Load an already-parsed manifest (used by adapters) */
-  async loadFromManifest(manifest: ExtensionManifest, opts?: { defaultEnabled?: boolean }): Promise<void> {
+  async loadFromManifest(manifest: ExtensionManifest, opts?: { defaultEnabled?: boolean; untrustedScope?: boolean }): Promise<void> {
     if (this.extensions.has(manifest.id)) return
 
     normalizeManifestUi(manifest)
 
-    // Apply persisted disabled state (+ catalog default-off)
-    const defaultEnabled = opts?.defaultEnabled !== false
-    if (this.disabledIds.has(manifest.id)) manifest._enabled = false
-    else if (!defaultEnabled) manifest._enabled = false
+    // Apply persisted disabled state (+ catalog / untrusted-power default-off)
+    manifest._enabled = resolveExtensionEnabled({
+      untrustedScope: opts?.untrustedScope,
+      defaultEnabledOption: opts?.defaultEnabled,
+      tier: manifest.tier,
+      disabled: this.disabledIds.has(manifest.id),
+      enabledCatalogIds: this.enabledCatalogIds,
+      extensionId: manifest.id,
+      manifestEnabled: manifest._enabled,
+    })
 
     // Namespace tiles
     if (manifest.contributes?.tiles) {
@@ -364,13 +439,30 @@ export class ExtensionRegistry {
     return this.extensions.get(id)
   }
 
+  /**
+   * P1 capability gate for the iframe bridge (least privilege). A plugin that
+   * declares NO capabilities is ungated (full SDK surface — no regression). A
+   * plugin that declares capabilities only receives the namespaces matching its
+   * GRANTED set (recorded at enable time); a plugin enabled before grants existed
+   * is grandfathered to its declared set so it keeps working.
+   */
+  getCapabilityGate(id: string): { enforced: boolean; granted: string[] } {
+    const manifest = this.extensions.get(id)?.manifest
+    const declared = manifest?.capabilities
+    if (!Array.isArray(declared) || declared.length === 0) {
+      return { enforced: false, granted: [] }
+    }
+    const granted = this.grants[id] ?? declared.map(c => c.name)
+    return { enforced: true, granted }
+  }
+
   getTileTypes(): ExtensionTileContrib[] {
     const tiles: ExtensionTileContrib[] = []
     for (const ext of this.extensions.values()) {
       if (!ext.manifest._enabled) continue
       if (ext.manifest.contributes?.tiles) {
         for (const tile of ext.manifest.contributes.tiles) {
-          tiles.push({ ...tile, extId: ext.manifest.id, uiMode: ext.manifest.ui?.mode })
+          tiles.push({ ...tile, extId: ext.manifest.id, uiMode: ext.manifest.ui?.mode, render: ext.manifest.render })
         }
       }
     }
@@ -432,6 +524,83 @@ export class ExtensionRegistry {
     return items
   }
 
+  // ── v2 contribution aggregation (additive; surfaces opt into these) ─────────
+  // Each getter collects a single contribution kind from every enabled plugin and
+  // tags it with the owning plugin id. `getContributions()` returns them grouped so
+  // the renderer can fetch everything in one IPC round-trip and fan out to <Slot>s.
+
+  private collect<T>(pick: (m: ExtensionManifest) => T[] | undefined): OwnedContribution<T>[] {
+    const out: OwnedContribution<T>[] = []
+    for (const ext of this.extensions.values()) {
+      if (!ext.manifest._enabled) continue
+      for (const item of pick(ext.manifest) ?? []) {
+        out.push({ ...item, extId: ext.manifest.id })
+      }
+    }
+    return out
+  }
+
+  getCommands(): OwnedContribution<ExtensionCommandContrib>[] {
+    return this.collect(m => m.contributes?.commands)
+  }
+
+  getFooterItems(): OwnedContribution<ExtensionFooterContrib>[] {
+    return this.collect(m => m.contributes?.footer)
+  }
+
+  getPanels(): OwnedContribution<ExtensionPanelContrib>[] {
+    return this.collect(m => m.contributes?.panels)
+  }
+
+  getSettingsSections(): OwnedContribution<ExtensionSettingsSectionContrib>[] {
+    return this.collect(m => m.contributes?.settingsSections)
+  }
+
+  getLayoutPresets(): OwnedContribution<ExtensionLayoutPresetContrib>[] {
+    return this.collect(m => m.contributes?.layoutPresets)
+  }
+
+  getContributions(): AggregatedContributions {
+    return {
+      commands: this.getCommands(),
+      footer: this.getFooterItems(),
+      panels: this.getPanels(),
+      settingsSections: this.getSettingsSections(),
+      layoutPresets: this.getLayoutPresets(),
+    }
+  }
+
+  /** Read a contribution's entry file as HTML for the render:'mcp-ui' (or iframe)
+   *  html feed. If the entry is an MCP-UI createUIResource JSON, extract its html
+   *  text. Path-guarded to the extension root. */
+  async getSurfaceHtml(extId: string, kind: string, surfaceId: string): Promise<string | null> {
+    const ext = this.extensions.get(extId)
+    if (!ext?.manifest._path || !ext.manifest._enabled) return null
+    const c = ext.manifest.contributes
+    let entry: string | undefined
+    if (kind === 'footer') entry = c?.footer?.find(f => f.id === surfaceId)?.entry
+    else if (kind === 'panel') entry = c?.panels?.find(p => p.id === surfaceId)?.entry
+    else if (kind === 'tile') entry = c?.tiles?.find(t => t.type === surfaceId)?.entry
+    else if (kind === 'chat') entry = c?.chatSurfaces?.find(s => s.id === surfaceId)?.entry
+    if (!entry) return null
+    const root = resolve(ext.manifest._path)
+    const abs = resolve(root, ...entry.split(/[\\/]/).filter(Boolean))
+    if (abs !== root && !abs.startsWith(root + '/')) return null // path-traversal guard
+    try {
+      const raw = await fs.readFile(abs, 'utf8')
+      if (raw.trimStart().startsWith('{')) {
+        try {
+          const obj = JSON.parse(raw) as { resource?: { contents?: Array<{ text?: string }> }; contents?: Array<{ text?: string }> }
+          const text = obj?.resource?.contents?.[0]?.text ?? obj?.contents?.[0]?.text
+          if (typeof text === 'string') return text
+        } catch { /* not mcp-ui resource json; serve raw */ }
+      }
+      return raw
+    } catch {
+      return null
+    }
+  }
+
   getTileEntry(extId: string, tileType: string, tileId?: string): string | null {
     const ext = this.extensions.get(extId)
     if (!ext?.manifest._path || !ext.manifest._enabled) return null
@@ -486,14 +655,27 @@ export class ExtensionRegistry {
     // If this was installed from a catalog dir, persist that the user has
     // explicitly enabled it so future rescans do not revert the default-off.
     const isCatalog = this.isCatalogExtension(ext.manifest)
-    if (isCatalog) {
+    // Persist explicit enablement for catalog entries AND any power-tier
+    // extension. Workspace power extensions default to off (untrusted scope);
+    // recording the opt-in here keeps them enabled across rescans.
+    const persistEnabled = isCatalog || ext.manifest.tier === 'power'
+    if (persistEnabled) {
       this.enabledCatalogIds.add(id)
+    }
+    // P1 consent: enabling a plugin that declares capabilities grants exactly
+    // those, recorded authoritatively + persisted. The "Wants: <cap>" row in the
+    // gallery is the consent surface; clicking Add/enable is the consent.
+    const caps = ext.manifest.capabilities
+    const persistGrants = Array.isArray(caps) && caps.length > 0
+    if (persistGrants) {
+      this.grants[id] = caps.map(c => c.name)
     }
     // Await disk writes so a subsequent ext:refresh rescan reads the latest
     // sets from disk (scan() reloads both sets from files).
     await Promise.allSettled([
       saveDisabledSet(this.disabledIds),
-      isCatalog ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
+      persistEnabled ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
+      persistGrants ? saveGrantsMap(this.grants) : Promise.resolve(),
     ])
     // Power-tier extensions may not have been activated on first scan (catalog
     // default-off). Load the main script now that it's enabled.
@@ -519,12 +701,13 @@ export class ExtensionRegistry {
     ext.manifest._enabled = false
     this.disabledIds.add(id)
     const isCatalog = this.isCatalogExtension(ext.manifest)
-    if (isCatalog) {
+    const persistEnabled = isCatalog || ext.manifest.tier === 'power'
+    if (persistEnabled) {
       this.enabledCatalogIds.delete(id)
     }
     await Promise.allSettled([
       saveDisabledSet(this.disabledIds),
-      isCatalog ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
+      persistEnabled ? saveEnabledCatalogSet(this.enabledCatalogIds) : Promise.resolve(),
     ])
     if (ext.deactivate) {
       ext.deactivate()

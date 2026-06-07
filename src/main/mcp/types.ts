@@ -1,0 +1,17 @@
+import type { ExtensionRegistry } from '../extensions/registry'
+
+export interface McpToolSchema {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+}
+
+export interface McpToolContext {
+  sendToRenderer: (event: string, data: unknown) => void
+  getExtensionRegistry: () => ExtensionRegistry | null
+  pushSSE: (cardId: string, event: string, data: unknown) => void
+}
+
+export function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}

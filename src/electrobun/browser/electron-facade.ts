@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types.ts'
+import { type AppSettings, withFreshInstallDefaults } from '../../shared/types.ts'
 
 export type ElectrobunInvokeArgs = unknown[]
 
@@ -49,10 +49,11 @@ export function createElectrobunEventHub(): ElectrobunEventHub {
 }
 
 function cloneDefaultSettings(): AppSettings {
+  const defaults = withFreshInstallDefaults()
   if (typeof structuredClone === 'function') {
-    return structuredClone(DEFAULT_SETTINGS)
+    return structuredClone(defaults)
   }
-  return JSON.parse(JSON.stringify(DEFAULT_SETTINGS)) as AppSettings
+  return JSON.parse(JSON.stringify(defaults)) as AppSettings
 }
 
 export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
@@ -104,6 +105,7 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
   if (channel === 'window:getCurrentId') return 1
   if (channel === 'zoom:getLevel') return 0
   if (channel === 'mcp:getPort') return null
+  if (channel === 'mcp:getToken') return ''
   if (channel === 'mcp:getWorkspaceServers') return {}
   if (channel === 'mcp:saveWorkspaceServers') return {}
   if (channel === 'system:memStats') return { heapUsed: 0, heapTotal: 0, rss: 0 }
@@ -114,10 +116,26 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
   if (channel === 'updater:check') return { ok: true, status: 'disabled-electrobun-runtime', updateAvailable: false }
   if (channel === 'chat:send') return { ok: false, error: 'Electrobun runtime chat handler was unavailable.' }
   if (channel === 'chat:writeTempAttachment') return { ok: false, error: 'Electrobun runtime attachment handler was unavailable.' }
+  if (channel === 'chat:disposeCard') return true
+  if (channel === 'chat:csagentModels') return []
+  if (channel === 'transcribe:run') return { ok: false, error: 'Electrobun runtime transcribe handler was unavailable.' }
+  if (channel === 'tts:synthesize') return { ok: false, error: 'Electrobun runtime TTS handler was unavailable.' }
+  if (channel === 'spokify:run') return { ok: false, error: 'Electrobun runtime spokify handler was unavailable.' }
+  if (channel === 'secrets:set' || channel === 'secrets:delete') return { ok: true }
+  if (channel === 'secrets:list') return { ok: true, names: [] }
+  if (channel === 'secrets:has') return { ok: true, has: false }
+  if (channel === 'ext:capability-gate') return { ok: false, reason: 'Electrobun runtime extension gate unavailable.' }
+  if (channel === 'ext:install-from-file') return null
+  if (channel === 'ext:contributions') return []
+  if (channel === 'ext:surface-html') return ''
+  if (channel === 'ext:store-get' || channel === 'ext:store-replace') return {}
+  if (channel === 'ext:store-set') return {}
+  if (channel === 'window:newWorkspaceTab') return true
   if (channel === 'localProxy:getStatus') return { running: false }
   if (channel === 'localProxy:probeBackends') return []
   if (channel === 'dreaming:status') return { running: false, auto: null, lastRun: null }
   if (channel === 'fs:stat') return null
+  if (channel === 'fs:probeDir') return { ok: false, code: 'ENOENT' }
   if (channel === 'fs:isProbablyTextFile') return false
   if (channel === 'fs:readDir') return []
   if (channel === 'fs:readFile') return ''
@@ -149,6 +167,12 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
     || channel.startsWith('window:')
     || channel.startsWith('appearance:')
     || channel.startsWith('mcp:')
+    || channel.startsWith('ui:')
+    || channel.startsWith('transcribe:')
+    || channel.startsWith('tts:')
+    || channel.startsWith('spokify:')
+    || channel.startsWith('secrets:')
+    || channel.startsWith('chat:')
   ) return true
 
   return null
@@ -209,17 +233,18 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       createDir: makeInvoker(invoke, 'fs:createDir'),
       deleteFile: makeInvoker(invoke, 'fs:deleteFile'),
       renameFile: makeInvoker(invoke, 'fs:renameFile'),
-      watch: (dirPath: string, callback: () => void) => {
-        void invoke('fs:watchStart', [dirPath])
+      watch: (dirPath: string, callback: () => void, workspaceId?: string) => {
+        void invoke('fs:watchStart', [dirPath, workspaceId])
         const off = eventHub.on(`fs:watch:${dirPath}`, () => callback())
         return () => {
           off()
-          void invoke('fs:watchStop', [dirPath])
+          void invoke('fs:watchStop', [dirPath, workspaceId])
         }
       },
       revealInFinder: makeInvoker(invoke, 'fs:revealInFinder'),
       writeBrief: makeInvoker(invoke, 'fs:writeBrief'),
       stat: makeInvoker(invoke, 'fs:stat'),
+      probeDir: makeInvoker(invoke, 'fs:probeDir'),
       isProbablyTextFile: makeInvoker(invoke, 'fs:isProbablyTextFile'),
       copyIntoDir: makeInvoker(invoke, 'fs:copyIntoDir'),
       selectDir: makeInvoker(invoke, 'workspace:openFolder'),
@@ -304,9 +329,11 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       steer: makeInvoker(invoke, 'chat:steer'),
       stop: makeInvoker(invoke, 'chat:stop'),
       clearSession: makeInvoker(invoke, 'chat:clearSession'),
+      disposeCard: makeInvoker(invoke, 'chat:disposeCard'),
       opencodeModels: makeInvoker(invoke, 'chat:opencodeModels'),
       onOpencodeModelsUpdated: makeEventListener(eventHub, 'chat:opencodeModelsUpdated'),
       openclawAgents: makeInvoker(invoke, 'chat:openclawAgents'),
+      csagentModels: makeInvoker(invoke, 'chat:csagentModels'),
       selectFiles: makeInvoker(invoke, 'chat:selectFiles'),
       writeTempAttachment: makeInvoker(invoke, 'chat:writeTempAttachment'),
       answerUserQuestion: makeInvoker(invoke, 'chat:answerUserQuestion'),
@@ -327,7 +354,9 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
     },
     window: {
       new: makeInvoker(invoke, 'window:new'),
+      openDevSandbox: makeInvoker(invoke, 'window:openDevSandbox'),
       newTab: makeInvoker(invoke, 'window:newTab'),
+      newWorkspaceTab: makeInvoker(invoke, 'window:newWorkspaceTab'),
       list: makeInvoker(invoke, 'window:list'),
       getCurrentId: makeInvoker(invoke, 'window:getCurrentId'),
       setTitle: makeInvoker(invoke, 'window:setTitle'),
@@ -398,6 +427,7 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
     },
     mcp: {
       getPort: makeInvoker(invoke, 'mcp:getPort'),
+      getToken: makeInvoker(invoke, 'mcp:getToken'),
       getConfig: makeInvoker(invoke, 'mcp:getConfig'),
       saveServers: makeInvoker(invoke, 'mcp:saveServers'),
       getWorkspaceServers: makeInvoker(invoke, 'mcp:getWorkspaceServers'),
@@ -479,6 +509,13 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       disable: makeInvoker(invoke, 'ext:disable'),
       refresh: makeInvoker(invoke, 'ext:refresh'),
       invoke: (extId: string, method: string, ...args: unknown[]) => invoke(`ext:${extId}:${method}`, args),
+      capabilityGate: makeInvoker(invoke, 'ext:capability-gate'),
+      installFromFile: makeInvoker(invoke, 'ext:install-from-file'),
+      contributions: makeInvoker(invoke, 'ext:contributions'),
+      surfaceHtml: makeInvoker(invoke, 'ext:surface-html'),
+      storeGet: makeInvoker(invoke, 'ext:store-get'),
+      storeSet: makeInvoker(invoke, 'ext:store-set'),
+      storeReplace: makeInvoker(invoke, 'ext:store-replace'),
       getSettings: makeInvoker(invoke, 'ext:settings-get'),
       setSettings: makeInvoker(invoke, 'ext:settings-set'),
       contextMenuItems: makeInvoker(invoke, 'ext:context-menu-items'),
@@ -522,6 +559,21 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
         zoomLevel = Number.isFinite(level) ? level : 0
         await invoke('ui:setZoomLevel', [zoomLevel])
       },
+    },
+    transcribe: {
+      run: makeInvoker(invoke, 'transcribe:run'),
+    },
+    tts: {
+      synthesize: makeInvoker(invoke, 'tts:synthesize'),
+    },
+    spokify: {
+      run: makeInvoker(invoke, 'spokify:run'),
+    },
+    secrets: {
+      set: makeInvoker(invoke, 'secrets:set'),
+      delete: makeInvoker(invoke, 'secrets:delete'),
+      list: makeInvoker(invoke, 'secrets:list'),
+      has: makeInvoker(invoke, 'secrets:has'),
     },
   }
 }

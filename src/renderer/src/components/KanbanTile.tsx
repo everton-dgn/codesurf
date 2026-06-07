@@ -97,8 +97,9 @@ function AgentOverview({ workspaceId, onFocusTile }: {
 
   const refresh = useCallback(() => {
     if (!workspaceId || !window.electron?.activity) return
-    window.electron.activity.byAgent(workspaceId).then((result: Record<string, ActivityRecord[]>) => {
-      setGroups(result)
+    window.electron.activity.byAgent(workspaceId).then((result) => {
+      const groups = result as Record<string, ActivityRecord[]>
+      setGroups(groups)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [workspaceId])
@@ -208,7 +209,6 @@ function AgentOverview({ workspaceId, onFocusTile }: {
 
 function StatusPill({ count, color }: { count: number; color: string }): JSX.Element {
   const theme = useTheme()
-  const fonts = useAppFonts()
   return (
     <span style={{
       fontSize: 9, fontWeight: 700, color,
@@ -291,10 +291,10 @@ function ActivityRecordRow({ record, onFocusTile }: {
 
 // ─── Main KanbanTile ────────────────────────────────────────────────────────
 
-export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, onFocusTile }: Props): JSX.Element {
+export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, height: _height, onFocusTile }: Props): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
-  const [mode, setMode] = useState<KanbanMode>('board')
+  const [mode] = useState<KanbanMode>('board')
   const [columns, setColumns] = useState<KanbanColumn[]>(DEFAULT_COLUMNS)
   const [cards, setCards] = useState<KanbanCardData[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -344,7 +344,6 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
     return acc
   }, {} as Record<string, ActivityEvent>)
 
-  const HEADER = 38
   const MIN_COL_W = 180
 
   const logActivity = useCallback((type: ActivityEvent['type'], cardId: string, message: string) => {
@@ -430,8 +429,24 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
+  const columnsRef = useRef(columns)
+  const cardsRef = useRef(cards)
+  const themeRef = useRef(theme)
+  const tileIdRef = useRef(tileId)
+  const logActivityRef = useRef(logActivity)
+  columnsRef.current = columns
+  cardsRef.current = cards
+  themeRef.current = theme
+  tileIdRef.current = tileId
+  logActivityRef.current = logActivity
+
   const handleKanbanEvent = useCallback((event: string, data: any) => {
-    if (data?.boardTileId && data.boardTileId !== tileId) return
+    if (data?.boardTileId && data.boardTileId !== tileIdRef.current) return
+
+    const columns = columnsRef.current
+    const cards = cardsRef.current
+    const theme = themeRef.current
+    const logActivity = logActivityRef.current
 
     if (event === 'card_complete') {
       logActivity('complete', data.cardId, data.summary ?? 'Task complete')
@@ -525,34 +540,44 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
         answered: false
       }])
     }
-  }, [columns, logActivity, cards, tileId])
+  }, [])
+
+  const handleKanbanEventRef = useRef(handleKanbanEvent)
+  handleKanbanEventRef.current = handleKanbanEvent
+
+  const dispatchKanbanEvent = useCallback((event: string, data: any) => {
+    handleKanbanEventRef.current(event, data)
+  }, [])
 
   // Subscribe to SSE stream from MCP server
   useEffect(() => {
     let es: EventSource | null = null
-    window.electron?.mcp?.getPort?.().then((port: number | null) => {
+    void (async () => {
+      const port = await window.electron?.mcp?.getPort?.()
       if (!port) return
-      es = new EventSource(`http://127.0.0.1:${port}/events?card_id=global`)
+      const { openMcpEventSource } = await import('../utils/mcpHttp')
+      es = await openMcpEventSource(port, 'global')
+      if (!es) return
       const handle = (e: MessageEvent) => {
         try {
           const { cardId, ...rest } = JSON.parse(e.data)
-          handleKanbanEvent(e.type, { cardId, ...rest })
+          dispatchKanbanEvent(e.type, { cardId, ...rest })
         } catch { /**/ }
       }
       ;['card_complete','card_update','card_error','canvas_event'].forEach(ev => {
         es!.addEventListener(ev, handle as EventListener)
       })
-    })
+    })()
     return () => es?.close()
-  }, [handleKanbanEvent])
+  }, [dispatchKanbanEvent])
 
   // Also listen via IPC (fallback for same-process events)
   useEffect(() => {
     const el = (window as any).electron?.mcp
     if (!el?.onKanban) return
-    const cleanup = el.onKanban((event: string, data: any) => handleKanbanEvent(event, data))
+    const cleanup = el.onKanban((event: string, data: any) => dispatchKanbanEvent(event, data))
     return cleanup
-  }, [handleKanbanEvent])
+  }, [dispatchKanbanEvent])
 
   // Listen for peer MCP commands from connected chat/tiles
   useEffect(() => {
@@ -566,13 +591,13 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
       if (!command) return
 
       if (command === 'kanban_set_status' && typeof payload.content === 'string') {
-        logActivity('update', String(payload.card_id ?? tileId), payload.content)
+        logActivityRef.current('update', String(payload.card_id ?? tileId), payload.content)
         return
       }
 
       if (command === 'kanban_create_card' && typeof payload.title === 'string') {
         const now = Date.now()
-        const fallbackColumn = columns[0]?.id ?? 'backlog'
+        const fallbackColumn = columnsRef.current[0]?.id ?? 'backlog'
         setCards(prev => [...prev, {
           id: `card-${tileId}-${now}`,
           title: String(payload.title),
@@ -613,7 +638,9 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
       }
 
       if (command === 'kanban_move_card' && typeof payload.card_id === 'string' && typeof payload.column_id === 'string') {
-        setCards(prev => prev.map(c => c.id === payload.card_id ? { ...c, columnId: payload.column_id } : c))
+        const cardId = payload.card_id
+        const columnId = payload.column_id
+        setCards(prev => prev.map(c => c.id === cardId ? { ...c, columnId } : c))
         return
       }
 
@@ -644,7 +671,7 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width, height, o
       }
     })
     return () => unsubscribe?.()
-  }, [tileId, columns, logActivity])
+  }, [tileId])
 
   // Streaming handled by pty/xterm — no separate stream listener needed
 

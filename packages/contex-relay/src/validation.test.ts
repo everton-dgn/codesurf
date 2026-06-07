@@ -28,13 +28,13 @@ describe('validation', () => {
     ]
 
     it.todo('should accept valid participant IDs', () => {
-      for (const id of VALID_IDS) {
+      for (const _id of VALID_IDS) {
         // Should not throw
       }
     })
 
     it.todo('should reject invalid participant IDs', () => {
-      for (const id of INVALID_IDS) {
+      for (const _id of INVALID_IDS) {
         // Should throw
       }
     })

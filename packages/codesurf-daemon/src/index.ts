@@ -27,6 +27,7 @@ export type {
   DaemonAppSettings,
   DaemonSkillEntry,
   DaemonSkillIndex,
+  DaemonSkillSkippedLocation,
   DaemonSkillRoot,
   DaemonSkillSelection,
   DaemonToolPermissionGrant,
