@@ -34,7 +34,7 @@
 | CI build + e2e | **FIXED** | PR workflow runs `npm run build` + `npm run test:e2e` |
 | TEST contex-relay | **FIXED** | Relay vitest suite wired into root `npm test` |
 
-**Tests:** 384+ unit (incl. relay) · **E2E:** 9/9 · **Typecheck:** clean · **Build:** pass
+**Tests:** 396 unit (incl. relay) · **E2E:** 10/10 · **Typecheck:** clean · **Build:** pass
 
 ### Hardening waves (local commits on `feature/hardening-wave-1`)
 
