@@ -1,14 +1,11 @@
 # CodeSurf Plugin Platform — Architecture & Build Spec
 
-> The implementation spec for rebuilding CodeSurf's extensibility to surpass the
-> reference app analysed in `docs/zenbu-analysis/`. This is the source of truth for
-> vocabulary, decisions, and sequencing. Everything here is **original** — no names,
-> package names, or derivatives are borrowed from the reference app's bespoke
-> packages. Third-party standards (MCP, MCP-UI, React, Electron, Monaco) are used by
-> their real names; that is allowed.
+> The implementation spec for rebuilding CodeSurf's extensibility platform. This is the
+> source of truth for vocabulary, decisions, and sequencing. Third-party standards
+> (MCP, MCP-UI, React, Electron, Monaco) are used by their real names.
 >
 > Status: **living spec.** Decisions below are made (so work can start) but marked
-> where they're open to redline. Companion analysis: `docs/zenbu-analysis/00-EXECUTIVE-SUMMARY.md`.
+> where they're open to redline.
 
 ---
 
@@ -26,10 +23,10 @@ Three hard rules carried from the goal:
    standards keep their names.
 2. **Zero regression.** Today's `extension.json` + `ext:` IPC + `window.contex` bridge
    keep working byte-for-byte; v2 is additive/opt-in. The no-regression contract is
-   `docs/zenbu-analysis/contex/04-canvas-and-capabilities-inventory.md`.
-3. **Surpass, don't clone.** We take the good ideas and rebuild them better on top of
-   CodeSurf's already-richer surface (canvas engine, multi-provider chat + permission
-   UX, peer/relay, daemon, MCP node bridge, Chrome sync/voice/generation).
+   spelled out in §13.
+3. **Evolve in place.** New plugin surfaces build on CodeSurf's existing strengths
+   (canvas engine, multi-provider chat + permission UX, peer/relay, daemon, MCP node
+   bridge, Chrome sync/voice/generation).
 
 ---
 
@@ -61,11 +58,11 @@ Three hard rules carried from the goal:
 | **Layout** | A saved arrangement of views (panel tree). Any full-screen arrangement/snap becomes one. | First-classes the existing `panelLayout`. |
 | **Layout Preset** | A named, reusable layout a plugin can register/open (e.g. "Chat Workspace"). | New (§10). |
 
-Banned tokens anywhere in our code/UI/package names: the reference app's product name,
-its framework name, its CLI verb, its replicated-DB name, its agent's brand name. The
-third-party agent runtime we may depend on is published by an unrelated author and is
-fine as a *dependency*, but it is surfaced in our UI under a neutral CodeSurf label
-(see § agent integration).
+Banned tokens anywhere in our code/UI/package names: third-party competitor product
+names, framework package scopes, CLI verbs, and replicated-DB names from other desktop
+IDE shells. The third-party agent runtime we may depend on is published by an unrelated
+author and is fine as a *dependency*, but it is surfaced in our UI under a neutral
+CodeSurf label (see § agent integration).
 
 ---
 
@@ -189,8 +186,8 @@ ones it wants; the user **consents at enable/install time**; the broker returns 
 broker's first consumer (retiring the hardcoded `id === 'contex-relay-suite'`
 special-case). `node` execution flows through the broker rather than raw `require()`
 into main. A `worker`/utilityProcess tier (true isolation) is the stretch. This gives
-the today-inert `permissions[]` real teeth and beats the reference app (which consents
-to nothing).
+the today-inert `permissions[]` real teeth — explicit user consent at install/enable
+time.
 
 ---
 
@@ -231,8 +228,7 @@ a dependency) **in-process** as a new chat provider, **alongside** the existing 
 (claude/codex/opencode/openclaw/hermes), never replacing them. Surfaced in our UI under
 a **neutral CodeSurf label** (no third-party brand in the UI; provider id internal).
 
-Details, wiring, streaming-mitigation, and the PR sequence are in
-`docs/zenbu-analysis/12-pi-integration-plan.md` (read it for the concrete seams). Key
+Wiring, streaming mitigation, and sequencing are covered in phase **P5** (§12). Key
 non-negotiables: load via dynamic `import()` (zero boot cost for non-users);
 suffix-delta extraction + microtask-coalesced flush (the runtime emits a full snapshot
 per token); bridge our tools/peers in-process (the runtime has no MCP client); reuse our
@@ -298,9 +294,8 @@ the additive substrate, then the centerpiece, then power, then polish.
 
 ## 13. No-regression contract
 
-The full `[keep]` inventory in
-`docs/zenbu-analysis/contex/04-canvas-and-capabilities-inventory.md` is binding. Nothing
-there may regress; each phase's guard proves it. Headline: the canvas engine,
+Nothing in the headline capability set below may regress; each phase's guard proves it.
+Headline: the canvas engine,
 everything-is-a-tile, the 5 chat providers + permission UX, peer/relay, daemon/detached
 jobs, MCP server + node bridge, Chrome sync/voice/generation/dreaming/local-proxy, and
 the foreign-format adapters all keep working and get **better** by gaining the new slot,
