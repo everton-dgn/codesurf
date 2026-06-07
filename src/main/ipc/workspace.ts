@@ -4,7 +4,6 @@ import path, { join } from 'path'
 import type { AppSettings, Workspace } from '../../shared/types'
 import {
   applyNewInstallSecurityDefaults,
-  DEFAULT_SETTINGS,
   withDefaultSettings,
   withFreshInstallDefaults,
 } from '../../shared/types'
