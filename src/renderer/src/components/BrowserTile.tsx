@@ -15,6 +15,7 @@ import {
   type BrowserEvidenceInput,
   type BrowserEvidenceViewport,
 } from '../../../shared/browserEvidence'
+import { formatGuestWebviewTagPreferences } from '../../../shared/guest-webview-preferences'
 import clusoEmbedJs from '../assets/cluso/cluso-embed.js?raw'
 import clusoEmbedCss from '../assets/cluso/cluso-embed.css?raw'
 
@@ -281,7 +282,7 @@ function createManagedWebview(tileId: string, src: string, bgColor = '#111317'):
   webview.setAttribute('partition', `persist:browser-tile-${tileId}`)
   webview.setAttribute('useragent', DESKTOP_UA)
   // backgroundColor sets the Chromium compositor surface color — prevents white flash before content loads
-  webview.setAttribute('webpreferences', `devTools=yes, backgroundColor=${bgColor}`)
+  webview.setAttribute('webpreferences', formatGuestWebviewTagPreferences({ devTools: true, backgroundColor: bgColor }))
   webview.style.cssText =
     `position: absolute; top: 0; left: 0; right: 0; bottom: 0; border: none; background: ${bgColor};`
   webview.src = src

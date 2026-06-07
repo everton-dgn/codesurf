@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { dismissAgentSetupIfPresent } from './helpers/dismiss-setup'
 import { closeCodeSurfElectron, launchCodeSurfElectron } from './helpers/launch-electron'
 import { waitForElectronBridge } from './helpers/wait-bridge'
 
@@ -90,4 +91,100 @@ test.describe('Canvas IPC surface', () => {
       await closeCodeSurfElectron(launch)
     }
   })
+
+  test('command shell creates a note tile on the canvas', async () => {
+    const launch = await launchCodeSurfElectron()
+
+    try {
+      const { page } = launch
+      await waitForElectronBridge(page, 'workspace.setActive')
+
+      const workspaceId = await page.evaluate(async () => {
+        const bridge = (window as Window & {
+          electron: {
+            workspace: {
+              list: () => Promise<Array<{ id: string }>>
+              create: (name: string) => Promise<{ id: string }>
+              setActive: (id: string) => Promise<unknown>
+            }
+          }
+        }).electron
+
+        const workspaces = await bridge.workspace.list()
+        let id = workspaces[0]?.id
+        if (!id) {
+          id = (await bridge.workspace.create('e2e-shell-tile')).id
+        }
+        await bridge.workspace.setActive(id)
+        return id
+      })
+
+      await page.reload()
+      await waitForElectronBridge(page, 'canvas.load')
+      await dismissAgentSetupIfPresent(page)
+      await page.waitForSelector('[data-canvas-surface="true"]', { timeout: 45_000 })
+
+      await page.evaluate(() => {
+        window.dispatchEvent(new CustomEvent('codesurf:new-tile', { detail: { type: 'note' } }))
+      })
+      await page.waitForFunction(() => document.body.innerText.includes('NOTE'), undefined, { timeout: 15_000 })
+
+      const created = await page.evaluate(() => ({
+        showsNoteChrome: document.body.innerText.includes('NOTE'),
+      }))
+
+      expect(created.showsNoteChrome).toBe(true)
+    } finally {
+      await closeCodeSurfElectron(launch)
+    }
+  })
+
+  test('canvas viewport save and reload round-trips pan and zoom', async () => {
+    const launch = await launchCodeSurfElectron()
+
+    try {
+      const { page } = launch
+      await waitForElectronBridge(page, 'canvas.save')
+
+      const viewportRoundTrip = await page.evaluate(async () => {
+        const bridge = (window as Window & {
+          electron: {
+            workspace: {
+              list: () => Promise<Array<{ id: string }>>
+              create: (name: string) => Promise<{ id: string }>
+            }
+            canvas: {
+              load: (workspaceId: string) => Promise<{ viewport?: { tx: number; ty: number; zoom: number }; tiles?: unknown[] } | null>
+              save: (workspaceId: string, state: unknown) => Promise<unknown>
+            }
+          }
+        }).electron
+
+        const workspaces = await bridge.workspace.list()
+        let workspaceId = workspaces[0]?.id
+        if (!workspaceId) {
+          const createdWorkspace = await bridge.workspace.create('e2e-viewport')
+          workspaceId = createdWorkspace.id
+        }
+
+        const viewport = { tx: 140, ty: 96, zoom: 1.35 }
+        const payload = {
+          tiles: [],
+          viewport,
+          nextZIndex: 1,
+        }
+
+        await bridge.canvas.save(workspaceId, payload)
+        const reloaded = await bridge.canvas.load(workspaceId)
+        const reloadedViewport = reloaded?.viewport ?? { tx: 0, ty: 0, zoom: 1 }
+
+        return { saved: viewport, reloaded: reloadedViewport }
+      })
+
+      expect(viewportRoundTrip.reloaded).toEqual(viewportRoundTrip.saved)
+    } finally {
+      await closeCodeSurfElectron(launch)
+    }
+  })
+
 })

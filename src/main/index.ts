@@ -45,6 +45,10 @@ import { ensureInitialIndex } from './db/thread-indexer'
 import { ensureInitialJobIndex } from './db/job-indexer'
 import { stopAllRelayServices } from './relay/service'
 import { normalizeSafeExternalUrl } from './utils/externalUrl'
+import {
+  attachGuestWebviewSecurityHandlers,
+  createMainWindowWebPreferences,
+} from './secure-web-preferences'
 // browserTile BrowserView IPC was removed — renderer uses <webview> tag directly
 
 const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 8192
@@ -414,14 +418,9 @@ function createWindow(opts?: MainWindowOptions): BrowserWindow {
     ...(process.platform === 'darwin'
       ? { transparent: false, backgroundColor: '#1e1e1e', vibrancy: undefined, visualEffectState: undefined }
       : getWindowAppearanceOptions()),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webviewTag: true
-    }
+    webPreferences: createMainWindowWebPreferences(join(__dirname, '../preload/index.js')),
   })
+  attachGuestWebviewSecurityHandlers(win.webContents)
   const windowId = win.webContents.id
   installRenderPerfProbe(win)
 
@@ -526,14 +525,9 @@ function createMiniChatWindow(owner: BrowserWindow | null, request: MiniChatWind
     skipTaskbar: false,
     ...(iconPath ? { icon: iconPath } : {}),
     ...getWindowAppearanceOptions(),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webviewTag: true,
-    },
+    webPreferences: createMainWindowWebPreferences(join(__dirname, '../preload/index.js')),
   })
+  attachGuestWebviewSecurityHandlers(win.webContents)
 
   miniChatWindows.set(key, win)
   windowTitles.set(win.webContents.id, typeof request.title === 'string' && request.title.trim() ? request.title.trim() : 'Mini Chat')

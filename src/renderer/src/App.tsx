@@ -5233,6 +5233,7 @@ function App(): JSX.Element {
         {/* Canvas surface — inset to the same rounded content area as panel mode */}
         <div
           ref={canvasRef}
+          data-canvas-surface="true"
           className="absolute overflow-hidden"
           style={{
             top: mainPanelTop,

@@ -64,7 +64,33 @@ test.describe('Security hardening probes', () => {
       })
 
       expect(probe.blocked).toBe(true)
-      expect(probe.message).toMatch(/outside allowed workspace roots/i)
+      expect(probe.message).toMatch(/outside allowed workspace roots|no workspace project folders configured/i)
+    } finally {
+      await closeCodeSurfElectron(launch)
+    }
+  })
+
+  test('fresh install blocks sensitive paths before user changes settings', async () => {
+    const launch = await launchCodeSurfElectron()
+
+    try {
+      const { page } = launch
+      await waitForElectronBridge(page, 'fs.readFile')
+
+      const probe = await page.evaluate(async () => {
+        try {
+          await window.electron.fs.readFile('/etc/passwd')
+          return { blocked: false, message: '' }
+        } catch (error) {
+          return {
+            blocked: true,
+            message: error instanceof Error ? error.message : String(error),
+          }
+        }
+      })
+
+      expect(probe.blocked).toBe(true)
+      expect(probe.message).toMatch(/outside allowed workspace roots|no workspace project folders configured/i)
     } finally {
       await closeCodeSurfElectron(launch)
     }
