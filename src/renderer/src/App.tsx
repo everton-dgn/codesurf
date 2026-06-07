@@ -23,6 +23,9 @@ import {
   type CanvasDragState,
 } from './hooks/useCanvasEngine'
 import { useTileMounting } from './hooks/useTileMounting'
+import { useTileClipboard } from './hooks/useTileClipboard'
+import { useCanvasTileShortcuts } from './hooks/useCanvasTileShortcuts'
+import { isEditableTarget } from './utils/editableTarget'
 import { getMinTileHeight, getMinTileWidth, rectsOverlap } from './utils/tilePlacement'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
@@ -30,7 +33,23 @@ import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './F
 import { ThemeProvider } from './ThemeContext'
 import { applyContrast, DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
-import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf } from './components/panelLayoutTree'
+import {
+  createLeaf,
+  removeTileFromTree,
+  addTabToLeaf,
+  getAllTileIds,
+  splitLeaf,
+  closeOthersInLeaf,
+  closeToRightInLeaf,
+  findLeafById,
+  setActiveTab,
+  pinTabInLeaf,
+  findFirstLeafId,
+  findLeafIdContainingTile,
+  collectPanelLeaves,
+  replaceLeafInPanelTree,
+  sanitizePanelLayout,
+} from './components/panelLayoutTree'
 import { panelTreeHasSplit, tilesToPanelNode } from './lib/layoutSnap'
 import { basename, getDroppedPaths, toFileUrl } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
@@ -127,57 +146,6 @@ const LazyOnboardingOverlay = React.lazy(() => import('./components/OnboardingOv
 
 const GRID = 20 // default, overridden by settings at runtime
 const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
-
-function findFirstLeafId(node: PanelNode): string | null {
-  if (node.type === 'leaf') return node.id
-  for (const child of node.children) {
-    const found = findFirstLeafId(child)
-    if (found) return found
-  }
-  return null
-}
-
-function sanitizePanelLayout(root: PanelNode | null | undefined, tileIds: string[]): { layout: PanelNode | null; fallbackActivePanelId: string | null } {
-  if (!root) return { layout: null, fallbackActivePanelId: null }
-
-  const validTileIds = new Set(tileIds)
-  let next: PanelNode | null = root
-
-  for (const tileId of getAllTileIds(root)) {
-    if (!validTileIds.has(tileId)) {
-      next = next ? (removeTileFromTree(next, tileId) ?? createLeaf([])) : createLeaf([])
-    }
-  }
-
-  return {
-    layout: next,
-    fallbackActivePanelId: next ? findFirstLeafId(next) : null,
-  }
-}
-
-function findLeafIdContainingTile(root: PanelNode, tileId: string): string | null {
-  if (root.type === 'leaf') return root.tabs.includes(tileId) ? root.id : null
-  for (const child of root.children) {
-    const found = findLeafIdContainingTile(child, tileId)
-    if (found) return found
-  }
-  return null
-}
-
-function collectPanelLeaves(root: PanelNode): PanelLeaf[] {
-  if (root.type === 'leaf') return [root]
-  return root.children.flatMap(collectPanelLeaves)
-}
-
-function replaceLeafInPanelTree(root: PanelNode, targetPanelId: string, replacement: PanelNode): PanelNode {
-  if (root.type === 'leaf') {
-    return root.id === targetPanelId ? replacement : root
-  }
-  return {
-    ...root,
-    children: root.children.map(child => replaceLeafInPanelTree(child, targetPanelId, replacement)),
-  }
-}
 
 function normalizeWorkspacePath(path: string | null | undefined): string {
   return String(path ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
@@ -399,16 +367,6 @@ function withAlpha(color: string, alpha: number): string {
   }
 
   return color
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null
-  if (!el) return false
-  const tag = el.tagName
-  return tag === 'INPUT'
-    || tag === 'TEXTAREA'
-    || el.isContentEditable
-    || !!el.closest('.monaco-editor')
 }
 
 type AnchorSide = 'top' | 'right' | 'bottom' | 'left'
@@ -1205,11 +1163,6 @@ function App(): JSX.Element {
     }
   }, [autoConnectionsEnabled, tiles, dragState.type, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, workspace?.id, miniChatOptions])
 
-  // Internal clipboard — stores tile snapshots (not OS clipboard)
-  const clipboard = useRef<TileState[]>([])
-  const isCut = useRef(false)
-  const pasteOffset = useRef(0)
-  const pasteTargetGroupId = useRef<string | undefined>(undefined)
   const pasteTilesRef = useRef<(pos?: { x: number; y: number }, intoGroupId?: string) => void>(() => {})
   const duplicateTilesRef = useRef<(ids?: string[]) => void>(() => {})
   const copyTilesRef = useRef<(cut?: boolean) => void>(() => {})
@@ -2090,16 +2043,39 @@ function App(): JSX.Element {
     return cleanup
   }, [tiles, addTile])
 
+  const {
+    clipboardRef,
+    pasteTargetGroupIdRef,
+    copyTiles,
+    pasteTiles,
+    duplicateTiles,
+  } = useTileClipboard({
+    tiles,
+    groups,
+    selectedTileId,
+    selectedTileIds,
+    viewport,
+    nextZIndex,
+    setTiles,
+    setNextZIndex,
+    setSelectedTileId,
+    setSelectedTileIds,
+    saveCanvas,
+    viewportCenter,
+    snapValue,
+    groupBoundsRef,
+  })
+
   const bringToFront = useCallback((id: string) => {
     const nz = nextZIndex
     setTiles(prev => {
       const tile = prev.find(t => t.id === id)
-      pasteTargetGroupId.current = tile?.groupId
+      pasteTargetGroupIdRef.current = tile?.groupId
       return prev.map(t => t.id === id ? { ...t, zIndex: nz } : t)
     })
     setNextZIndex(n => n + 1)
     setSelectedTileId(id)
-  }, [nextZIndex])
+  }, [nextZIndex, pasteTargetGroupIdRef])
 
   useEffect(() => {
     const handleCreateTileRequest = (event: Event) => {
@@ -2185,7 +2161,7 @@ function App(): JSX.Element {
     groupBoundsRef,
     addTile,
     pinnedCanvasExtensionTiles,
-    clipboardRef: clipboard,
+    clipboardRef,
     pasteAt: (pos, groupId) => pasteTilesRef.current(pos, groupId),
     selectedTileIds,
     groupSelectedTiles: () => groupSelectedTilesRef.current(),
@@ -2984,102 +2960,6 @@ function App(): JSX.Element {
     })
   }, [viewport, nextZIndex, saveCanvas])
 
-  // ─── Clipboard ───────────────────────────────────────────────────────────
-  const getActiveTiles = useCallback((): TileState[] => {
-    // Multi-select takes priority, then single selected, then nothing
-    return tiles.filter(t =>
-      selectedTileIds.size > 0 ? selectedTileIds.has(t.id) : t.id === selectedTileId
-    )
-  }, [tiles, selectedTileIds, selectedTileId])
-
-  const copyTiles = useCallback((cut = false) => {
-    const active = getActiveTiles()
-    if (active.length === 0) return
-    clipboard.current = active
-    isCut.current = cut
-    pasteOffset.current = 0
-    // For cut: remember source group so Cmd+V pastes back in by default
-    // For copy: clear target so Cmd+V pastes freely (use "paste in" label to target a group)
-    pasteTargetGroupId.current = cut ? active[0]?.groupId : undefined
-    if (cut) {
-      const ids = new Set(active.map(t => t.id))
-      setTiles(prev => {
-        const updated = prev.filter(t => !ids.has(t.id))
-        saveCanvas(updated, viewport, nextZIndex)
-        return updated
-      })
-      setSelectedTileId(null)
-      setSelectedTileIds(new Set())
-    }
-  }, [getActiveTiles, viewport, nextZIndex, saveCanvas])
-
-  const pasteTiles = useCallback((pos?: { x: number; y: number }, intoGroupId?: string) => {
-    if (clipboard.current.length === 0) return
-    if (pasteOffset.current > 10) pasteOffset.current = 0
-    pasteOffset.current += 1
-    const OFFSET = pasteOffset.current * 30
-    const srcMinX = Math.min(...clipboard.current.map(t => t.x))
-    const srcMinY = Math.min(...clipboard.current.map(t => t.y))
-    const center = pos ?? viewportCenter()
-    const newNZ = nextZIndex + clipboard.current.length
-    // Resolve target group: explicit > position-based > ref > none
-    let targetGroup = intoGroupId ?? pasteTargetGroupId.current
-    if (!targetGroup && pos) {
-      // Check if paste position is inside a group frame
-      for (const g of groups) {
-        const b = groupBoundsRef.current(g.id)
-        if (b && pos.x >= b.x && pos.x <= b.x + b.w && pos.y >= b.y && pos.y <= b.y + b.h) {
-          targetGroup = g.id
-          break
-        }
-      }
-    }
-    const newTiles = clipboard.current.map((t, i) => ({
-      ...t,
-      id: `tile-${Date.now()}-${i}`,
-      x: pos
-        ? snapValue(center.x + (t.x - srcMinX) - (Math.max(...clipboard.current.map(t2 => t2.x + t2.width)) - srcMinX) / 2)
-        : snapValue(t.x + OFFSET),
-      y: pos
-        ? snapValue(center.y + (t.y - srcMinY) - (Math.max(...clipboard.current.map(t2 => t2.y + t2.height)) - srcMinY) / 2)
-        : snapValue(t.y + OFFSET),
-      zIndex: nextZIndex + i,
-      groupId: targetGroup
-    }))
-    setTiles(prev => {
-      const updated = [...prev, ...newTiles]
-      saveCanvas(updated, viewport, newNZ)
-      return updated
-    })
-    setNextZIndex(newNZ)
-    setSelectedTileIds(new Set(newTiles.map(t => t.id)))
-    setSelectedTileId(null)
-  }, [viewport, nextZIndex, viewportCenter, saveCanvas, groups, snapValue])
-
-  const duplicateTiles = useCallback((ids?: string[]) => {
-    const targets = ids
-      ? tiles.filter(t => ids.includes(t.id))
-      : getActiveTiles()
-    if (targets.length === 0) return
-    const newNZ = nextZIndex + targets.length
-    const newTiles = targets.map((t, i) => ({
-      ...t,
-      id: `tile-${Date.now()}-${i}`,
-      x: snapValue(t.x + 40),
-      y: snapValue(t.y + 40),
-      zIndex: nextZIndex + i,
-      groupId: undefined
-    }))
-    setTiles(prev => {
-      const updated = [...prev, ...newTiles]
-      saveCanvas(updated, viewport, newNZ)
-      return updated
-    })
-    setNextZIndex(newNZ)
-    setSelectedTileIds(new Set(newTiles.map(t => t.id)))
-    setSelectedTileId(null)
-  }, [tiles, getActiveTiles, viewport, nextZIndex, saveCanvas, snapValue])
-
   const handleTileContextMenu = useTileContextMenu({
     viewport,
     nextZIndex,
@@ -3090,7 +2970,7 @@ function App(): JSX.Element {
     setSelectedTileId,
     setSelectedTileIds,
     setCtxMenu,
-    clipboardRef: clipboard,
+    clipboardRef,
     duplicateTiles,
     copyTiles,
     pasteTiles,
@@ -3199,34 +3079,19 @@ function App(): JSX.Element {
   ungroupTilesRef.current = ungroupTiles
   ungroupAllRef.current = ungroupAll
 
-  // ─── Copy / Cut / Paste / Duplicate / Delete shortcuts ───────────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return
-      const mod = e.metaKey || e.ctrlKey
-      if (mod && e.key === 'c') { e.preventDefault(); copyTiles(false) }
-      if (mod && e.key === 'x') { e.preventDefault(); copyTiles(true) }
-      if (mod && e.key === 'v') { e.preventDefault(); pasteTiles() }
-      if (mod && e.key === 'd') { e.preventDefault(); duplicateTiles() }
-      if ((e.key === 'Backspace' || e.key === 'Delete') && !mod) {
-        const active = selectedTileIds.size > 0
-          ? [...selectedTileIds]
-          : selectedTileId ? [selectedTileId] : []
-        if (active.length > 0) {
-          const ids = new Set(active)
-          setTiles(prev => {
-            const updated = prev.filter(t => !ids.has(t.id))
-            saveCanvas(updated, viewport, nextZIndex)
-            return updated
-          })
-          setSelectedTileId(null)
-          setSelectedTileIds(new Set())
-        }
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [copyTiles, pasteTiles, duplicateTiles, selectedTileId, selectedTileIds, viewport, nextZIndex, saveCanvas])
+  useCanvasTileShortcuts({
+    selectedTileId,
+    selectedTileIds,
+    viewport,
+    nextZIndex,
+    setTiles,
+    setSelectedTileId,
+    setSelectedTileIds,
+    saveCanvas,
+    copyTiles,
+    pasteTiles,
+    duplicateTiles,
+  })
 
   // ─── Arrange handler ──────────────────────────────────────────────────────
   const handleArrange = useCallback((updated: TileState[]) => {
@@ -5603,7 +5468,7 @@ function App(): JSX.Element {
                           setSelectedTileId(null)
                           setTimeout(() => copyTilesRef.current(true), 0)
                         }},
-                        ...(clipboard.current.length > 0 ? [{ icon: <ClipboardPaste size={14} />, label: 'Paste in', action: () => pasteTilesRef.current(undefined, g.id) }] : []),
+                        ...(clipboardRef.current.length > 0 ? [{ icon: <ClipboardPaste size={14} />, label: 'Paste in', action: () => pasteTilesRef.current(undefined, g.id) }] : []),
                         // Expand this group as a fullscreen sub-canvas (tiles remain freely positioned)
                         { icon: <Maximize2 size={14} />, label: 'Expand as canvas', action: () => enterCanvasExpanded(g.id) },
                       ] as { icon: React.ReactNode; label: string; action: () => void }[]).map(btn => (
