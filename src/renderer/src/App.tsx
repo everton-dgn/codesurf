@@ -25,6 +25,8 @@ import {
 import { useTileMounting } from './hooks/useTileMounting'
 import { useTileClipboard } from './hooks/useTileClipboard'
 import { useCanvasTileShortcuts } from './hooks/useCanvasTileShortcuts'
+import { useCanvasGroupManager } from './hooks/useCanvasGroupManager'
+import { useCanvasKeyboard } from './hooks/useCanvasKeyboard'
 import { isEditableTarget } from './utils/editableTarget'
 import { getMinTileHeight, getMinTileWidth, rectsOverlap } from './utils/tilePlacement'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
@@ -50,7 +52,7 @@ import {
   replaceLeafInPanelTree,
   sanitizePanelLayout,
 } from './components/panelLayoutTree'
-import { panelTreeHasSplit, tilesToPanelNode } from './lib/layoutSnap'
+import { panelTreeHasSplit } from './lib/layoutSnap'
 import { basename, getDroppedPaths, toFileUrl } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
 import {
@@ -2778,68 +2780,31 @@ function App(): JSX.Element {
     }
   }, [workspace?.id])
 
-  // ─── Group selected tiles (supports nesting — wraps existing groups too) ──
-  const groupSelectedTiles = useCallback(() => {
-    if (selectedTileIds.size < 2) return
-    const groupId = `group-${Date.now()}`
+  const {
+    groupSelectedTiles,
+    ungroupTiles,
+    ungroupAll,
+    groupBounds,
+    collectGroupTileIds,
+    convertGroupToLayout,
+    revertLayoutGroup,
+  } = useCanvasGroupManager({
+    tiles,
+    groups,
+    selectedTileIds,
+    viewport,
+    nextZIndex,
+    setTiles,
+    setGroups,
+    setSelectedTileIds,
+    saveCanvas,
+  })
 
-    setGroups(prevGroups => {
-      // Find any existing groups whose member tiles are all selected — those groups become children
-      const childGroupIds = new Set(
-        prevGroups
-          .filter(g => {
-            const members = tiles.filter(t => t.groupId === g.id)
-            return members.length > 0 && members.every(t => selectedTileIds.has(t.id))
-          })
-          .map(g => g.id)
-      )
-
-      // Reparent child groups into the new group
-      const updatedGroups = prevGroups.map(g =>
-        childGroupIds.has(g.id) ? { ...g, parentGroupId: groupId } : g
-      )
-      const newGroup: GroupState = { id: groupId }
-      const finalGroups = [...updatedGroups, newGroup]
-
-      setTiles(tPrev => {
-        // Assign groupId to selected tiles that aren't already in a child group
-        const updated = tPrev.map(t =>
-          selectedTileIds.has(t.id) && !childGroupIds.has(t.groupId ?? '')
-            ? { ...t, groupId }
-            : t
-        )
-        saveCanvas(updated, viewport, nextZIndex, finalGroups)
-        return updated
-      })
-      return finalGroups
-    })
-    setSelectedTileIds(new Set())
-  }, [selectedTileIds, tiles, viewport, nextZIndex, saveCanvas])
-
-  // ─── Cmd+G to group ───────────────────────────────────────────────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return
-      if ((e.metaKey || e.ctrlKey) && e.key === 'g') {
-        e.preventDefault()
-        if (selectedTileIds.size >= 2) groupSelectedTiles()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [selectedTileIds, groupSelectedTiles])
-
-  // ─── Cmd+Shift+P → Command Palette (plugin commands; built-ins added later) ──
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
-        e.preventDefault()
-        setCommandPaletteOpen(v => !v)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  useCanvasKeyboard({
+    selectedTileIds,
+    groupSelectedTiles,
+    setCommandPaletteOpen,
+  })
 
   // ─── Open a layout preset contributed by a plugin (point 10) ──
   // A plugin's contributes.layoutPresets[].layout (a LayoutTemplateNode) is applied
@@ -2911,55 +2876,6 @@ function App(): JSX.Element {
     return () => window.removeEventListener('codesurf:save-layout', onSave as EventListener)
   }, [addLayoutTemplate])
 
-  // Ungroup one level — tiles revert to parentGroupId if present
-  const ungroupTiles = useCallback((groupId: string) => {
-    setGroups(prevGroups => {
-      const group = prevGroups.find(g => g.id === groupId)
-      const parentId = group?.parentGroupId
-
-      // Child groups that had this as parent get reparented up
-      const updatedGroups = prevGroups
-        .filter(g => g.id !== groupId)
-        .map(g => g.parentGroupId === groupId
-          ? { ...g, parentGroupId: parentId }
-          : g
-        )
-
-      setTiles(prev => {
-        const updated = prev.map(t =>
-          t.groupId === groupId ? { ...t, groupId: parentId } : t
-        )
-        saveCanvas(updated, viewport, nextZIndex, updatedGroups)
-        return updated
-      })
-      return updatedGroups
-    })
-  }, [viewport, nextZIndex, saveCanvas])
-
-  // Ungroup all — recursively strip every groupId from tiles in this group tree
-  const ungroupAll = useCallback((groupId: string) => {
-    setGroups(prevGroups => {
-      // Collect all group ids in this subtree
-      const toRemove = new Set<string>()
-      const collect = (id: string) => {
-        toRemove.add(id)
-        prevGroups.filter(g => g.parentGroupId === id).forEach(g => collect(g.id))
-      }
-      collect(groupId)
-
-      const updatedGroups = prevGroups.filter(g => !toRemove.has(g.id))
-
-      setTiles(prev => {
-        const updated = prev.map(t =>
-          toRemove.has(t.groupId ?? '') ? { ...t, groupId: undefined } : t
-        )
-        saveCanvas(updated, viewport, nextZIndex, updatedGroups)
-        return updated
-      })
-      return updatedGroups
-    })
-  }, [viewport, nextZIndex, saveCanvas])
-
   const handleTileContextMenu = useTileContextMenu({
     viewport,
     nextZIndex,
@@ -2979,71 +2895,6 @@ function App(): JSX.Element {
     closeTile,
     importFileToWorkspace,
   })
-
-  // ─── Group frame bounds (recursive — includes child group tiles) ─────────
-  const groupBounds = useCallback((groupId: string): { x: number; y: number; w: number; h: number } | null => {
-    const group = groups.find(g => g.id === groupId)
-    // Layout-mode groups use stored fixed bounds
-    if (group?.layoutMode && group.layoutBounds) {
-      return group.layoutBounds as { x: number; y: number; w: number; h: number }
-    }
-    const collectTileIds = (gid: string): string[] => {
-      const direct = tiles.filter(t => t.groupId === gid).map(t => t.id)
-      const childGroups = groups.filter(g => g.parentGroupId === gid)
-      return [...direct, ...childGroups.flatMap(g => collectTileIds(g.id))]
-    }
-    const ids = new Set(collectTileIds(groupId))
-    const members = tiles.filter(t => ids.has(t.id))
-    if (members.length === 0) return null
-    const PAD = 20
-    const minX = Math.min(...members.map(t => t.x)) - PAD
-    const minY = Math.min(...members.map(t => t.y)) - PAD
-    const maxX = Math.max(...members.map(t => t.x + t.width)) + PAD
-    const maxY = Math.max(...members.map(t => t.y + t.height)) + PAD
-    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
-  }, [tiles, groups])
-
-  // Collect all tile ids in a group tree (for drag)
-  const collectGroupTileIds = useCallback((groupId: string): string[] => {
-    const direct = tiles.filter(t => t.groupId === groupId).map(t => t.id)
-    const childGroups = groups.filter(g => g.parentGroupId === groupId)
-    return [...direct, ...childGroups.flatMap(g => collectGroupTileIds(g.id))]
-  }, [tiles, groups])
-
-  const convertGroupToLayout = useCallback((groupId: string) => {
-    const members = tiles.filter(t => t.groupId === groupId)
-    const memberTileIds = members.map(t => t.id)
-    if (memberTileIds.length === 0) return
-    const bounds = groupBounds(groupId)
-    if (!bounds) return
-    // Snap the arrangement into a SPATIAL layout (real splits) when the members
-    // form a guillotine-sliceable grid; otherwise fall back to flat tabs. (Point 10)
-    const rects = members.map(t => ({ id: t.id, x: t.x, y: t.y, width: t.width, height: t.height }))
-    const layout = tilesToPanelNode(rects) ?? createLeaf(memberTileIds, memberTileIds[0])
-    setGroups(prev => {
-      const updated = prev.map(g => g.id === groupId ? {
-        ...g,
-        layoutMode: true,
-        layout,
-        layoutBounds: bounds,
-      } : g)
-      setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-      return updated
-    })
-  }, [tiles, groupBounds, viewport, nextZIndex, saveCanvas])
-
-  const revertLayoutGroup = useCallback((groupId: string) => {
-    setGroups(prev => {
-      const updated = prev.map(g => g.id === groupId ? {
-        ...g,
-        layoutMode: false,
-        layout: undefined,
-        layoutBounds: undefined,
-      } : g)
-      setTiles(t => { saveCanvas(t, viewport, nextZIndex, updated); return t })
-      return updated
-    })
-  }, [viewport, nextZIndex, saveCanvas])
 
   const expandLayoutGroup = useCallback((groupId: string) => {
     const g = groupsRef.current.find(gr => gr.id === groupId)
