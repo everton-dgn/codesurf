@@ -28,6 +28,7 @@ import { useTileClipboard } from './hooks/useTileClipboard'
 import { useCanvasTileShortcuts } from './hooks/useCanvasTileShortcuts'
 import { useCanvasGroupManager } from './hooks/useCanvasGroupManager'
 import { useCanvasKeyboard } from './hooks/useCanvasKeyboard'
+import { useCanvasGlow } from './hooks/useCanvasGlow'
 
 import { getMinTileHeight, getMinTileWidth, rectsOverlap } from './utils/tilePlacement'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
@@ -1246,9 +1247,6 @@ function App(): JSX.Element {
     flushDeferredCanvasPersist,
   } = canvasEngine
 
-  const dotGlowSmallRef = useRef<HTMLDivElement>(null)
-  const dotGlowLargeRef = useRef<HTMLDivElement>(null)
-  const discoveryGlowRef = useRef<HTMLDivElement>(null)
   const discoveryTimeoutsRef = useRef<number[]>([])
 
   // ─── Auto Agent Mode (proximity-based tile discovery) ─────────────────────
@@ -1263,68 +1261,24 @@ function App(): JSX.Element {
   const PROXIMITY_DISABLE_DISTANCE = 1.0 // 100% of max distance
   const PROXIMITY_DEBOUNCE_MS = 300
   const panelTileIdsRef = useRef<Set<string>>(new Set())
-  const canvasGlowRafRef = useRef<number | null>(null)
-  const canvasGlowPointRef = useRef<{ clientX: number; clientY: number } | null>(null)
   const spaceHeld = useRef(false)
   const canvasGlowEnabled = settings.canvasGlowEnabled
   const canvasGlowRadius = Math.max(50, Math.min(200, settings.canvasGlowRadius ?? 120))
-  const cursorGlowBrightnessScale = 1 + ((viewport.zoom - 1) / 0.2) * 0.1
-  const cursorGlowOpacity = Math.max(0, Math.min(1, cursorGlowBrightnessScale))
-  const cursorGlowFilterBrightness = Math.max(1, cursorGlowBrightnessScale)
+  const {
+    dotGlowSmallRef,
+    dotGlowLargeRef,
+    discoveryGlowRef,
+    hideCanvasGlow,
+    updateCanvasGlow,
+  } = useCanvasGlow({
+    canvasRef,
+    canvasGlowEnabled,
+    canvasGlowRadius,
+    viewportZoom: viewport.zoom,
+  })
   const snapValue = React.useCallback((value: number) => (
     settings.snapToGrid ? snap(value, settings.gridSize) : value
   ), [settings.snapToGrid, settings.gridSize])
-
-  const hideCanvasGlow = React.useCallback(() => {
-    if (canvasGlowRafRef.current !== null) {
-      cancelAnimationFrame(canvasGlowRafRef.current)
-      canvasGlowRafRef.current = null
-    }
-    canvasGlowPointRef.current = null
-    if (dotGlowSmallRef.current) {
-      dotGlowSmallRef.current.style.opacity = '0'
-      dotGlowSmallRef.current.style.filter = 'brightness(1)'
-    }
-    if (dotGlowLargeRef.current) {
-      dotGlowLargeRef.current.style.opacity = '0'
-      dotGlowLargeRef.current.style.filter = 'brightness(1)'
-    }
-    if (discoveryGlowRef.current) discoveryGlowRef.current.style.opacity = '0'
-  }, [])
-
-  const updateCanvasGlow = React.useCallback((clientX: number, clientY: number) => {
-    if (!canvasGlowEnabled) return
-    canvasGlowPointRef.current = { clientX, clientY }
-    if (canvasGlowRafRef.current !== null) return
-    canvasGlowRafRef.current = requestAnimationFrame(() => {
-      canvasGlowRafRef.current = null
-      const rect = canvasRef.current?.getBoundingClientRect()
-      const point = canvasGlowPointRef.current
-      if (!rect || !point || !dotGlowSmallRef.current || !dotGlowLargeRef.current) return
-      const x = point.clientX - rect.left
-      const y = point.clientY - rect.top
-      const visible = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height
-      if (!visible) {
-        hideCanvasGlow()
-        return
-      }
-      const innerGlowRadius = Math.round(canvasGlowRadius * 0.5)
-      const mask = `radial-gradient(circle at ${x}px ${y}px, rgba(0,0,0,1) 0px, rgba(0,0,0,1) ${innerGlowRadius}px, rgba(0,0,0,0) ${canvasGlowRadius}px)`
-      dotGlowSmallRef.current.style.opacity = String(cursorGlowOpacity)
-      dotGlowLargeRef.current.style.opacity = String(cursorGlowOpacity)
-      dotGlowSmallRef.current.style.filter = `brightness(${cursorGlowFilterBrightness})`
-      dotGlowLargeRef.current.style.filter = `brightness(${cursorGlowFilterBrightness})`
-      dotGlowSmallRef.current.style.maskImage = mask
-      dotGlowSmallRef.current.style.webkitMaskImage = mask
-      dotGlowLargeRef.current.style.maskImage = mask
-      dotGlowLargeRef.current.style.webkitMaskImage = mask
-      if (discoveryGlowRef.current) {
-        discoveryGlowRef.current.style.opacity = '1'
-        discoveryGlowRef.current.style.maskImage = mask
-        discoveryGlowRef.current.style.webkitMaskImage = mask
-      }
-    })
-  }, [canvasGlowEnabled, canvasGlowRadius, cursorGlowFilterBrightness, cursorGlowOpacity, hideCanvasGlow])
 
   const showEmptyLayoutPage = useCallback((options?: { preserveOpenTabs?: boolean }) => {
     const preserveOpenTabs = options?.preserveOpenTabs ?? false

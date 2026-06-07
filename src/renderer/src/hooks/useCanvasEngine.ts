@@ -37,6 +37,13 @@ export const FIT_VIEWPORT_MAX_ZOOM = 1.5
 export const ARRANGE_FIT_PAD_PX = 60
 export const ARRANGE_FIT_ZOOM_SCALE = 0.9
 
+/** True when double-click should spawn a tile on empty canvas (BUG-13). */
+export function shouldSpawnTileOnCanvasDoubleClick(target: { closest: (selector: string) => Element | null }): boolean {
+  if (target.closest('[data-tile-chrome]')) return false
+  if (target.closest('[data-canvas-group-frame]')) return false
+  return true
+}
+
 export type CanvasViewport = { tx: number; ty: number; zoom: number }
 
 export const DEFAULT_CANVAS_VIEWPORT: CanvasViewport = { tx: 0, ty: 0, zoom: 1 }
@@ -737,7 +744,8 @@ export function useCanvasPointerHandlers(options: UseCanvasPointerHandlersOption
 
   const handleCanvasDoubleClick = useCallback((e: ReactMouseEvent) => {
     if (panelLayout) return
-    if (e.target !== e.currentTarget) return
+    const target = e.target as HTMLElement
+    if (!shouldSpawnTileOnCanvasDoubleClick(target)) return
     const world = screenToWorld(e.clientX, e.clientY)
     addTile('terminal', undefined, world)
   }, [panelLayout, screenToWorld, addTile])

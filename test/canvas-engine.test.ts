@@ -12,6 +12,7 @@ import {
   MAX_CANVAS_ZOOM,
   SNAP_THRESHOLD,
   HISTORY_MAX_ENTRIES,
+  shouldSpawnTileOnCanvasDoubleClick,
 } from '../src/renderer/src/hooks/useCanvasEngine.ts'
 import type { TileState } from '../src/shared/types.ts'
 
@@ -82,5 +83,27 @@ describe('computePanToTileViewport', () => {
 describe('canvas history limits', () => {
   test('documents the undo stack cap used by useCanvasEngine', () => {
     assert.equal(HISTORY_MAX_ENTRIES, 50)
+  })
+})
+
+describe('shouldSpawnTileOnCanvasDoubleClick', () => {
+  function mockTarget(matches: string[]): { closest: (selector: string) => Element | null } {
+    return {
+      closest(selector: string) {
+        return matches.includes(selector) ? ({} as Element) : null
+      },
+    }
+  }
+
+  test('allows empty canvas background', () => {
+    assert.equal(shouldSpawnTileOnCanvasDoubleClick(mockTarget([])), true)
+  })
+
+  test('rejects tile chrome', () => {
+    assert.equal(shouldSpawnTileOnCanvasDoubleClick(mockTarget(['[data-tile-chrome]'])), false)
+  })
+
+  test('rejects group frames', () => {
+    assert.equal(shouldSpawnTileOnCanvasDoubleClick(mockTarget(['[data-canvas-group-frame]'])), false)
   })
 })

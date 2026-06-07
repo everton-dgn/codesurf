@@ -28,14 +28,16 @@
 | BUG-05 closeTile race | **FIXED** | Functional updater + `viewportRef` in hook |
 | BUG-07 setTiles read abuse | **FIXED** | Uses refs |
 | PERF TileChrome re-render | **IMPROVED** | `React.memo` + snap RAF throttle |
-| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` + group frames component + keyboard/persist hooks |
+| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` + `useCanvasGlow` + group frames + keyboard/persist hooks |
+| BUG-13 canvas double-click | **FIXED** | Spawns terminal on empty canvas, not only bare surface element |
+| BUG-10 OpenCode start race | **FIXED** | `startPromise` retained until success; cleared on failure/shutdown |
 | PERF-04 drag auto-save | **FIXED** | Deferred canvas persist until drag ends |
 | ARCH mcp-server.ts | **IMPROVED** | Tool modules + registry (2237 → 791 LOC) |
 | ARCH ChatTile.tsx | **IMPROVED** | Composer menus, live activity, autocomplete hooks |
 | CI build + e2e | **FIXED** | PR workflow runs `npm run build` + `npm run test:e2e` |
 | TEST contex-relay | **FIXED** | Relay vitest suite wired into root `npm test` |
 
-**Tests:** 399 unit (incl. relay) · **E2E:** 10/10 · **Typecheck:** clean · **Build:** pass
+**Tests:** 402 unit (incl. relay) · **E2E:** 10/10 · **Typecheck:** clean · **Build:** pass
 
 ### Hardening waves (local commits on `feature/hardening-wave-1`)
 
@@ -49,6 +51,7 @@
 | 7 | Group manager + canvas keyboard hooks, ChatTile attachment/autocomplete hooks, Electrobun ext:list scan, legacy FS migration E2E |
 | 8 | `CanvasGroupFrames` extraction, keyboard undo/redo, drag-deferred canvas persist, Electrobun ext:list-sidebar |
 | 9 | `useCanvasDragSync` extraction, skills skipped-location UX, SEC-03 settings copy, `fs:probeDir` IPC |
+| 10 | `useCanvasGlow` extraction, BUG-13 canvas double-click, BUG-10 OpenCode `startPromise` race |
 
 ---
 

@@ -134,6 +134,7 @@ export function CanvasGroupFrames({
           return (
             <div
               key={g.id}
+              data-canvas-group-frame="true"
               style={{
                 position: 'absolute',
                 left: lb.x,
@@ -308,6 +309,7 @@ export function CanvasGroupFrames({
         return (
           <div
             key={g.id}
+            data-canvas-group-frame="true"
             style={{
               position: 'absolute',
               left: b.x,

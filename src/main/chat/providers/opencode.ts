@@ -81,18 +81,18 @@ class OpenCodeServerManager {
   }
 
   async ensureRunning(): Promise<{ port: number; url: string }> {
-    if (this.startPromise) return this.startPromise
-
     if (this.server && this.port && !this.server.killed) {
       return { port: this.port, url: `http://127.0.0.1:${this.port}` }
     }
 
-    this.startPromise = this.startServer()
-    try {
-      return await this.startPromise
-    } finally {
-      this.startPromise = null
+    if (!this.startPromise) {
+      this.startPromise = this.startServer().catch((err) => {
+        this.startPromise = null
+        throw err
+      })
     }
+
+    return this.startPromise
   }
 
   private async startServer(): Promise<{ port: number; url: string }> {
@@ -154,6 +154,7 @@ class OpenCodeServerManager {
     }
     this.server = null
     this.port = null
+    this.startPromise = null
   }
 
   isRunning(): boolean {
