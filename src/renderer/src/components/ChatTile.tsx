@@ -23,6 +23,8 @@ import { useChatTileBlockNotes } from '../hooks/useChatTileBlockNotes'
 import { useTheme } from '../ThemeContext'
 
 import { useChatTileLatestChangeDrawer } from '../hooks/useChatTileLatestChangeDrawer'
+import { useChatTileComposerMenus } from '../hooks/useChatTileComposerMenus'
+import { useChatTileLiveComposerActivity } from '../hooks/useChatTileLiveComposerActivity'
 import type { CheckpointRestoreContextValue } from './chat/chatTileTypes'
 import { ChatTileTranscriptColumn } from './chat/ChatTileTranscriptColumn'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
@@ -54,11 +56,7 @@ import {
   AskUserQuestionContext,
   AskUserQuestionFontsContext,
 } from './chat/AskUserQuestionForm'
-import {
-  ThinkingBlockView,
-  WorkingChipView,
-  parsePlanToolTodos,
-} from './chat/ToolBlockView'
+import { parsePlanToolTodos } from './chat/ToolBlockView'
 import {
   normalizeChatSurfaceMenuEntry,
   ensureChatMdStyle,
@@ -68,8 +66,6 @@ import {
   FONT_MONO,
   FONT_SIZE_DEFAULT,
   MONO_SIZE_DEFAULT,
-  CHAT_COMPOSER_WIDTH,
-  CHAT_COMPOSER_MIN_WIDTH_STYLE,
   CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT,
 
   LIVE_TOOL_COLLAPSE_GRACE_MS,
@@ -395,14 +391,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // into the active canUseTool closure via chat:setPermissionMode.
   const lastPushedModeRef = useRef<string>(initialMode)
   const effectiveAgentMode = Boolean(isConnected || isAutoConnected || autoAgentMode)
-  const [showModelMenu, setShowModelMenu] = useState(false)
-  const [showProviderMenu, setShowProviderMenu] = useState(false)
-  const [showInsertMenu, setShowInsertMenu] = useState(false)
-  const [showModeMenu, setShowModeMenu] = useState(false)
-  const [showThinkingMenu, setShowThinkingMenu] = useState(false)
-  const [showLocationMenu, setShowLocationMenu] = useState(false)
-  const [showBranchMenu, setShowBranchMenu] = useState(false)
-  const [showContextMenu, setShowContextMenu] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const acRef = useRef<HTMLDivElement>(null)
+  const closeProviderMenuRef = useRef<() => void>(() => {})
+  const closeAutocompleteRef = useRef<() => void>(() => {})
   const {
     providerEntries,
     providerEntryById,
@@ -426,8 +418,43 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     connectedPeers,
     peerContextRef,
     peerContextVersion,
-    onProviderChanged: () => setShowProviderMenu(false),
+    onProviderChanged: () => closeProviderMenuRef.current(),
   })
+  const {
+    showModelMenu,
+    setShowModelMenu,
+    showProviderMenu,
+    setShowProviderMenu,
+    showInsertMenu,
+    setShowInsertMenu,
+    showModeMenu,
+    setShowModeMenu,
+    showThinkingMenu,
+    setShowThinkingMenu,
+    showLocationMenu,
+    setShowLocationMenu,
+    showBranchMenu,
+    setShowBranchMenu,
+    showContextMenu,
+    modelFilter,
+    setModelFilter,
+    branchFilter,
+    setBranchFilter,
+    modelMenuRef,
+    providerMenuRef,
+    insertMenuRef,
+    modeMenuRef,
+    thinkingMenuRef,
+    locationMenuRef,
+    branchMenuRef,
+    contextMenuRef,
+    toggleMenu,
+  } = useChatTileComposerMenus({
+    textareaRef,
+    acRef,
+    onCloseAutocomplete: () => closeAutocompleteRef.current(),
+  })
+  closeProviderMenuRef.current = () => setShowProviderMenu(false)
   const pagedLinkedHistoryEnabled = canUsePagedLinkedHistory(linkedSessionEntryId, linkedSessionHint, sessionId)
 
   // Publish this tile's streaming state so the sidebar can swap the row icon
@@ -441,7 +468,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     executionTarget,
     cloudHostId,
   })
-  const [modelFilter, setModelFilter] = useState('')
   const hasSendableDraft = input.trim().length > 0 || attachments.length > 0 || implicitPeerImageAttachments.length > 0
   // Chat-surface extensions (e.g. Sketch, Builder) mounted above the composer.
   // Multiple surfaces can stay open as tabs so a sketch can sit beside its
@@ -495,7 +521,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   const [queueCollapsed, setQueueCollapsed] = useState(true)
   const prevQueuedCountRef = useRef(0)
   const [isDropTarget, setIsDropTarget] = useState(false)
-  const [branchFilter, setBranchFilter] = useState('')
   const { gitStatus, gitBranches, refreshGitState } = useChatGitState(_workspaceDir)
   const pagedLinkedHistoryEnabledRef = useRef(pagedLinkedHistoryEnabled)
   pagedLinkedHistoryEnabledRef.current = pagedLinkedHistoryEnabled
@@ -735,17 +760,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     workspaceSkills,
     pluginSlashCommands,
   })
-
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const acRef = useRef<HTMLDivElement>(null)
-  const modelMenuRef = useRef<HTMLDivElement>(null)
-  const providerMenuRef = useRef<HTMLDivElement>(null)
-  const insertMenuRef = useRef<HTMLDivElement>(null)
-  const modeMenuRef = useRef<HTMLDivElement>(null)
-  const thinkingMenuRef = useRef<HTMLDivElement>(null)
-  const locationMenuRef = useRef<HTMLDivElement>(null)
-  const branchMenuRef = useRef<HTMLDivElement>(null)
-  const contextMenuRef = useRef<HTMLDivElement>(null)
+  closeAutocompleteRef.current = () => {
+    setAcType(null)
+    setAcQuery('')
+  }
 
   const {
     latestChangeDrawer,
@@ -765,33 +783,10 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setMessagesSafe,
   })
 
-  const liveComposerActivityChip = useMemo(() => {
-    if (!isStreaming) return null
-    const liveMsg = renderedMessages[renderedMessages.length - 1]
-    if (!liveMsg || liveMsg.role !== 'assistant' || !liveMsg.isStreaming) return null
-
-    const activeThinking = liveMsg.thinkingBlocks?.find(tb => !tb.done)
-      ?? (!(liveMsg.contentBlocks ?? []).some(b => b.type === 'thinking') && liveMsg.thinking && !liveMsg.thinking.done
-        ? liveMsg.thinking
-        : null)
-
-    return (
-      <div style={{
-        width: CHAT_COMPOSER_WIDTH,
-        minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
-        margin: '0 auto',
-        paddingTop: 4,
-        paddingBottom: 4,
-        position: 'relative',
-        zIndex: 2,
-      }}>
-        {activeThinking
-          ? <ThinkingBlockView thinking={activeThinking} />
-          : <WorkingChipView message={liveMsg} />
-        }
-      </div>
-    )
-  }, [isStreaming, renderedMessages])
+  const liveComposerActivityChip = useChatTileLiveComposerActivity({
+    isStreaming,
+    renderedMessages,
+  })
 
   // Dream completion → synthetic chip in chat history.
   //
@@ -1202,54 +1197,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     })
   }, [tileId, provider, model, _workspaceDir, executionTarget, cloudHostId, settings?.execution, jobId, jobSequence])
 
-  // Close dropdowns on outside click or Escape
-  const anyMenuOpen = showModelMenu || showProviderMenu || showInsertMenu || showModeMenu || showThinkingMenu || showLocationMenu || showBranchMenu || showContextMenu
-  const menuRefs = [modelMenuRef, providerMenuRef, insertMenuRef, modeMenuRef, thinkingMenuRef, locationMenuRef, branchMenuRef, contextMenuRef]
-
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as Node
-      const targetEl = e.target instanceof Element ? e.target : null
-      // If click is inside any menu button or portaled dropdown, let the menu handle it.
-      const insideAnyMenu = menuRefs.some(ref => ref.current?.contains(target))
-        || Boolean(targetEl?.closest('[data-chat-menu-portal="true"]'))
-      if (insideAnyMenu) return
-      // Click is outside all menus — close everything
-      setShowModelMenu(false)
-      setShowProviderMenu(false)
-      setShowInsertMenu(false)
-      setShowModeMenu(false)
-      setShowThinkingMenu(false)
-      setShowLocationMenu(false)
-      setShowBranchMenu(false)
-      setShowContextMenu(false)
-      if (acRef.current && !acRef.current.contains(target) && target !== textareaRef.current) {
-        setAcType(null)
-        setAcQuery('')
-      }
-    }
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && anyMenuOpen) {
-        e.stopPropagation()
-        e.preventDefault()
-        setShowModelMenu(false)
-        setShowProviderMenu(false)
-        setShowInsertMenu(false)
-        setShowModeMenu(false)
-        setShowThinkingMenu(false)
-        setShowLocationMenu(false)
-        setShowBranchMenu(false)
-        setShowContextMenu(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    document.addEventListener('keydown', handleKey, true)
-    return () => {
-      document.removeEventListener('mousedown', handleClick)
-      document.removeEventListener('keydown', handleKey, true)
-    }
-  }, [anyMenuOpen])
-
   const contextWindowLimit = useMemo(() => getApproxContextWindowTokens(provider, model), [provider, model])
   const systemOverheadTokens = useMemo(
     () => getApproxSystemOverheadTokens(provider, model),
@@ -1367,17 +1314,6 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
       void refreshGitState()
     }
   }, [branchFilter, _workspaceDir, refreshGitState])
-
-  const toggleMenu = useCallback((which: 'model' | 'provider' | 'insert' | 'mode' | 'thinking' | 'location' | 'branch' | 'context') => {
-    setShowModelMenu(prev => { const next = which === 'model' ? !prev : false; if (!next) setModelFilter(''); return next })
-    setShowProviderMenu(prev => which === 'provider' ? !prev : false)
-    setShowInsertMenu(prev => which === 'insert' ? !prev : false)
-    setShowModeMenu(prev => which === 'mode' ? !prev : false)
-    setShowThinkingMenu(prev => which === 'thinking' ? !prev : false)
-    setShowLocationMenu(prev => which === 'location' ? !prev : false)
-    setShowBranchMenu(prev => { const next = which === 'branch' ? !prev : false; if (!next) setBranchFilter(''); return next })
-    setShowContextMenu(prev => which === 'context' ? !prev : false)
-  }, [])
 
   // ─── Voice dictation (via useChatDictation hook) ────────────────────
   // Wire transcriptions into the input state.

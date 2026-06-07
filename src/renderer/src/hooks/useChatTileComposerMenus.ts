@@ -1,0 +1,165 @@
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+
+export type ChatTileComposerMenuId =
+  | 'model'
+  | 'provider'
+  | 'insert'
+  | 'mode'
+  | 'thinking'
+  | 'location'
+  | 'branch'
+  | 'context'
+
+export type ChatTileComposerMenuRefs = {
+  modelMenuRef: RefObject<HTMLDivElement | null>
+  providerMenuRef: RefObject<HTMLDivElement | null>
+  insertMenuRef: RefObject<HTMLDivElement | null>
+  modeMenuRef: RefObject<HTMLDivElement | null>
+  thinkingMenuRef: RefObject<HTMLDivElement | null>
+  locationMenuRef: RefObject<HTMLDivElement | null>
+  branchMenuRef: RefObject<HTMLDivElement | null>
+  contextMenuRef: RefObject<HTMLDivElement | null>
+}
+
+type UseChatTileComposerMenusArgs = {
+  textareaRef: RefObject<HTMLTextAreaElement | null>
+  acRef: RefObject<HTMLDivElement | null>
+  onCloseAutocomplete?: () => void
+}
+
+export function useChatTileComposerMenus({
+  textareaRef,
+  acRef,
+  onCloseAutocomplete,
+}: UseChatTileComposerMenusArgs) {
+  const [showModelMenu, setShowModelMenu] = useState(false)
+  const [showProviderMenu, setShowProviderMenu] = useState(false)
+  const [showInsertMenu, setShowInsertMenu] = useState(false)
+  const [showModeMenu, setShowModeMenu] = useState(false)
+  const [showThinkingMenu, setShowThinkingMenu] = useState(false)
+  const [showLocationMenu, setShowLocationMenu] = useState(false)
+  const [showBranchMenu, setShowBranchMenu] = useState(false)
+  const [showContextMenu, setShowContextMenu] = useState(false)
+  const [modelFilter, setModelFilter] = useState('')
+  const [branchFilter, setBranchFilter] = useState('')
+
+  const modelMenuRef = useRef<HTMLDivElement>(null)
+  const providerMenuRef = useRef<HTMLDivElement>(null)
+  const insertMenuRef = useRef<HTMLDivElement>(null)
+  const modeMenuRef = useRef<HTMLDivElement>(null)
+  const thinkingMenuRef = useRef<HTMLDivElement>(null)
+  const locationMenuRef = useRef<HTMLDivElement>(null)
+  const branchMenuRef = useRef<HTMLDivElement>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+
+  const closeAllMenus = useCallback(() => {
+    setShowModelMenu(false)
+    setShowProviderMenu(false)
+    setShowInsertMenu(false)
+    setShowModeMenu(false)
+    setShowThinkingMenu(false)
+    setShowLocationMenu(false)
+    setShowBranchMenu(false)
+    setShowContextMenu(false)
+    setModelFilter('')
+    setBranchFilter('')
+  }, [])
+
+  const toggleMenu = useCallback((which: ChatTileComposerMenuId) => {
+    setShowModelMenu(prev => {
+      const next = which === 'model' ? !prev : false
+      if (!next) setModelFilter('')
+      return next
+    })
+    setShowProviderMenu(prev => which === 'provider' ? !prev : false)
+    setShowInsertMenu(prev => which === 'insert' ? !prev : false)
+    setShowModeMenu(prev => which === 'mode' ? !prev : false)
+    setShowThinkingMenu(prev => which === 'thinking' ? !prev : false)
+    setShowLocationMenu(prev => which === 'location' ? !prev : false)
+    setShowBranchMenu(prev => {
+      const next = which === 'branch' ? !prev : false
+      if (!next) setBranchFilter('')
+      return next
+    })
+    setShowContextMenu(prev => which === 'context' ? !prev : false)
+  }, [])
+
+  const anyMenuOpen = showModelMenu
+    || showProviderMenu
+    || showInsertMenu
+    || showModeMenu
+    || showThinkingMenu
+    || showLocationMenu
+    || showBranchMenu
+    || showContextMenu
+
+  const menuRefs = [
+    modelMenuRef,
+    providerMenuRef,
+    insertMenuRef,
+    modeMenuRef,
+    thinkingMenuRef,
+    locationMenuRef,
+    branchMenuRef,
+    contextMenuRef,
+  ]
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      const targetEl = e.target instanceof Element ? e.target : null
+      const insideAnyMenu = menuRefs.some(ref => ref.current?.contains(target))
+        || Boolean(targetEl?.closest('[data-chat-menu-portal="true"]'))
+      if (insideAnyMenu) return
+      closeAllMenus()
+      if (acRef.current && !acRef.current.contains(target) && target !== textareaRef.current) {
+        onCloseAutocomplete?.()
+      }
+    }
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && anyMenuOpen) {
+        e.stopPropagation()
+        e.preventDefault()
+        closeAllMenus()
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey, true)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey, true)
+    }
+  }, [anyMenuOpen, acRef, closeAllMenus, onCloseAutocomplete, textareaRef])
+
+  return {
+    showModelMenu,
+    setShowModelMenu,
+    showProviderMenu,
+    setShowProviderMenu,
+    showInsertMenu,
+    setShowInsertMenu,
+    showModeMenu,
+    setShowModeMenu,
+    showThinkingMenu,
+    setShowThinkingMenu,
+    showLocationMenu,
+    setShowLocationMenu,
+    showBranchMenu,
+    setShowBranchMenu,
+    showContextMenu,
+    modelFilter,
+    setModelFilter,
+    branchFilter,
+    setBranchFilter,
+    modelMenuRef,
+    providerMenuRef,
+    insertMenuRef,
+    modeMenuRef,
+    thinkingMenuRef,
+    locationMenuRef,
+    branchMenuRef,
+    contextMenuRef,
+    toggleMenu,
+    closeAllMenus,
+  }
+}
