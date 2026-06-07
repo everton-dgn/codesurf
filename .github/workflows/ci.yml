@@ -42,3 +42,9 @@ jobs:
 
       - name: Run relay test suite
         run: npm run test:relay
+
+      - name: Build Electron app for E2E
+        run: npm run build
+
+      - name: Run Playwright E2E suite
+        run: npm run test:e2e

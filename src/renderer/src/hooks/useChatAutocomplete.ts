@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, type ChangeEvent } from 'react'
 import type { SkillDefinition } from '../../../shared/types'
 import type { ChatComposerAutocompleteItem } from '../components/chat/ChatComposer'
 
@@ -47,6 +47,22 @@ function basename(p: string): string {
   return i >= 0 ? p.slice(i + 1) : p
 }
 
+export function detectAutocompleteTrigger(
+  textBeforeCursor: string,
+): { type: 'slash' | 'mention', query: string } | null {
+  const slashMatch = textBeforeCursor.match(/(^|\s)\/(\w*)$/)
+  if (slashMatch) {
+    return { type: 'slash', query: slashMatch[2] }
+  }
+
+  const mentionMatch = textBeforeCursor.match(/@([\w./]*)$/)
+  if (mentionMatch) {
+    return { type: 'mention', query: mentionMatch[1] }
+  }
+
+  return null
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────
 
 /** A plugin-contributed command exposed as a chat slash command (point 3). */
@@ -72,6 +88,11 @@ export interface UseChatAutocompleteResult {
   acIndex: number
   setAcIndex: React.Dispatch<React.SetStateAction<number>>
   acItems: AutocompleteItem[]
+  handleComposerInputChange: (
+    event: ChangeEvent<HTMLTextAreaElement>,
+    onValueChange: (value: string) => void,
+    syncComposerHeight: () => void,
+  ) => void
 }
 
 export function useChatAutocomplete({
@@ -259,5 +280,36 @@ export function useChatAutocomplete({
     setAcIndex(i => Math.min(i, Math.max(0, acItems.length - 1)))
   }, [acItems.length])
 
-  return { acType, setAcType, acQuery, setAcQuery, acIndex, setAcIndex, acItems }
+  const handleComposerInputChange = useCallback((
+    event: ChangeEvent<HTMLTextAreaElement>,
+    onValueChange: (value: string) => void,
+    syncComposerHeight: () => void,
+  ) => {
+    const value = event.target.value
+    onValueChange(value)
+    syncComposerHeight()
+
+    const cursor = event.target.selectionStart ?? value.length
+    const trigger = detectAutocompleteTrigger(value.slice(0, cursor))
+    if (trigger) {
+      setAcType(trigger.type)
+      setAcQuery(trigger.query)
+      setAcIndex(0)
+      return
+    }
+
+    setAcType(null)
+    setAcQuery('')
+  }, [])
+
+  return {
+    acType,
+    setAcType,
+    acQuery,
+    setAcQuery,
+    acIndex,
+    setAcIndex,
+    acItems,
+    handleComposerInputChange,
+  }
 }

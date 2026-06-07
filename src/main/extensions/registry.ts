@@ -16,6 +16,7 @@ import { loadPowerExtension } from './loader'
 import { bus } from '../event-bus'
 import { adapters, tryAdaptExtension } from './adapters'
 import type { ExtensionManifest, ExtensionTileContrib, ExtensionChatSurfaceContrib, ExtensionMCPToolContrib, ExtensionContextMenuContrib, ExtensionCommandContrib, ExtensionFooterContrib, ExtensionPanelContrib, ExtensionSettingsSectionContrib, ExtensionLayoutPresetContrib } from '../../shared/types'
+import { resolveExtensionEnabled } from './activation-policy'
 
 /** A v2 contribution tagged with its owning plugin id. */
 export type OwnedContribution<T> = T & { extId: string }
@@ -269,13 +270,15 @@ export class ExtensionRegistry {
       // Catalog entries default to disabled unless the user has explicitly
       // flipped them (persisted disabledIds treats presence==disabled; absence
       // normally means enabled — for catalog we invert that default).
-      const untrustedPower = opts?.untrustedScope === true && manifest.tier === 'power'
-      const defaultEnabled = opts?.defaultEnabled !== false && !untrustedPower
-      manifest._enabled = disabledIds.has(manifest.id)
-        ? false
-        : (defaultEnabled
-            ? (manifest._enabled !== false)
-            : (untrustedPower ? this.enabledCatalogIds.has(manifest.id) : false))
+      manifest._enabled = resolveExtensionEnabled({
+        untrustedScope: opts?.untrustedScope,
+        defaultEnabledOption: opts?.defaultEnabled,
+        tier: manifest.tier,
+        disabled: disabledIds.has(manifest.id),
+        enabledCatalogIds: this.enabledCatalogIds,
+        extensionId: manifest.id,
+        manifestEnabled: manifest._enabled,
+      })
       if (manifest.contributes?.tiles) {
         for (const tile of manifest.contributes.tiles) {
           if (!tile.type.startsWith('ext:')) {
@@ -335,14 +338,15 @@ export class ExtensionRegistry {
     // explicitly enabled by the user before activation — never auto-run on
     // workspace open. They reuse the same persisted enabled set as catalog
     // entries.
-    const untrustedPower = opts?.untrustedScope === true && manifest.tier === 'power'
-    const defaultEnabled = opts?.defaultEnabled !== false && !untrustedPower
-    const userEnabled = !defaultEnabled && this.enabledCatalogIds.has(manifest.id)
-    manifest._enabled = this.disabledIds.has(manifest.id)
-      ? false
-      : (defaultEnabled
-          ? (manifest._enabled !== false)
-          : userEnabled)
+    manifest._enabled = resolveExtensionEnabled({
+      untrustedScope: opts?.untrustedScope,
+      defaultEnabledOption: opts?.defaultEnabled,
+      tier: manifest.tier,
+      disabled: this.disabledIds.has(manifest.id),
+      enabledCatalogIds: this.enabledCatalogIds,
+      extensionId: manifest.id,
+      manifestEnabled: manifest._enabled,
+    })
 
     // Namespace tile types with ext: prefix
     if (manifest.contributes?.tiles) {
@@ -391,10 +395,15 @@ export class ExtensionRegistry {
     normalizeManifestUi(manifest)
 
     // Apply persisted disabled state (+ catalog / untrusted-power default-off)
-    const untrustedPower = opts?.untrustedScope === true && manifest.tier === 'power'
-    const defaultEnabled = opts?.defaultEnabled !== false && !untrustedPower
-    if (this.disabledIds.has(manifest.id)) manifest._enabled = false
-    else if (!defaultEnabled) manifest._enabled = untrustedPower ? this.enabledCatalogIds.has(manifest.id) : false
+    manifest._enabled = resolveExtensionEnabled({
+      untrustedScope: opts?.untrustedScope,
+      defaultEnabledOption: opts?.defaultEnabled,
+      tier: manifest.tier,
+      disabled: this.disabledIds.has(manifest.id),
+      enabledCatalogIds: this.enabledCatalogIds,
+      extensionId: manifest.id,
+      manifestEnabled: manifest._enabled,
+    })
 
     // Namespace tiles
     if (manifest.contributes?.tiles) {

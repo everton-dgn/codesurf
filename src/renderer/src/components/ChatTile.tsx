@@ -754,7 +754,16 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   )
 
   // Autocomplete state (extracted to hook)
-  const { acType, setAcType, acQuery, setAcQuery, acIndex, setAcIndex, acItems } = useChatAutocomplete({
+  const {
+    acType,
+    setAcType,
+    acQuery,
+    setAcQuery,
+    acIndex,
+    setAcIndex,
+    acItems,
+    handleComposerInputChange,
+  } = useChatAutocomplete({
     workspaceDir: _workspaceDir,
     connectedPeers,
     workspaceSkills,
@@ -2003,36 +2012,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   }, [isDictating, toggleDictation])
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
-    setInput(val)
-    syncComposerHeight()
-
-    // Detect autocomplete triggers based on cursor position
-    const pos = e.target.selectionStart ?? val.length
-    const textBefore = val.slice(0, pos)
-
-    // Slash command: `/` at start of input or after a space
-    const slashMatch = textBefore.match(/(^|\s)\/(\w*)$/)
-    if (slashMatch) {
-      setAcType('slash')
-      setAcQuery(slashMatch[2])
-      setAcIndex(0)
-      return
-    }
-
-    // @ mention: `@` anywhere
-    const mentionMatch = textBefore.match(/@([\w./]*)$/)
-    if (mentionMatch) {
-      setAcType('mention')
-      setAcQuery(mentionMatch[1])
-      setAcIndex(0)
-      return
-    }
-
-    // No trigger active
-    setAcType(null)
-    setAcQuery('')
-  }, [syncComposerHeight])
+    handleComposerInputChange(e, setInput, syncComposerHeight)
+  }, [handleComposerInputChange, syncComposerHeight])
 
   const isStartScreen = messages.length === 0 && !isStreaming
 
