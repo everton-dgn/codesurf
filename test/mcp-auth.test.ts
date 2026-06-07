@@ -27,7 +27,13 @@ export async function resolve(specifier, context, nextResolve) {
 `
 register(`data:text/javascript,${encodeURIComponent(loader)}`, import.meta.url)
 
-const { requireMcpAuth, getMCPToken, startMCPServer, stopMCPServer } = await import('../src/main/mcp-server.ts')
+const {
+  requireMcpAuth,
+  getMCPToken,
+  buildContexHttpMcpServerEntry,
+  startMCPServer,
+  stopMCPServer,
+} = await import('../src/main/mcp-server.ts')
 
 function mockResponse(): ServerResponse & { status?: number, body?: string, headers: Record<string, string | string[] | undefined> } {
   const headers: Record<string, string | string[] | undefined> = {}
@@ -76,6 +82,15 @@ async function request(
   })
   return { status: res.status, body: await res.text() }
 }
+
+describe('buildContexHttpMcpServerEntry', () => {
+  test('includes bearer auth headers for HTTP MCP clients', () => {
+    const entry = buildContexHttpMcpServerEntry('http://127.0.0.1:4242/mcp')
+    assert.equal(entry.type, 'http')
+    assert.equal(entry.url, 'http://127.0.0.1:4242/mcp')
+    assert.deepEqual(entry.headers, { Authorization: `Bearer ${getMCPToken()}` })
+  })
+})
 
 describe('requireMcpAuth', () => {
   test('rejects missing Authorization with 401 JSON', () => {

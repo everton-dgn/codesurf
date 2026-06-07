@@ -225,6 +225,14 @@ export function getMCPToken(): string {
   return MCP_TOKEN
 }
 
+export function buildContexHttpMcpServerEntry(contexUrl: string): Record<string, unknown> {
+  return {
+    type: 'http',
+    url: contexUrl.replace(/\/$/, ''),
+    headers: { Authorization: `Bearer ${MCP_TOKEN}` },
+  }
+}
+
 /** Names of all tools returned by tools/list (static + node bridge + extensions). */
 export function getContexMcpToolNames(): string[] {
   return Array.from(new Set([
@@ -655,8 +663,7 @@ export async function startMCPServer(): Promise<number> {
       const normalizedServers = normalizeMcpServers(existingServers, contexUrl)
       normalizedServers['contex'] = {
         ...(normalizeMcpServer(existingConfig.mcpServers && typeof existingConfig.mcpServers === 'object' ? (existingConfig.mcpServers as Record<string, unknown>)['contex'] : undefined, contexUrl) as Record<string, unknown>),
-        type: 'http',
-        url: contexUrl
+        ...buildContexHttpMcpServerEntry(contexUrl),
       }
 
       const mcpConfig = {
@@ -723,10 +730,7 @@ export async function writeMCPConfigToWorkspace(workspacePath: string): Promise<
     ? existing.mcpServers as Record<string, unknown>
     : {}
 
-  existingServers['contex'] = {
-    type: 'http',
-    url: contexUrl,
-  }
+  existingServers['contex'] = buildContexHttpMcpServerEntry(contexUrl)
 
   const config = {
     ...existing,

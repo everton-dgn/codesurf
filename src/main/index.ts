@@ -8,7 +8,7 @@ import { initWorkspaces, registerWorkspaceIPC, migrateGenerationKeysToKeychain }
 import { registerFsIPC } from './ipc/fs'
 import { registerCanvasIPC } from './ipc/canvas'
 import { registerTerminalIPC } from './ipc/terminal'
-import { startMCPServer, getMCPPort, getMCPToken, setExtensionRegistryProvider } from './mcp-server'
+import { startMCPServer, getMCPPort, getMCPToken, buildContexHttpMcpServerEntry, setExtensionRegistryProvider } from './mcp-server'
 import { registerAgentsIPC } from './ipc/agents'
 import { registerStreamIPC } from './ipc/stream'
 import { registerGitIPC } from './ipc/git'
@@ -797,8 +797,11 @@ app.whenReady().then(async () => {
         if (name === 'contex' && contexBase) return contexBase
         return undefined
       })
-      if (contexBase && !normalizedServers['contex']) {
-        normalizedServers['contex'] = { type: 'http', url: contexBase }
+      if (contexBase) {
+        normalizedServers['contex'] = {
+          ...(normalizedServers['contex'] ?? {}),
+          ...buildContexHttpMcpServerEntry(contexBase),
+        }
       }
       return { ...cfg, mcpServers: normalizedServers }
     } catch { return null }
@@ -875,8 +878,11 @@ app.whenReady().then(async () => {
         if (name === 'contex' && contexBase) return contexBase
         return undefined
       })
-      if (contexBase && !normalizedGlobal['contex']) {
-        normalizedGlobal['contex'] = { type: 'http', url: contexBase }
+      if (contexBase) {
+        normalizedGlobal['contex'] = {
+          ...(normalizedGlobal['contex'] ?? {}),
+          ...buildContexHttpMcpServerEntry(contexBase),
+        }
       }
       const normalizedWorkspace = normalizeMcpServers(wsServers)
 
