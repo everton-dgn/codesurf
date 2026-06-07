@@ -608,10 +608,13 @@ export interface AppSettings {
   // separately in the encrypted secrets store; this struct holds only the
   // non-secret configuration (provider choice, voice id, lang, etc.).
   voice?: VoiceSettings
-  // Optional hardening flags. All default off so existing installs are unchanged.
   security: {
     /** When true, fs IPC paths must fall under a workspace project root or CONTEX_HOME. */
     restrictFsToWorkspaceRoots: boolean
+    /** One-time marker after legacy default-off installs are migrated to scoping-on. */
+    fsScopingMigrated?: boolean
+    /** Set when the user explicitly disables scoping in Settings. */
+    fsScopingUserOptedOut?: boolean
   }
 }
 
@@ -937,6 +940,7 @@ export function withFreshInstallDefaults(): AppSettings {
   return withDefaultSettings({
     security: {
       restrictFsToWorkspaceRoots: true,
+      fsScopingMigrated: true,
     },
   })
 }
@@ -952,6 +956,41 @@ export function applyNewInstallSecurityDefaults(settings: AppSettings): AppSetti
       restrictFsToWorkspaceRoots: true,
     },
   }
+}
+
+/** One-time migration: legacy installs that never opted out get workspace scoping enabled. */
+export function applyFsScopingMigration(settings: AppSettings): AppSettings {
+  if (settings.security.fsScopingMigrated) return settings
+  if (settings.security.fsScopingUserOptedOut) {
+    return {
+      ...settings,
+      security: {
+        ...settings.security,
+        fsScopingMigrated: true,
+      },
+    }
+  }
+  if (settings.security.restrictFsToWorkspaceRoots) {
+    return {
+      ...settings,
+      security: {
+        ...settings.security,
+        fsScopingMigrated: true,
+      },
+    }
+  }
+  return {
+    ...settings,
+    security: {
+      ...settings.security,
+      restrictFsToWorkspaceRoots: true,
+      fsScopingMigrated: true,
+    },
+  }
+}
+
+export function normalizeLoadedSettings(settings: AppSettings): AppSettings {
+  return applyFsScopingMigration(applyNewInstallSecurityDefaults(settings))
 }
 
 export interface Config {

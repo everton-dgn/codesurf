@@ -13,7 +13,7 @@
 |-------------|--------|-------|
 | SEC-01 MCP zero auth | **FIXED** | Bearer enforced on `/mcp`, `/push`, `/inject`, SSE |
 | SEC-02 `/inject` | **FIXED** | Same auth gate + expanded auth tests |
-| SEC-03 FS unrestricted | **IMPROVED** | Workspace scoping default-on for fresh installs / pre-onboarding |
+| SEC-03 FS unrestricted | **IMPROVED** | Default-on + one-time legacy migration (`applyFsScopingMigration`) |
 | SEC-04 Terminal spawn | **FIXED** | Shell + agent CLI allowlists |
 | SEC-05 Git exec | **FIXED** | `execFile`, branch validation |
 | SEC-06 sandbox:false | **MITIGATED** | Guest webviews hardened; main window documented |
@@ -44,6 +44,7 @@
 | 3 | Guest webview hardening (SEC-06), FS scoping defaults, ChatTile composer extraction |
 | 4 | Extension activation policy, CI build+e2e, MCP auth test expansion |
 | 5 | `useTileMounting` hook, relay in `npm test`, Electrobun security parity, audit refresh |
+| 6 | Panel tree utils, tile clipboard/shortcuts hooks, FS scoping migration, ChatTile dream/composer hooks, Electrobun extension policy bridge |
 
 ---
 

@@ -57,7 +57,7 @@ describe('Electrobun window.electron facade', () => {
     expect(getDefaultElectrobunInvokeResponse('workspace:list')).toEqual([])
     expect(getDefaultElectrobunInvokeResponse('settings:get')).toMatchObject({
       appearance: 'light',
-      security: { restrictFsToWorkspaceRoots: true },
+      security: { restrictFsToWorkspaceRoots: true, fsScopingMigrated: true },
     })
     expect(getDefaultElectrobunInvokeResponse('window:isFresh')).toBe(false)
     expect(getDefaultElectrobunInvokeResponse('canvas:load')).toBe(null)

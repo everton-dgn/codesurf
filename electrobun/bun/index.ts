@@ -7,7 +7,7 @@ import { basename, dirname, join } from 'node:path'
 import { ApplicationMenu, BrowserView, BrowserWindow, Utils } from 'electrobun/bun'
 import type { CodeSurfElectrobunRPC } from '../../src/shared/electrobun-rpc.ts'
 import type { ExecutionHostRecord, ExecutionPreference, ProjectRecord, Workspace, WorkspaceRecord } from '../../src/shared/types.ts'
-import { DEFAULT_SETTINGS, withDefaultSettings } from '../../src/shared/types.ts'
+import { DEFAULT_SETTINGS, normalizeLoadedSettings, withDefaultSettings, withFreshInstallDefaults } from '../../src/shared/types.ts'
 import { buildHermesChatArgs, buildOpenClawAgentArgs, buildOpenCodeRunArgs, sanitizeAgentCliDiagnostic } from '../../src/main/agents/agent-cli-contracts.ts'
 import { CONTEX_HOME, WORKSPACES_DIR } from '../../src/main/paths.ts'
 import { getDefaultElectrobunInvokeResponse } from '../../src/electrobun/browser/electron-facade.ts'
@@ -471,11 +471,15 @@ async function appendQueuedMessageEvent(payload: any): Promise<boolean> {
 }
 
 async function readSettings(): Promise<unknown> {
-  const raw = await readJson<{ settings?: Partial<typeof DEFAULT_SETTINGS> } | Partial<typeof DEFAULT_SETTINGS>>(SETTINGS_PATH, DEFAULT_SETTINGS)
-  if (raw && typeof raw === 'object' && 'settings' in raw) {
-    return withDefaultSettings(raw.settings ?? {})
+  try {
+    const raw = await readJson<{ settings?: Partial<typeof DEFAULT_SETTINGS> } | Partial<typeof DEFAULT_SETTINGS>>(SETTINGS_PATH, DEFAULT_SETTINGS)
+    if (raw && typeof raw === 'object' && 'settings' in raw) {
+      return normalizeLoadedSettings(withDefaultSettings(raw.settings ?? {}))
+    }
+    return normalizeLoadedSettings(withDefaultSettings(raw as Partial<typeof DEFAULT_SETTINGS>))
+  } catch {
+    return withFreshInstallDefaults()
   }
-  return withDefaultSettings(raw as Partial<typeof DEFAULT_SETTINGS>)
 }
 
 async function writeSettings(settings: unknown): Promise<unknown> {

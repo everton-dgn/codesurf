@@ -1243,6 +1243,8 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
                   security: {
                     ...settings.security,
                     restrictFsToWorkspaceRoots: v,
+                    fsScopingMigrated: true,
+                    fsScopingUserOptedOut: v ? undefined : true,
                   },
                 })}
               />

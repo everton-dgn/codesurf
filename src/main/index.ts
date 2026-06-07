@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { initWorkspaces, registerWorkspaceIPC, migrateGenerationKeysToKeychain } from './ipc/workspace'
+import { initWorkspaces, registerWorkspaceIPC, migrateFsScopingIfNeeded, migrateGenerationKeysToKeychain } from './ipc/workspace'
 import { registerFsIPC } from './ipc/fs'
 import { registerCanvasIPC } from './ipc/canvas'
 import { registerTerminalIPC } from './ipc/terminal'
@@ -694,6 +694,7 @@ app.whenReady().then(async () => {
   // gap-03: migrate any pre-existing plaintext generation keys into the keychain
   // in the background (idempotent; never blocks boot).
   void migrateGenerationKeysToKeychain()
+  void migrateFsScopingIfNeeded()
 
   // Keep the extension system fully lazy. Do not scan or boot extension hosts
   // at startup; load them only when an extension tile or explicit management UI asks.

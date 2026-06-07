@@ -4,6 +4,8 @@ import path, { join } from 'path'
 import type { AppSettings, Workspace } from '../../shared/types'
 import {
   applyNewInstallSecurityDefaults,
+  applyFsScopingMigration,
+  normalizeLoadedSettings,
   withDefaultSettings,
   withFreshInstallDefaults,
 } from '../../shared/types'
@@ -85,7 +87,7 @@ function normalizeSettingsDocument(raw: string): AppSettings {
   try {
     const parsed = JSON.parse(raw) as PersistedSettingsDocument | LegacyConfigDocument
     if (parsed && typeof parsed === 'object' && 'settings' in parsed) {
-      return applyNewInstallSecurityDefaults(withDefaultSettings(parsed.settings ?? {}))
+      return normalizeLoadedSettings(withDefaultSettings(parsed.settings ?? {}))
     }
   } catch {
     // fall through to defaults
@@ -129,13 +131,33 @@ export async function initWorkspaces(): Promise<void> {
 
 export function readSettingsSync(): AppSettings {
   try {
-    return applyNewInstallSecurityDefaults(normalizeSettingsDocument(readFileSync(SETTINGS_PATH, 'utf8')))
+    return normalizeLoadedSettings(normalizeSettingsDocument(readFileSync(SETTINGS_PATH, 'utf8')))
   } catch {
     try {
-      return applyNewInstallSecurityDefaults(normalizeSettingsDocument(readFileSync(LEGACY_CONFIG_PATH, 'utf8')))
+      return normalizeLoadedSettings(normalizeSettingsDocument(readFileSync(LEGACY_CONFIG_PATH, 'utf8')))
     } catch {
       return withFreshInstallDefaults()
     }
+  }
+}
+
+/** One-time startup migration for legacy installs still on default-off FS scoping. */
+export async function migrateFsScopingIfNeeded(): Promise<void> {
+  try {
+    await ensureDaemonRunning()
+    const current = withDefaultSettings(await daemonClient.getSettings())
+    const migrated = applyFsScopingMigration(applyNewInstallSecurityDefaults(current))
+    if (
+      migrated.security.restrictFsToWorkspaceRoots !== current.security.restrictFsToWorkspaceRoots
+      || migrated.security.fsScopingMigrated !== current.security.fsScopingMigrated
+    ) {
+      await daemonClient.setSettings(migrated)
+      // eslint-disable-next-line no-console
+      console.log('[SEC-03] migrated legacy install to workspace filesystem scoping')
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[SEC-03] FS scoping migration failed:', err)
   }
 }
 
