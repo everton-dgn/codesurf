@@ -932,6 +932,28 @@ export function withDefaultSettings(input: Partial<AppSettings> | null | undefin
   return base
 }
 
+/** Defaults for first launch when no settings.json exists yet. */
+export function withFreshInstallDefaults(): AppSettings {
+  return withDefaultSettings({
+    security: {
+      restrictFsToWorkspaceRoots: true,
+    },
+  })
+}
+
+/** Turn on workspace FS scoping during first-run before onboarding completes. */
+export function applyNewInstallSecurityDefaults(settings: AppSettings): AppSettings {
+  if (settings.security.restrictFsToWorkspaceRoots) return settings
+  if (settings.onboardingComplete !== false) return settings
+  return {
+    ...settings,
+    security: {
+      ...settings.security,
+      restrictFsToWorkspaceRoots: true,
+    },
+  }
+}
+
 export interface Config {
   version: 2
   projects: ProjectRecord[]

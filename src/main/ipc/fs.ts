@@ -78,6 +78,11 @@ export function assertPathAllowedForFs(
   if (resolvedPath === CONTEX_HOME || resolvedPath.startsWith(CONTEX_HOME + path.sep)) return
 
   const allowedRoots = options.allowedRoots ?? []
+  if (allowedRoots.length === 0) {
+    throw new Error(
+      'Access denied: no workspace project folders configured. Add a project folder or disable filesystem scoping in Settings.',
+    )
+  }
   for (const root of allowedRoots) {
     if (isPathUnderRoot(resolvedPath, root)) return
   }
@@ -118,7 +123,8 @@ async function validateFsPathForHandler(filePath: string, workspaceId?: string):
     getAllWorkspaceProjectPaths,
     getWorkspaceProjectPathsById,
   } = await import('./workspace.ts')
-  const settings = readSettingsSync()
+  const { applyNewInstallSecurityDefaults } = await import('../../shared/types.ts')
+  const settings = applyNewInstallSecurityDefaults(readSettingsSync())
   if (!settings.security.restrictFsToWorkspaceRoots) {
     return validateFsPath(filePath)
   }

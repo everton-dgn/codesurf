@@ -62,7 +62,7 @@ describe('assertPathAllowedForFs', () => {
         restrictToWorkspaceRoots: true,
         allowedRoots: [],
       }),
-      /outside allowed workspace roots/,
+      /no workspace project folders configured/i,
     )
   })
 })

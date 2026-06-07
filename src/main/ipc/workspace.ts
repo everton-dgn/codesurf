@@ -2,7 +2,12 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { readFileSync } from 'fs'
 import path, { join } from 'path'
 import type { AppSettings, Workspace } from '../../shared/types'
-import { DEFAULT_SETTINGS, withDefaultSettings } from '../../shared/types'
+import {
+  applyNewInstallSecurityDefaults,
+  DEFAULT_SETTINGS,
+  withDefaultSettings,
+  withFreshInstallDefaults,
+} from '../../shared/types'
 import { ensureDaemonRunning } from '../daemon/manager'
 import { daemonClient } from '../daemon/client'
 import { writeMCPConfigToWorkspace } from '../mcp-server'
@@ -81,12 +86,12 @@ function normalizeSettingsDocument(raw: string): AppSettings {
   try {
     const parsed = JSON.parse(raw) as PersistedSettingsDocument | LegacyConfigDocument
     if (parsed && typeof parsed === 'object' && 'settings' in parsed) {
-      return withDefaultSettings(parsed.settings ?? {})
+      return applyNewInstallSecurityDefaults(withDefaultSettings(parsed.settings ?? {}))
     }
   } catch {
     // fall through to defaults
   }
-  return { ...DEFAULT_SETTINGS }
+  return withFreshInstallDefaults()
 }
 
 async function ensureWorkspaceSideEffects(workspace: Workspace | null): Promise<void> {
@@ -125,12 +130,12 @@ export async function initWorkspaces(): Promise<void> {
 
 export function readSettingsSync(): AppSettings {
   try {
-    return normalizeSettingsDocument(readFileSync(SETTINGS_PATH, 'utf8'))
+    return applyNewInstallSecurityDefaults(normalizeSettingsDocument(readFileSync(SETTINGS_PATH, 'utf8')))
   } catch {
     try {
-      return normalizeSettingsDocument(readFileSync(LEGACY_CONFIG_PATH, 'utf8'))
+      return applyNewInstallSecurityDefaults(normalizeSettingsDocument(readFileSync(LEGACY_CONFIG_PATH, 'utf8')))
     } catch {
-      return { ...DEFAULT_SETTINGS }
+      return withFreshInstallDefaults()
     }
   }
 }
