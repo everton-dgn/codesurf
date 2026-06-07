@@ -1,0 +1,309 @@
+import {
+  useCallback,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from 'react'
+import type { TileState, Workspace } from '../../../shared/types'
+import { isMediaFile } from '../utils/dnd'
+import {
+  findClearPosition,
+  getMinTileHeight,
+  getMinTileWidth,
+  TILE_PLACEMENT_GRID,
+} from '../utils/tilePlacement'
+import { disposeChatTileRuntimeState } from '../components/chatTileRuntimeState'
+import { disposeMediaTile } from '../components/mediaTileRegistry'
+import {
+  addTabToLeaf,
+  createLeaf,
+  findLeafByTileId,
+  pinTabInLeaf,
+  removeTileFromTree,
+  replaceTabInLeaf,
+  setActiveTab,
+  type PanelNode,
+} from '../components/panelLayoutTree'
+import type { CanvasViewport, SaveCanvasFn } from './useCanvasEngine'
+
+export type TileMountInitialOptions = {
+  hideTitlebar?: boolean
+  hideNavbar?: boolean
+  launchBin?: string
+  launchArgs?: string[]
+}
+
+export type UseTileMountingOptions = {
+  workspace: Workspace | null
+  gridSize: number
+  gridSpacingSmall: number
+  tilesRef: MutableRefObject<TileState[]>
+  panelTileIdsRef: MutableRefObject<Set<string>>
+  panelLayoutRef: MutableRefObject<PanelNode | null>
+  activePanelIdRef: MutableRefObject<string | null>
+  viewportRef: MutableRefObject<CanvasViewport>
+  nextZIndexRef: MutableRefObject<number>
+  selectedTileId: string | null
+  setTiles: Dispatch<SetStateAction<TileState[]>>
+  setNextZIndex: Dispatch<SetStateAction<number>>
+  setSelectedTileId: Dispatch<SetStateAction<string | null>>
+  setPanelLayout: Dispatch<SetStateAction<PanelNode | null>>
+  setActivePanelId: Dispatch<SetStateAction<string | null>>
+  setChatTileSessionMatches: Dispatch<SetStateAction<Record<string, { entryId: string | null, sessionId: string | null }>>>
+  saveCanvas: SaveCanvasFn
+  viewportCenter: () => { x: number, y: number }
+  snapValue: (value: number) => number
+  getInitialTileSize: (type: TileState['type']) => { w: number, h: number }
+  triggerDiscoveryPulse: (tileId: string, tiles: TileState[]) => void
+}
+
+export function useTileMounting({
+  workspace,
+  gridSize,
+  gridSpacingSmall,
+  tilesRef,
+  panelTileIdsRef,
+  panelLayoutRef,
+  activePanelIdRef,
+  viewportRef,
+  nextZIndexRef,
+  selectedTileId,
+  setTiles,
+  setNextZIndex,
+  setSelectedTileId,
+  setPanelLayout,
+  setActivePanelId,
+  setChatTileSessionMatches,
+  saveCanvas,
+  viewportCenter,
+  snapValue,
+  getInitialTileSize,
+  triggerDiscoveryPulse,
+}: UseTileMountingOptions) {
+  const cleanupTileResources = useCallback((tileId: string) => {
+    const tile = tilesRef.current.find(candidate => candidate.id === tileId)
+    if (tile?.type === 'terminal') {
+      window.electron.terminal.destroy(tileId)
+    }
+    if (tile?.type === 'chat') {
+      disposeChatTileRuntimeState(tileId)
+      void window.electron.chat?.disposeCard?.(tileId)
+    }
+    if (tile?.type === 'media') {
+      disposeMediaTile(tileId)
+    }
+    void window.electron.system.cleanupTile(tileId)
+    if (workspace?.id) {
+      void Promise.allSettled([
+        window.electron.canvas.deleteTileArtifacts(workspace.id, tileId),
+        window.electron.activity.clearTile(workspace.id, tileId),
+        workspace.path ? window.electron.collab.removeTileDir(workspace.path, tileId) : Promise.resolve(true),
+      ])
+    }
+  }, [tilesRef, workspace?.id, workspace?.path])
+
+  const buildTileState = useCallback((
+    type: TileState['type'],
+    filePath?: string,
+    pos?: { x: number, y: number },
+    initialOptions?: TileMountInitialOptions,
+  ) => {
+    const center = pos ?? viewportCenter()
+    const { w, h } = getInitialTileSize(type)
+    const minW = getMinTileWidth(type)
+    const minH = getMinTileHeight(type)
+    const width = Math.max(w, minW)
+    const height = Math.max(h, minH)
+    const placementStep = Math.max(16, gridSize || gridSpacingSmall || TILE_PLACEMENT_GRID)
+    const preferred = {
+      x: snapValue(center.x - width / 2),
+      y: snapValue(center.y - height / 2),
+    }
+    const position = findClearPosition(
+      preferred.x,
+      preferred.y,
+      width,
+      height,
+      tilesRef.current,
+      panelTileIdsRef.current,
+      placementStep,
+    )
+
+    const isMedia = !!filePath && isMediaFile(filePath)
+    const defaultHideTitlebar = isMedia ? true : undefined
+    const defaultHideNavbar = isMedia ? true : undefined
+
+    return {
+      id: `tile-${Date.now()}`,
+      type,
+      x: position.x,
+      y: position.y,
+      width,
+      height,
+      zIndex: nextZIndexRef.current,
+      filePath,
+      hideTitlebar: initialOptions?.hideTitlebar ?? defaultHideTitlebar,
+      hideNavbar: initialOptions?.hideNavbar ?? defaultHideNavbar,
+      launchBin: initialOptions?.launchBin,
+      launchArgs: initialOptions?.launchArgs,
+    }
+  }, [
+    getInitialTileSize,
+    gridSize,
+    gridSpacingSmall,
+    nextZIndexRef,
+    panelTileIdsRef,
+    snapValue,
+    tilesRef,
+    viewportCenter,
+  ])
+
+  const mountTile = useCallback((
+    newTile: TileState,
+    options?: { panelId?: string | null, preview?: boolean },
+  ): string => {
+    const panelId = options?.panelId ?? activePanelIdRef.current
+    let updatedTiles = tilesRef.current
+    let newNZ = nextZIndexRef.current
+    setTiles(prev => {
+      updatedTiles = [...prev, newTile]
+      tilesRef.current = updatedTiles
+      newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
+      nextZIndexRef.current = newNZ
+      saveCanvas(updatedTiles, viewportRef.current, newNZ)
+      return updatedTiles
+    })
+    setNextZIndex(newNZ)
+    setSelectedTileId(newTile.id)
+    if (panelLayoutRef.current && panelId) {
+      setPanelLayout(prev => prev ? addTabToLeaf(prev, panelId, newTile.id, { preview: options?.preview }) : prev)
+      setActivePanelId(panelId)
+    }
+    window.setTimeout(() => triggerDiscoveryPulse(newTile.id, updatedTiles), 40)
+    return newTile.id
+  }, [
+    activePanelIdRef,
+    nextZIndexRef,
+    panelLayoutRef,
+    saveCanvas,
+    setActivePanelId,
+    setNextZIndex,
+    setPanelLayout,
+    setSelectedTileId,
+    setTiles,
+    tilesRef,
+    triggerDiscoveryPulse,
+    viewportRef,
+  ])
+
+  const replacePreviewTile = useCallback((
+    currentTileId: string,
+    newTile: TileState,
+    panelId: string,
+    options?: { preview?: boolean },
+  ): string => {
+    cleanupTileResources(currentTileId)
+    let updatedTiles = tilesRef.current
+    let newNZ = nextZIndexRef.current
+    setTiles(prev => {
+      updatedTiles = [...prev.filter(tile => tile.id !== currentTileId), newTile]
+      tilesRef.current = updatedTiles
+      newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
+      nextZIndexRef.current = newNZ
+      saveCanvas(updatedTiles, viewportRef.current, newNZ)
+      return updatedTiles
+    })
+    setNextZIndex(newNZ)
+    setSelectedTileId(newTile.id)
+    setPanelLayout(prev => prev
+      ? setActiveTab(replaceTabInLeaf(prev, panelId, currentTileId, newTile.id, { preview: options?.preview }), panelId, newTile.id)
+      : prev)
+    setActivePanelId(panelId)
+    setChatTileSessionMatches(prev => {
+      if (!(currentTileId in prev)) return prev
+      const next = { ...prev }
+      delete next[currentTileId]
+      return next
+    })
+    window.setTimeout(() => triggerDiscoveryPulse(newTile.id, updatedTiles), 40)
+    return newTile.id
+  }, [
+    cleanupTileResources,
+    nextZIndexRef,
+    saveCanvas,
+    setActivePanelId,
+    setChatTileSessionMatches,
+    setNextZIndex,
+    setPanelLayout,
+    setSelectedTileId,
+    setTiles,
+    tilesRef,
+    triggerDiscoveryPulse,
+    viewportRef,
+  ])
+
+  const pinPreviewTab = useCallback((tileId: string) => {
+    const layout = panelLayoutRef.current
+    if (!layout) return
+    const leaf = findLeafByTileId(layout, tileId)
+    if (!leaf) return
+    const leafId = leaf.id
+    if (leaf.previewTabId !== tileId) return
+    setPanelLayout(prev => prev ? pinTabInLeaf(prev, leafId, tileId) : prev)
+  }, [panelLayoutRef, setPanelLayout])
+
+  const addTile = useCallback((
+    type: TileState['type'],
+    filePath?: string,
+    pos?: { x: number, y: number },
+    initialOptions?: TileMountInitialOptions,
+  ) => {
+    const newTile = buildTileState(type, filePath, pos, initialOptions)
+    return mountTile(newTile, { panelId: panelLayoutRef.current ? activePanelIdRef.current : null, preview: false })
+  }, [activePanelIdRef, buildTileState, mountTile, panelLayoutRef])
+
+  const closeTile = useCallback((id: string) => {
+    cleanupTileResources(id)
+    setTiles(prev => {
+      const updated = prev.filter(tile => tile.id !== id)
+      saveCanvas(updated, viewportRef.current, nextZIndexRef.current)
+      return updated
+    })
+    setPanelLayout(prev => {
+      if (!prev) return prev
+      const next = removeTileFromTree(prev, id)
+      if (next) return next
+      const emptyLeaf = createLeaf([])
+      setActivePanelId(emptyLeaf.id)
+      return emptyLeaf
+    })
+    setChatTileSessionMatches(prev => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    if (selectedTileId === id) setSelectedTileId(null)
+  }, [
+    cleanupTileResources,
+    nextZIndexRef,
+    saveCanvas,
+    selectedTileId,
+    setActivePanelId,
+    setChatTileSessionMatches,
+    setPanelLayout,
+    setSelectedTileId,
+    setTiles,
+    viewportRef,
+  ])
+
+  return {
+    buildTileState,
+    mountTile,
+    replacePreviewTile,
+    pinPreviewTab,
+    addTile,
+    closeTile,
+    cleanupTileResources,
+  }
+}

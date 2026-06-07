@@ -22,15 +22,17 @@ import {
   useLockedConnectionHelpers,
   type CanvasDragState,
 } from './hooks/useCanvasEngine'
+import { useTileMounting } from './hooks/useTileMounting'
+import { getMinTileHeight, getMinTileWidth, rectsOverlap } from './utils/tilePlacement'
 import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
 import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
 import { applyContrast, DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
-import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf, replaceTabInLeaf } from './components/panelLayoutTree'
+import { createLeaf, removeTileFromTree, addTabToLeaf, getAllTileIds, splitLeaf, closeOthersInLeaf, closeToRightInLeaf, findLeafById, setActiveTab, pinTabInLeaf } from './components/panelLayoutTree'
 import { panelTreeHasSplit, tilesToPanelNode } from './lib/layoutSnap'
-import { basename, getDroppedPaths, toFileUrl, isMediaFile } from './utils/dnd'
+import { basename, getDroppedPaths, toFileUrl } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
 import {
   CODESURF_CREATE_TILE_EVENT,
@@ -39,8 +41,7 @@ import {
   normalizeOpenChatSurfaceDetail,
   resolveChatSurfaceTargetTile,
 } from './utils/appLaunchRequests'
-import { disposeChatTileRuntimeState, getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
-import { disposeMediaTile } from './components/mediaTileRegistry'
+import { getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
 import { MainStatusBar } from './components/MainStatusBar'
 import { DevSandboxFrame } from './components/DevSandboxFrame'
 import { resolveProviderModeId } from './config/providers'
@@ -410,23 +411,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
     || !!el.closest('.monaco-editor')
 }
 
-function getMinTileWidth(tileOrType: TileState | TileState['type']): number {
-  const type = typeof tileOrType === 'string' ? tileOrType : tileOrType.type
-  if (type === 'chat') return 450
-  if (type === 'files') return 250
-  if (type === 'file') return 200
-  if (type.startsWith('ext:')) return 150
-  return 200
-}
-
-function getMinTileHeight(tileOrType: TileState | TileState['type']): number {
-  const type = typeof tileOrType === 'string' ? tileOrType : tileOrType.type
-  if (type === 'files') return 300
-  if (type === 'file') return 200
-  if (type.startsWith('ext:')) return 100
-  return 150
-}
-
 type AnchorSide = 'top' | 'right' | 'bottom' | 'left'
 
 type TileCapabilitySet = {
@@ -792,49 +776,6 @@ function getBezierConnectionMidpoint(source: { x: number; y: number }, target: {
     x: source.x + dx * 0.5,
     y: source.y + (target.y - source.y) * 0.5 + Math.min(72, Math.max(18, distance * 0.10)),
   }
-}
-
-function rectsOverlap(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
-}
-
-function findClearPosition(
-  preferredX: number,
-  preferredY: number,
-  width: number,
-  height: number,
-  tiles: TileState[],
-  blockedTileIds: Set<string>,
-  step: number
-): { x: number; y: number } {
-  const overlapsExisting = (x: number, y: number) => {
-    const candidate = { x, y, w: width, h: height }
-    return tiles.some(tile => !blockedTileIds.has(tile.id) && rectsOverlap(candidate, { x: tile.x, y: tile.y, w: tile.width, h: tile.height }))
-  }
-
-  let x = preferredX
-  let y = preferredY
-  if (!overlapsExisting(x, y)) return { x, y }
-
-  const maxRings = 120
-  for (let ring = 1; ring <= maxRings; ring += 1) {
-    for (let dx = -ring; dx <= ring; dx += 1) {
-      const dy = ring - Math.abs(dx)
-      const candidates = dy === 0
-        ? [{ dx: dx * step, dy: 0 }]
-        : [{ dx: dx * step, dy: dy * step }, { dx: dx * step, dy: -dy * step }]
-
-      for (const cand of candidates) {
-        x = preferredX + cand.dx
-        y = preferredY + cand.dy
-        if (!overlapsExisting(x, y)) {
-          return { x, y }
-        }
-      }
-    }
-  }
-
-  return { x, y }
 }
 
 function getRouteSegments(points: { x: number; y: number }[], thickness = 3): Array<{ left: number; top: number; width: number; height: number; horizontal: boolean }> {
@@ -1985,43 +1926,36 @@ function App(): JSX.Element {
   }, [activeChatTileId, chatTileSessionMatches])
   const preferredBrowserOpenTargetRef = useRef<string | null>(null)
 
-  // ─── Tile creation ────────────────────────────────────────────────────────
-  const buildTileState = useCallback((type: TileState['type'], filePath?: string, pos?: { x: number; y: number }, initialOptions?: { hideTitlebar?: boolean; hideNavbar?: boolean; launchBin?: string; launchArgs?: string[] }) => {
-    const center = pos ?? viewportCenter()
-    const { w, h } = getInitialTileSize(type)
-    const minW = getMinTileWidth(type)
-    const minH = getMinTileHeight(type)
-    const width = Math.max(w, minW)
-    const height = Math.max(h, minH)
-    const placementStep = Math.max(16, settings.gridSize || settings.gridSpacingSmall || GRID)
-    const preferred = {
-      x: snapValue(center.x - width / 2),
-      y: snapValue(center.y - height / 2),
-    }
-    const position = findClearPosition(preferred.x, preferred.y, width, height, tilesRef.current, panelTileIdsRef.current, placementStep)
-
-    // Media files (image/video/audio/PDF) open chromeless by default — hides
-    // both the tile titlebar and the browser navbar so the content fills the
-    // block. User can right-click to restore controls. Caller can override.
-    const isMedia = !!filePath && isMediaFile(filePath)
-    const defaultHideTitlebar = isMedia ? true : undefined
-    const defaultHideNavbar = isMedia ? true : undefined
-
-    return {
-      id: `tile-${Date.now()}`,
-      type,
-      x: position.x,
-      y: position.y,
-      width,
-      height,
-      zIndex: nextZIndexRef.current,
-      filePath,
-      hideTitlebar: initialOptions?.hideTitlebar ?? defaultHideTitlebar,
-      hideNavbar: initialOptions?.hideNavbar ?? defaultHideNavbar,
-      launchBin: initialOptions?.launchBin,
-      launchArgs: initialOptions?.launchArgs,
-    }
-  }, [viewportCenter, getInitialTileSize, snapValue, settings.gridSize, settings.gridSpacingSmall])
+  const {
+    buildTileState,
+    mountTile,
+    replacePreviewTile,
+    pinPreviewTab,
+    addTile,
+    closeTile,
+  } = useTileMounting({
+    workspace,
+    gridSize: settings.gridSize,
+    gridSpacingSmall: settings.gridSpacingSmall,
+    tilesRef,
+    panelTileIdsRef,
+    panelLayoutRef,
+    activePanelIdRef,
+    viewportRef,
+    nextZIndexRef,
+    selectedTileId,
+    setTiles,
+    setNextZIndex,
+    setSelectedTileId,
+    setPanelLayout,
+    setActivePanelId,
+    setChatTileSessionMatches,
+    saveCanvas,
+    viewportCenter,
+    snapValue,
+    getInitialTileSize,
+    triggerDiscoveryPulse,
+  })
 
   const getNavigationLeaf = useCallback((): PanelLeaf | null => {
     const layout = panelLayoutRef.current
@@ -2079,103 +2013,6 @@ function App(): JSX.Element {
       ?? (sourceLeaf && hasEditorRole(sourceLeaf) ? sourceLeaf : null)
     return associatedEditorLeaf ?? fallbackLeaf
   }, [getNavigationLeaf, isPreviewTabReplaceable])
-
-  const cleanupTileResources = useCallback((tileId: string) => {
-    const tile = tilesRef.current.find(t => t.id === tileId)
-    if (tile?.type === 'terminal') {
-      window.electron.terminal.destroy(tileId)
-    }
-    if (tile?.type === 'chat') {
-      disposeChatTileRuntimeState(tileId)
-      // Evict the main-process session/permission maps and prune the persisted
-      // session-ids.json so they do not grow unbounded per deleted chat tile.
-      void window.electron.chat?.disposeCard?.(tileId)
-    }
-    if (tile?.type === 'media') {
-      disposeMediaTile(tileId)
-    }
-    void window.electron.system.cleanupTile(tileId)
-    if (workspace?.id) {
-      void Promise.allSettled([
-        window.electron.canvas.deleteTileArtifacts(workspace.id, tileId),
-        window.electron.activity.clearTile(workspace.id, tileId),
-        workspace.path ? window.electron.collab.removeTileDir(workspace.path, tileId) : Promise.resolve(true),
-      ])
-    }
-  }, [workspace?.id, workspace?.path])
-
-  const mountTile = useCallback((
-    newTile: TileState,
-    options?: { panelId?: string | null; preview?: boolean },
-  ): string => {
-    const panelId = options?.panelId ?? activePanelIdRef.current
-    let updatedTiles = tilesRef.current
-    let newNZ = nextZIndexRef.current
-    setTiles(prev => {
-      updatedTiles = [...prev, newTile]
-      tilesRef.current = updatedTiles
-      newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
-      nextZIndexRef.current = newNZ
-      saveCanvas(updatedTiles, viewportRef.current, newNZ)
-      return updatedTiles
-    })
-    setNextZIndex(newNZ)
-    setSelectedTileId(newTile.id)
-    if (panelLayoutRef.current && panelId) {
-      setPanelLayout(prev => prev ? addTabToLeaf(prev, panelId, newTile.id, { preview: options?.preview }) : prev)
-      setActivePanelId(panelId)
-    }
-    window.setTimeout(() => triggerDiscoveryPulse(newTile.id, updatedTiles), 40)
-    return newTile.id
-  }, [saveCanvas, triggerDiscoveryPulse])
-
-  const replacePreviewTile = useCallback((
-    currentTileId: string,
-    newTile: TileState,
-    panelId: string,
-    options?: { preview?: boolean },
-  ): string => {
-    cleanupTileResources(currentTileId)
-    let updatedTiles = tilesRef.current
-    let newNZ = nextZIndexRef.current
-    setTiles(prev => {
-      updatedTiles = [...prev.filter(tile => tile.id !== currentTileId), newTile]
-      tilesRef.current = updatedTiles
-      newNZ = Math.max(nextZIndexRef.current, newTile.zIndex) + 1
-      nextZIndexRef.current = newNZ
-      saveCanvas(updatedTiles, viewportRef.current, newNZ)
-      return updatedTiles
-    })
-    setNextZIndex(newNZ)
-    setSelectedTileId(newTile.id)
-    setPanelLayout(prev => prev
-      ? setActiveTab(replaceTabInLeaf(prev, panelId, currentTileId, newTile.id, { preview: options?.preview }), panelId, newTile.id)
-      : prev)
-    setActivePanelId(panelId)
-    setChatTileSessionMatches(prev => {
-      if (!(currentTileId in prev)) return prev
-      const next = { ...prev }
-      delete next[currentTileId]
-      return next
-    })
-    window.setTimeout(() => triggerDiscoveryPulse(newTile.id, updatedTiles), 40)
-    return newTile.id
-  }, [cleanupTileResources, saveCanvas, triggerDiscoveryPulse])
-
-  const pinPreviewTab = useCallback((tileId: string) => {
-    const layout = panelLayoutRef.current
-    if (!layout) return
-    const leafId = findLeafIdContainingTile(layout, tileId)
-    if (!leafId) return
-    const leaf = findLeafById(layout, leafId)
-    if (!leaf || leaf.previewTabId !== tileId) return
-    setPanelLayout(prev => prev ? pinTabInLeaf(prev, leafId, tileId) : prev)
-  }, [])
-
-  const addTile = useCallback((type: TileState['type'], filePath?: string, pos?: { x: number; y: number }, initialOptions?: { hideTitlebar?: boolean; hideNavbar?: boolean; launchBin?: string; launchArgs?: string[] }) => {
-    const newTile = buildTileState(type, filePath, pos, initialOptions)
-    return mountTile(newTile, { panelId: panelLayoutRef.current ? activePanelIdRef.current : null, preview: false })
-  }, [buildTileState, mountTile])
 
   useEffect(() => {
     const handleOpenLink = (event: Event) => {
@@ -2252,30 +2089,6 @@ function App(): JSX.Element {
     })
     return cleanup
   }, [tiles, addTile])
-
-  const closeTile = useCallback((id: string) => {
-    cleanupTileResources(id)
-    setTiles(prev => {
-      const updated = prev.filter(t => t.id !== id)
-      saveCanvas(updated, viewport, nextZIndex)
-      return updated
-    })
-    setPanelLayout(prev => {
-      if (!prev) return prev
-      const next = removeTileFromTree(prev, id)
-      if (next) return next
-      const emptyLeaf = createLeaf([])
-      setActivePanelId(emptyLeaf.id)
-      return emptyLeaf
-    })
-    setChatTileSessionMatches(prev => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    if (selectedTileId === id) setSelectedTileId(null)
-  }, [cleanupTileResources, selectedTileId, viewport, nextZIndex, saveCanvas])
 
   const bringToFront = useCallback((id: string) => {
     const nz = nextZIndex
