@@ -31,6 +31,10 @@
 | ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` + `useCanvasGlow` + group frames + keyboard/persist hooks |
 | BUG-13 canvas double-click | **FIXED** | Spawns terminal on empty canvas, not only bare surface element |
 | BUG-10 OpenCode start race | **FIXED** | `startPromise` retained until success; cleared on failure/shutdown |
+| BUG-06 Kanban terminal race | **FIXED** | `CardAgentRunner` uses cancel flag; no stale post-unmount writes |
+| BUG-16 Kanban listener churn | **FIXED** | MCP/SSE/bus handlers use refs; subscriptions stable across card edits |
+| BUG-17 workspaceDir ignored | **FIXED** | `CardAgentRunner` re-runs when `workspaceDir` or `launchCmd` changes |
+| PERF-03 dot grid glow | **FIXED** | RAF-throttled updates in `useCanvasGlow` (wave 10) |
 | PERF-04 drag auto-save | **FIXED** | Deferred canvas persist until drag ends |
 | ARCH mcp-server.ts | **IMPROVED** | Tool modules + registry (2237 → 791 LOC) |
 | ARCH ChatTile.tsx | **IMPROVED** | Composer menus, live activity, autocomplete hooks |
@@ -52,6 +56,7 @@
 | 8 | `CanvasGroupFrames` extraction, keyboard undo/redo, drag-deferred canvas persist, Electrobun ext:list-sidebar |
 | 9 | `useCanvasDragSync` extraction, skills skipped-location UX, SEC-03 settings copy, `fs:probeDir` IPC |
 | 10 | `useCanvasGlow` extraction, BUG-13 canvas double-click, BUG-10 OpenCode `startPromise` race |
+| 11 | Kanban listener stability (BUG-16), CardAgentRunner cleanup (BUG-06/17) |
 
 ---
 

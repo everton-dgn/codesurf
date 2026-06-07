@@ -429,8 +429,24 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
+  const columnsRef = useRef(columns)
+  const cardsRef = useRef(cards)
+  const themeRef = useRef(theme)
+  const tileIdRef = useRef(tileId)
+  const logActivityRef = useRef(logActivity)
+  columnsRef.current = columns
+  cardsRef.current = cards
+  themeRef.current = theme
+  tileIdRef.current = tileId
+  logActivityRef.current = logActivity
+
   const handleKanbanEvent = useCallback((event: string, data: any) => {
-    if (data?.boardTileId && data.boardTileId !== tileId) return
+    if (data?.boardTileId && data.boardTileId !== tileIdRef.current) return
+
+    const columns = columnsRef.current
+    const cards = cardsRef.current
+    const theme = themeRef.current
+    const logActivity = logActivityRef.current
 
     if (event === 'card_complete') {
       logActivity('complete', data.cardId, data.summary ?? 'Task complete')
@@ -524,7 +540,14 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
         answered: false
       }])
     }
-  }, [columns, logActivity, cards, tileId])
+  }, [])
+
+  const handleKanbanEventRef = useRef(handleKanbanEvent)
+  handleKanbanEventRef.current = handleKanbanEvent
+
+  const dispatchKanbanEvent = useCallback((event: string, data: any) => {
+    handleKanbanEventRef.current(event, data)
+  }, [])
 
   // Subscribe to SSE stream from MCP server
   useEffect(() => {
@@ -538,7 +561,7 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
       const handle = (e: MessageEvent) => {
         try {
           const { cardId, ...rest } = JSON.parse(e.data)
-          handleKanbanEvent(e.type, { cardId, ...rest })
+          dispatchKanbanEvent(e.type, { cardId, ...rest })
         } catch { /**/ }
       }
       ;['card_complete','card_update','card_error','canvas_event'].forEach(ev => {
@@ -546,15 +569,15 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
       })
     })()
     return () => es?.close()
-  }, [handleKanbanEvent])
+  }, [dispatchKanbanEvent])
 
   // Also listen via IPC (fallback for same-process events)
   useEffect(() => {
     const el = (window as any).electron?.mcp
     if (!el?.onKanban) return
-    const cleanup = el.onKanban((event: string, data: any) => handleKanbanEvent(event, data))
+    const cleanup = el.onKanban((event: string, data: any) => dispatchKanbanEvent(event, data))
     return cleanup
-  }, [handleKanbanEvent])
+  }, [dispatchKanbanEvent])
 
   // Listen for peer MCP commands from connected chat/tiles
   useEffect(() => {
@@ -568,13 +591,13 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
       if (!command) return
 
       if (command === 'kanban_set_status' && typeof payload.content === 'string') {
-        logActivity('update', String(payload.card_id ?? tileId), payload.content)
+        logActivityRef.current('update', String(payload.card_id ?? tileId), payload.content)
         return
       }
 
       if (command === 'kanban_create_card' && typeof payload.title === 'string') {
         const now = Date.now()
-        const fallbackColumn = columns[0]?.id ?? 'backlog'
+        const fallbackColumn = columnsRef.current[0]?.id ?? 'backlog'
         setCards(prev => [...prev, {
           id: `card-${tileId}-${now}`,
           title: String(payload.title),
@@ -648,7 +671,7 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
       }
     })
     return () => unsubscribe?.()
-  }, [tileId, columns, logActivity])
+  }, [tileId])
 
   // Streaming handled by pty/xterm — no separate stream listener needed
 

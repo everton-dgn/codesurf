@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useDetectedAgents } from '../hooks/useDetectedAgents'
 import { useMCPServers } from '../hooks/useMCPServers'
 import { useAppFonts } from '../FontContext'
@@ -115,13 +115,10 @@ export function buildLaunchCmd(card: KanbanCardData, briefPath?: string, agentPa
 // ─── KanbanCard ───────────────────────────────────────────────────────────────
 
 function CardAgentRunner({ termId, workspaceDir, launchCmd }: { termId: string; workspaceDir: string; launchCmd?: string }): null {
-  const launchedRef = useRef(false)
-
   useEffect(() => {
-    if (!launchCmd || launchedRef.current) return
+    if (!launchCmd) return
 
     let cancelled = false
-    launchedRef.current = true
 
     void (async () => {
       try {
@@ -129,13 +126,14 @@ function CardAgentRunner({ termId, workspaceDir, launchCmd }: { termId: string; 
         if (cancelled) return
         await window.electron?.terminal?.write(termId, `${launchCmd}\n`)
       } catch (error) {
-        console.error('[KanbanCard] CardAgentRunner launch failed:', error)
+        if (!cancelled) {
+          console.error('[KanbanCard] CardAgentRunner launch failed:', error)
+        }
       }
     })()
 
     return () => {
       cancelled = true
-      launchedRef.current = false
       void window.electron?.terminal?.destroy(termId).catch(() => {})
     }
   }, [termId, workspaceDir, launchCmd])
