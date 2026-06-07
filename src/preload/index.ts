@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('electron', {
     revealInFinder: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:revealInFinder', path, workspaceId),
     writeBrief: (cardId: string, content: string) => ipcRenderer.invoke('fs:writeBrief', cardId, content),
     stat: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:stat', path, workspaceId),
+    probeDir: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:probeDir', path, workspaceId) as Promise<{ ok: true } | { ok: false, code: string }>,
     isProbablyTextFile: (path: string, workspaceId?: string) => ipcRenderer.invoke('fs:isProbablyTextFile', path, workspaceId),
     copyIntoDir: (sourcePath: string, destDir: string, workspaceId?: string) => ipcRenderer.invoke('fs:copyIntoDir', sourcePath, destDir, workspaceId),
     selectDir: () => ipcRenderer.invoke('workspace:openFolder'),

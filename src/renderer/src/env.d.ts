@@ -38,6 +38,7 @@ interface ElectronAPI {
     revealInFinder?(path: string, workspaceId?: string): Promise<void>
     writeBrief(cardId: string, content: string): Promise<string>
     stat(path: string, workspaceId?: string): Promise<{ size: number; mtimeMs: number; isFile: boolean; isDir: boolean } | null>
+    probeDir(path: string, workspaceId?: string): Promise<{ ok: true } | { ok: false, code: string }>
     isProbablyTextFile(path: string, workspaceId?: string): Promise<boolean>
     copyIntoDir(sourcePath: string, destDir: string, workspaceId?: string): Promise<{ path: string }>
     watch(dirPath: string, callback: () => void, workspaceId?: string): () => void

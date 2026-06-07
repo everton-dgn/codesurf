@@ -135,6 +135,7 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
   if (channel === 'localProxy:probeBackends') return []
   if (channel === 'dreaming:status') return { running: false, auto: null, lastRun: null }
   if (channel === 'fs:stat') return null
+  if (channel === 'fs:probeDir') return { ok: false, code: 'ENOENT' }
   if (channel === 'fs:isProbablyTextFile') return false
   if (channel === 'fs:readDir') return []
   if (channel === 'fs:readFile') return ''
@@ -243,6 +244,7 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       revealInFinder: makeInvoker(invoke, 'fs:revealInFinder'),
       writeBrief: makeInvoker(invoke, 'fs:writeBrief'),
       stat: makeInvoker(invoke, 'fs:stat'),
+      probeDir: makeInvoker(invoke, 'fs:probeDir'),
       isProbablyTextFile: makeInvoker(invoke, 'fs:isProbablyTextFile'),
       copyIntoDir: makeInvoker(invoke, 'fs:copyIntoDir'),
       selectDir: makeInvoker(invoke, 'workspace:openFolder'),

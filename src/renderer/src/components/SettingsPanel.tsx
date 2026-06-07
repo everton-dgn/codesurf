@@ -1235,7 +1235,7 @@ export function SettingsPanel({ onClose, settings: initialSettings, onSettingsCh
             <SectionLabel label="Filesystem Access" />
             <SettingRow
               label="Restrict file access to workspace folders"
-              description="When enabled, read/write IPC only allows paths under workspace project roots or ~/.codesurf. Off by default."
+              description="When enabled, read/write IPC only allows paths under workspace project roots or ~/.contex. Enabled by default on new and migrated installs; turn off only if you need broader file access."
             >
               <Toggle
                 value={settings.security.restrictFsToWorkspaceRoots}

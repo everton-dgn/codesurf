@@ -314,6 +314,18 @@ export function registerFsIPC(): void {
     return briefPath
   })
 
+  ipcMain.handle('fs:probeDir', async (_, dirPath: string, workspaceId?: string) => {
+    try {
+      const resolved = await validateFsPathForHandler(dirPath, workspaceId)
+      const stats = await fs.stat(resolved)
+      if (!stats.isDirectory()) return { ok: false, code: 'ENOTDIR' }
+      return { ok: true }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? 'UNKNOWN'
+      return { ok: false, code }
+    }
+  })
+
   ipcMain.handle('fs:stat', async (_, filePath: string, workspaceId?: string) => {
     try {
       const stats = await fs.stat(await validateFsPathForHandler(filePath, workspaceId))

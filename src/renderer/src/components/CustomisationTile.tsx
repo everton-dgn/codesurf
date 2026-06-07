@@ -122,12 +122,13 @@ function PageHeader({ title, description, onNew, newLabel, onLocations, hideText
 
 // ─── Locations panel ─────────────────────────────────────────────────────────
 
-function LocationsPanel({ title, value, onChange, onClose }: {
-  title: string; value: string; onChange: (v: string) => void; onClose: () => void
+function LocationsPanel({ title, value, onChange, onClose, workspacePath }: {
+  title: string; value: string; onChange: (v: string) => void; onClose: () => void; workspacePath?: string
 }): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
   const [draft, setDraft] = useState(value)
+  const [unreadableLocations, setUnreadableLocations] = useState<UnreadableScanLocation[]>([])
   // Keep the textarea in sync with the persisted value when the parent
   // finishes loading locations-*.json after the panel has already mounted.
   // Without this, the panel shows the initial default and overwrites the
@@ -139,6 +140,24 @@ function LocationsPanel({ title, value, onChange, onClose }: {
       setDraft(value)
     }
   }, [value])
+  useEffect(() => {
+    if (!workspacePath) {
+      setUnreadableLocations([])
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const paths = resolveLocations(draft, window.electron.homedir, workspacePath)
+        const unreadable = await probeUnreadableScanLocations(paths)
+        if (!cancelled) setUnreadableLocations(unreadable)
+      })()
+    }, 250)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [draft, workspacePath])
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, background: theme.surface.base, borderRadius: 8, overflow: 'hidden', border: `1px solid ${theme.border.default}` }}>
       {/* Title bar */}
@@ -158,6 +177,22 @@ function LocationsPanel({ title, value, onChange, onClose }: {
         ))}
         <span style={{ fontSize: fonts.secondarySize, color: theme.text.disabled }}>— variables resolved at scan time</span>
       </div>
+      {unreadableLocations.length > 0 && (
+        <div style={{
+          padding: '10px 16px',
+          background: `${theme.status.warning}14`,
+          borderBottom: `1px solid ${theme.border.subtle}`,
+          fontSize: fonts.secondarySize,
+          color: theme.status.warning,
+          lineHeight: 1.5,
+          flexShrink: 0,
+        }}>
+          {unreadableLocations.length} location{unreadableLocations.length === 1 ? '' : 's'} could not be read and will be skipped during scans.
+          <div style={{ marginTop: 6, fontFamily: fonts.mono, color: theme.text.muted, wordBreak: 'break-all' }}>
+            {unreadableLocations.map(entry => `${entry.path} (${entry.code})`).join('\n')}
+          </div>
+        </div>
+      )}
       {/* Textarea */}
       <textarea
         value={draft}
@@ -321,6 +356,17 @@ function resolveLocations(raw: string, homePath: string, workspacePath: string):
     .map(l => l.replace(/^\$HOME/, homePath).replace(/^\$WORKSPACE/, workspacePath))
 }
 
+type UnreadableScanLocation = { path: string, code: string }
+
+async function probeUnreadableScanLocations(paths: string[]): Promise<UnreadableScanLocation[]> {
+  const unreadable: UnreadableScanLocation[] = []
+  for (const path of paths) {
+    const probe = await window.electron.fs.probeDir?.(path).catch(() => ({ ok: false as const, code: 'UNKNOWN' }))
+    if (!probe || probe.ok === false) unreadable.push({ path, code: probe?.code ?? 'UNKNOWN' })
+  }
+  return unreadable
+}
+
 // ─── Prompts section ─────────────────────────────────────────────────────────
 
 export function PromptsSection({ workspacePath, hideHeaderText = false }: { workspacePath: string; hideHeaderText?: boolean }): JSX.Element {
@@ -415,6 +461,7 @@ export function PromptsSection({ workspacePath, hideHeaderText = false }: { work
       value={locationText}
       onChange={saveLocations}
       onClose={() => setLocationsOpen(false)}
+      workspacePath={workspacePath}
     />
   )
 
@@ -509,6 +556,7 @@ export function SkillsSection({ workspacePath, hideHeaderText = false }: { works
   const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview')
   const [locationsOpen, setLocationsOpen] = useState(false)
   const [locationText, setLocationText] = useState(DEFAULT_SKILL_LOCATIONS)
+  const [unreadableLocations, setUnreadableLocations] = useState<UnreadableScanLocation[]>([])
 
   const file = `${dataDir(workspacePath)}/skills.json`
   const locFile = `${dataDir(workspacePath)}/locations-skills.json`
@@ -566,6 +614,7 @@ export function SkillsSection({ workspacePath, hideHeaderText = false }: { works
     const scanDirs = async () => {
       const homePath = window.electron.homedir
       const dirs = resolveLocations(locationText, homePath, workspacePath)
+      setUnreadableLocations(await probeUnreadableScanLocations(dirs))
       const hiddenSet = new Set(hiddenPaths)
       const discovered: SkillDefinition[] = []
       // Claude-format skills live as sub-folders each containing `SKILL.md`
@@ -625,6 +674,7 @@ export function SkillsSection({ workspacePath, hideHeaderText = false }: { works
       value={locationText}
       onChange={saveLocations}
       onClose={() => setLocationsOpen(false)}
+      workspacePath={workspacePath}
     />
   )
 
@@ -638,6 +688,34 @@ export function SkillsSection({ workspacePath, hideHeaderText = false }: { works
         onLocations={() => setLocationsOpen(true)}
         hideText={hideHeaderText}
       />
+      {unreadableLocations.length > 0 && (
+        <div style={{
+          padding: '10px 12px',
+          borderRadius: 8,
+          background: `${theme.status.warning}14`,
+          border: `1px solid ${theme.status.warning}33`,
+          fontSize: fonts.secondarySize,
+          color: theme.status.warning,
+          lineHeight: 1.5,
+        }}>
+          {unreadableLocations.length} configured skill location{unreadableLocations.length === 1 ? '' : 's'} could not be read. Chat will continue without skills from those paths.
+          <button
+            onClick={() => setLocationsOpen(true)}
+            style={{
+              marginLeft: 8,
+              padding: 0,
+              border: 'none',
+              background: 'transparent',
+              color: theme.accent.base,
+              fontSize: fonts.secondarySize,
+              cursor: 'pointer',
+              textDecoration: 'underline',
+            }}
+          >
+            Review locations
+          </button>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
       {/* Left list */}
       <div style={{ width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto' }}>
@@ -1144,6 +1222,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
       value={locationText}
       onChange={saveLocations}
       onClose={() => setLocationsOpen(false)}
+      workspacePath={workspacePath}
     />
   )
 
