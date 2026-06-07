@@ -2,10 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { chmodSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildSkillSelectionPrompt } from '../../bin/skills-index.mjs'
+import { buildSkillSelectionPrompt, createSkillsIndex } from '../../bin/skills-index.mjs'
 
 const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const DAEMON_ENTRY = join(ROOT_DIR, 'bin', 'codesurfd.mjs')
@@ -290,4 +290,47 @@ test('daemon skills list/get/install merge global and workspace roots with inspe
   response = await daemon.request(`/skills/get?workspaceId=${encodeURIComponent(workspaceId)}&skillId=${encodeURIComponent(`discovered-${join(workspaceDir, '.codesurf', 'skills', 'archive-helper', 'SKILL.md')}`)}`)
   assert.equal(response.status, 200)
   assert.equal(response.payload.content, archiveSkillMd)
+})
+
+test('listSkills skips unreadable custom skill directories without failing', async () => {
+  const homeDir = await makeTestTempDir('skills-index-unreadable-')
+  const workspaceDir = join(homeDir, 'project')
+  const blockedDir = join(workspaceDir, 'codesurf', 'skills')
+  const goodSkillDir = join(workspaceDir, '.codesurf', 'skills', 'good-skill')
+  const locationsFile = join(workspaceDir, '.contex', 'customisation', 'locations-skills.json')
+
+  await mkdir(blockedDir, { recursive: true })
+  await writeFile(join(blockedDir, 'SKILL.md'), '---\nname: Blocked Skill\ndescription: hidden\n---\n', 'utf8')
+  await mkdir(goodSkillDir, { recursive: true })
+  await writeFile(join(goodSkillDir, 'SKILL.md'), '---\nname: Good Skill\ndescription: Works\n---\n', 'utf8')
+  await writeJson(locationsFile, '$WORKSPACE/codesurf/skills')
+
+  try {
+    chmodSync(blockedDir, 0o000)
+  } catch {
+    // Some platforms disallow chmod 000; ENOTDIR coverage below still guards scan failures.
+  }
+
+  const index = createSkillsIndex({ homeDir, userHomeDir: homeDir })
+  const result = await index.listSkills({ workspaceDir })
+
+  assert.ok(result.skills.some(skill => skill.name === 'Good Skill'))
+  assert.ok(result.skills.some(skill => skill.name === '/compact'))
+})
+
+test('listSkills treats a skill location file path as unreadable and continues', async () => {
+  const homeDir = await makeTestTempDir('skills-index-enotdir-')
+  const workspaceDir = join(homeDir, 'project')
+  const blockedFile = join(workspaceDir, 'codesurf', 'skills')
+  const locationsFile = join(workspaceDir, '.contex', 'customisation', 'locations-skills.json')
+
+  await mkdir(join(workspaceDir, 'codesurf'), { recursive: true })
+  await writeFile(blockedFile, 'not a directory\n', 'utf8')
+  await writeJson(locationsFile, '$WORKSPACE/codesurf/skills')
+
+  const index = createSkillsIndex({ homeDir, userHomeDir: homeDir })
+  const result = await index.listSkills({ workspaceDir })
+
+  assert.ok(Array.isArray(result.skills))
+  assert.ok(result.skills.some(skill => skill.name === '/compact'))
 })

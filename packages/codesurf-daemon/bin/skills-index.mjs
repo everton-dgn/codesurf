@@ -232,10 +232,21 @@ function buildDiscoveredSkill(filePath, content, dirPath, metadata, includeConte
   }
 }
 
+function isUnreadableDirectoryError(error) {
+  const code = error?.code
+  return code === 'ENOENT' || code === 'EPERM' || code === 'EACCES' || code === 'ENOTDIR'
+}
+
 async function scanSkillDirectory(rootPath, metadata, includeContent) {
   if (!(await pathExists(rootPath))) return []
   const skills = []
-  const entries = await fs.readdir(rootPath, { withFileTypes: true })
+  let entries
+  try {
+    entries = await fs.readdir(rootPath, { withFileTypes: true })
+  } catch (error) {
+    if (isUnreadableDirectoryError(error)) return []
+    throw error
+  }
   for (const entry of entries) {
     const entryPath = join(rootPath, entry.name)
     if (entry.isDirectory()) {

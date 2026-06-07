@@ -900,12 +900,10 @@ export function registerChatIPC(): void {
       skillsPrompt = buildSelectedSkillsPrompt(skillsContext)
       skillsSummary = summarizeSelectedSkills(skillsContext) ?? null
     } catch (error) {
-      sendStream(req.cardId, {
-        type: 'error',
-        error: error instanceof Error ? error.message : String(error),
-      })
-      sendStream(req.cardId, { type: 'done' })
-      return { ok: false }
+      console.warn(
+        '[chat] Skills index unavailable; continuing without skill context:',
+        error instanceof Error ? error.message : String(error),
+      )
     }
 
     const requestWithContext: ChatRequest = {
