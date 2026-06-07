@@ -2,6 +2,13 @@ import type { ChatMessage } from '../../../../shared/chat-types'
 import type { SessionEntryHint } from '../../../../shared/session-types'
 import type { ActiveChatSurface, PendingAttachment } from './chatTileUtils'
 
+export interface CheckpointRestoreContextValue {
+  workspaceId: string | null
+  tileId: string
+  restoringCheckpointId: string | null
+  restoreCheckpoint: (checkpointId: string, sessionEntryId: string, label?: string) => Promise<void>
+}
+
 export interface QueuedChatTurn {
   id: string
   content: string
