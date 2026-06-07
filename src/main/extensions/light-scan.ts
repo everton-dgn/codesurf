@@ -138,3 +138,45 @@ export async function listExtensionsForBridge(workspacePath?: string | null): Pr
   const manifests = await scanExtensionManifests(workspacePath)
   return manifests.map(toExtensionListEntry)
 }
+
+export type ExtensionSidebarResponse = {
+  entries: Array<{
+    id: string
+    name: string
+    icon: string | null
+    enabled: boolean
+  }>
+  tiles: Array<{
+    extId: string
+    type: string
+    label: string
+    icon?: string
+    entry?: string
+    defaultSize: { w: number, h: number }
+    minSize: { w: number, h: number }
+    uiMode?: 'native' | 'custom'
+  }>
+}
+
+export function formatExtensionSidebarResponse(manifests: ExtensionManifest[]): ExtensionSidebarResponse {
+  return {
+    entries: manifests.map(manifest => ({
+      id: manifest.id,
+      name: manifest.name,
+      icon: manifest.contributes?.tiles?.[0]?.icon ?? manifest.contributes?.chatSurfaces?.[0]?.icon ?? null,
+      enabled: manifest._enabled !== false,
+    })),
+    tiles: manifests
+      .filter(manifest => manifest._enabled !== false)
+      .flatMap(manifest => (manifest.contributes?.tiles ?? []).map(tile => ({
+        extId: manifest.id,
+        type: tile.type,
+        label: tile.label,
+        icon: tile.icon,
+        entry: tile.entry,
+        defaultSize: tile.defaultSize ?? { w: 400, h: 300 },
+        minSize: tile.minSize ?? { w: 200, h: 150 },
+        uiMode: manifest.ui?.mode,
+      }))),
+  }
+}

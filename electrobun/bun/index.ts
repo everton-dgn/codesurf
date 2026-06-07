@@ -11,7 +11,11 @@ import { DEFAULT_SETTINGS, normalizeLoadedSettings, withDefaultSettings, withFre
 import { buildHermesChatArgs, buildOpenClawAgentArgs, buildOpenCodeRunArgs, sanitizeAgentCliDiagnostic } from '../../src/main/agents/agent-cli-contracts.ts'
 import { CONTEX_HOME, WORKSPACES_DIR } from '../../src/main/paths.ts'
 import { getDefaultElectrobunInvokeResponse } from '../../src/electrobun/browser/electron-facade.ts'
-import { listExtensionsForBridge, scanExtensionManifests } from '../../src/main/extensions/light-scan.ts'
+import {
+  formatExtensionSidebarResponse,
+  listExtensionsForBridge,
+  scanExtensionManifests,
+} from '../../src/main/extensions/light-scan.ts'
 import { createElectrobunDbRuntime } from './runtime-db.ts'
 import { builtInDaemonHosts, createElectrobunDaemonRuntime, sanitizeDaemonStatusError, summarizeDaemonDashboard } from './runtime-daemon.ts'
 import { parseClaudeStreamJsonLine, parseCodexJsonLine, parseOpenClawOutput, parseOpenCodeJsonLine, type ElectrobunStreamEvent } from './chat-streams.ts'
@@ -1558,27 +1562,8 @@ async function handleInvoke(channel: string, args: unknown[] = []): Promise<unkn
       case 'extensions:list':
         return await listExtensionsForBridge()
       case 'ext:list-sidebar': {
-        const manifests = await scanExtensionManifests()
-        return {
-          entries: manifests.map(manifest => ({
-            id: manifest.id,
-            name: manifest.name,
-            icon: manifest.contributes?.tiles?.[0]?.icon ?? manifest.contributes?.chatSurfaces?.[0]?.icon ?? null,
-            enabled: manifest._enabled !== false,
-          })),
-          tiles: manifests
-            .filter(manifest => manifest._enabled !== false)
-            .flatMap(manifest => (manifest.contributes?.tiles ?? []).map(tile => ({
-              extId: manifest.id,
-              type: tile.type,
-              label: tile.label,
-              icon: tile.icon,
-              entry: tile.entry,
-              defaultSize: tile.defaultSize ?? { w: 400, h: 300 },
-              minSize: tile.minSize ?? { w: 200, h: 150 },
-              uiMode: manifest.ui?.mode,
-            }))),
-        }
+        const workspacePath = typeof args[0] === 'string' ? args[0] : null
+        return formatExtensionSidebarResponse(await scanExtensionManifests(workspacePath))
       }
       case 'ext:list-tiles':
         return (await scanExtensionManifests())

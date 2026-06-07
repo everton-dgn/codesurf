@@ -28,13 +28,14 @@
 | BUG-05 closeTile race | **FIXED** | Functional updater + `viewportRef` in hook |
 | BUG-07 setTiles read abuse | **FIXED** | Uses refs |
 | PERF TileChrome re-render | **IMPROVED** | `React.memo` + snap RAF throttle |
-| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` + `useTileMounting` + `tilePlacement` utils |
+| ARCH App.tsx god object | **IMPROVED** | `useCanvasEngine` + group frames component + keyboard/persist hooks |
+| PERF-04 drag auto-save | **FIXED** | Deferred canvas persist until drag ends |
 | ARCH mcp-server.ts | **IMPROVED** | Tool modules + registry (2237 → 791 LOC) |
 | ARCH ChatTile.tsx | **IMPROVED** | Composer menus, live activity, autocomplete hooks |
 | CI build + e2e | **FIXED** | PR workflow runs `npm run build` + `npm run test:e2e` |
 | TEST contex-relay | **FIXED** | Relay vitest suite wired into root `npm test` |
 
-**Tests:** 396 unit (incl. relay) · **E2E:** 10/10 · **Typecheck:** clean · **Build:** pass
+**Tests:** 399 unit (incl. relay) · **E2E:** 10/10 · **Typecheck:** clean · **Build:** pass
 
 ### Hardening waves (local commits on `feature/hardening-wave-1`)
 
@@ -46,6 +47,7 @@
 | 5 | `useTileMounting` hook, relay in `npm test`, Electrobun security parity, audit refresh |
 | 6 | Panel tree utils, tile clipboard/shortcuts hooks, FS scoping migration, ChatTile dream/composer hooks, Electrobun extension policy bridge |
 | 7 | Group manager + canvas keyboard hooks, ChatTile attachment/autocomplete hooks, Electrobun ext:list scan, legacy FS migration E2E |
+| 8 | `CanvasGroupFrames` extraction, keyboard undo/redo, drag-deferred canvas persist, Electrobun ext:list-sidebar |
 
 ---
 
@@ -183,7 +185,7 @@
 
 ### Medium Impact (3)
 
-- **PERF-04:** Auto-save can fire during drag operations
+- **PERF-04:** ~~Auto-save can fire during drag operations~~ **FIXED** (wave 8)
 - **PERF-05:** Full state snapshots in undo stack (~25MB with 50 tiles)
 - **PERF-06:** Minimap redraws 60x/sec during pan/zoom
 
