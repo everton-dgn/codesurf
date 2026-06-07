@@ -219,4 +219,36 @@ describe('MCP HTTP auth gates', () => {
     assert.equal(res.status, 200)
     assert.deepEqual(JSON.parse(res.body), { ok: true })
   })
+
+  test('POST /mcp tools/call without Bearer is rejected', async () => {
+    const res = await request(port, {
+      method: 'POST',
+      path: '/mcp',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'canvas_list_tiles', arguments: {} },
+      }),
+    })
+    assert.equal(res.status, 401)
+    assert.deepEqual(JSON.parse(res.body), { error: 'Unauthorized' })
+  })
+
+  test('POST /inject with valid Bearer succeeds', async () => {
+    const token = getMCPToken()
+    const res = await request(port, {
+      method: 'POST',
+      path: '/inject',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ card_id: 'card-1', message: 'hello from agent' }),
+    })
+    assert.equal(res.status, 200)
+    const payload = JSON.parse(res.body) as { ok?: boolean }
+    assert.equal(payload.ok, true)
+  })
 })
