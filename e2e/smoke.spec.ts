@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { closeCodeSurfElectron, launchCodeSurfElectron } from './helpers/launch-electron'
+import { waitForElectronBridge } from './helpers/wait-bridge'
 
 test.describe('CodeSurf Electron smoke', () => {
   test('launches, exposes preload bridge, and renders the shell', async () => {
@@ -7,11 +8,7 @@ test.describe('CodeSurf Electron smoke', () => {
 
     try {
       const { page } = launch
-
-      await page.waitForFunction(() => {
-        const bridge = (window as Window & { electron?: { workspace?: { list?: () => unknown } } }).electron
-        return typeof bridge?.workspace?.list === 'function'
-      }, undefined, { timeout: 45_000 })
+      await waitForElectronBridge(page, 'workspace.list')
 
       const workspaces = await page.evaluate(async () => {
         const bridge = (window as Window & { electron: { workspace: { list: () => Promise<unknown[]> } } }).electron
