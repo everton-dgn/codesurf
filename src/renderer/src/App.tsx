@@ -9,7 +9,7 @@ import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
 import { useLayoutTemplates } from './hooks/useLayoutTemplates'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
-import { useDiscoveryGraph } from './hooks/useDiscoveryGraph'
+import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
   useCanvasEngine,
   useCanvasDragSync,
@@ -33,38 +33,24 @@ import { useRenderTileBody } from './hooks/useRenderTileBody'
 import { useAutoAgentProximity } from './hooks/useAutoAgentProximity'
 import { useDiscoveryPulses } from './hooks/useDiscoveryPulses'
 import {
-  addAssociatedDiscoveryConnections,
-  buildExtActionsByTileId,
-  cascadeDiscoveryConnections,
   extensionActionRegistry,
-  findDiscoveryMatch,
   findBestAnchorPair,
-  getCapabilityMatches,
-  getDiscoveryMaxDistance,
-  getOrthogonalRoute,
-  getTileCapabilities,
   getTileSpatialReference,
-  uniq,
   type AnchorPoint,
-  type DiscoveryCapabilityLink,
 } from './lib/discoveryRuntime'
 import {
-  getBezierConnectionMidpoint,
   getBezierConnectionPath,
   getConnectionHandlePoint,
-  getLaneOffsets,
   getNearestTileSide,
   getOppositeAnchorSide,
   getRouteMidpoint,
   getRouteSegments,
-  getRouteSignature,
   getTileCenter,
-  offsetOrthogonalRoute,
   routeToSvgPath,
 } from './lib/connectionRoutes'
 
 import { getMinTileHeight, getMinTileWidth } from './utils/tilePlacement'
-import { stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
+
 
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
@@ -2382,160 +2368,31 @@ function App(): JSX.Element {
     return { tileIds, groupIds }
   }, [expandedCanvasGroupId, tiles, groups])
 
-  const discoveryFocusTileId = React.useMemo(() => {
-    if (dragState.type === 'tile' || dragState.type === 'resize') return dragState.tileId
-    return selectedTileId
-  }, [dragState, selectedTileId])
-
-  const discoveryPreview = React.useMemo(() => {
-    if (!autoConnectionsEnabled) return null
-    if (!discoveryFocusTileId) return null
-    const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
-    const maxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
-    return findDiscoveryMatch(discoveryFocusTileId, tiles, panelTileIds, gridStep, maxDistance)
-  }, [autoConnectionsEnabled, discoveryFocusTileId, panelTileIds, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles])
-
-  // Snapshot the mutable extensionActionRegistry into a serializable Map.
-  // The discovery worker can't access the registry directly; we pass actions
-  // alongside other inputs. extActionsVersion bumps whenever the registry
-  // mutates so this memo re-runs.
-  const extActionsByTileId = React.useMemo(() => buildExtActionsByTileId(), [extActionsVersion])
-
-  const discoveryGridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
-  const discoveryMaxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
-
-  // Off-main-thread O(n²) discovery (n≥10). For n<10 or worker-unavailable,
-  // runs the same code synchronously on main thread.
-  const workerDiscoveryGraph = useDiscoveryGraph({
+  const {
+    discoveryFocusTileId,
+    discoveryPreview,
+    negotiatedDiscoveryState,
+    lockedConnectionKeys,
+    manualConnectionRenderRoutes,
+    ambientDiscoveryRenderRoutes,
+  } = useNegotiatedDiscovery({
+    autoConnectionsEnabled,
     tiles,
-    hiddenTileIds: React.useMemo(() => new Set<string>(), []),
-    gridStep: discoveryGridStep,
-    maxDistance: discoveryMaxDistance,
-    extActionsByTileId,
-    enabled: autoConnectionsEnabled,
+    groups,
+    panelLayout,
+    panelTileIds,
+    settings,
+    lockedConnections,
+    suppressedConnections,
+    extActionsVersion,
+    dragState,
+    selectedTileId,
+    viewportZoom: viewport.zoom,
+    workspacePath: workspace?.path,
+    activeChatTileId,
+    tileByIdMap,
+    preferredBrowserOpenTargetRef,
   })
-
-  const negotiatedDiscoveryState = React.useMemo(() => {
-    const gridStep = discoveryGridStep
-    const maxDistance = discoveryMaxDistance
-    const routes = new Map<string, { key: string; route: { x: number; y: number }[]; distance: number; locked: boolean }>()
-
-    // Pass empty set — panel/layout tiles must stay in the graph so peers keep their tools/connections.
-    // Visual hiding is handled at ambientDiscoveryRoutes level only.
-    // Clone the worker-returned Set/Map so subsequent mutations (suppressed/
-    // locked/cascade) don't poison the hook's cached reference.
-    const connectionGraph = autoConnectionsEnabled
-      ? {
-          connectedTileIds: new Set(workerDiscoveryGraph.connectedTileIds),
-          byTile: new Map(Array.from(workerDiscoveryGraph.byTile.entries()).map(([k, v]) => [k, [...v]])),
-        }
-      : { connectedTileIds: new Set<string>(), byTile: new Map<string, DiscoveryCapabilityLink[]>() }
-
-    // Remove suppressed connections (deleted by user, cleared when tiles move)
-    for (const key of suppressedConnections) {
-      const [a, b] = key.split('::')
-      const aLinks = connectionGraph.byTile.get(a)
-      if (aLinks) connectionGraph.byTile.set(a, aLinks.filter(l => l.peerId !== b))
-      const bLinks = connectionGraph.byTile.get(b)
-      if (bLinks) connectionGraph.byTile.set(b, bLinks.filter(l => l.peerId !== a))
-      // Remove route
-      routes.delete(key)
-    }
-
-    // Inject locked connections — these persist even when tiles move apart
-    const tileMap = new Map(tiles.map(t => [t.id, t]))
-    for (const lc of lockedConnections) {
-      const src = tileMap.get(lc.sourceTileId)
-      const tgt = tileMap.get(lc.targetTileId)
-      if (!src || !tgt) continue
-      const existingLinks = connectionGraph.byTile.get(src.id)
-      const alreadyLinkedByProximity = existingLinks?.some(l => l.peerId === tgt.id) ?? false
-      const srcCaps = getTileCapabilities(src)
-      const tgtCaps = getTileCapabilities(tgt)
-      const srcRef = getTileSpatialReference(src, gridStep)
-      const tgtRef = getTileSpatialReference(tgt, gridStep)
-      const pair = findBestAnchorPair(srcRef.anchors, tgtRef.anchors)
-      if (!pair) continue
-      const route = getOrthogonalRoute(pair.source, pair.target, gridStep)
-      const dist = pair.distance
-      const sharedCaps = getCapabilityMatches(srcCaps, tgtCaps)
-      const srcTools = srcCaps.tools ?? []
-      const tgtTools = tgtCaps.tools ?? []
-
-      if (!alreadyLinkedByProximity) {
-        const srcLink: DiscoveryCapabilityLink = {
-          peerId: tgt.id,
-          peerType: tgt.type,
-          distance: dist,
-          route,
-          capabilities: uniq([...tgtTools, ...sharedCaps]),
-          lastSeen: Date.now(),
-        }
-        const tgtLink: DiscoveryCapabilityLink = {
-          peerId: src.id,
-          peerType: src.type,
-          distance: dist,
-          route: [...route].reverse(),
-          capabilities: uniq([...srcTools, ...sharedCaps]),
-          lastSeen: Date.now(),
-        }
-        connectionGraph.connectedTileIds.add(src.id)
-        connectionGraph.connectedTileIds.add(tgt.id)
-        const srcLinks = connectionGraph.byTile.get(src.id) ?? []
-        srcLinks.push(srcLink)
-        connectionGraph.byTile.set(src.id, srcLinks)
-        const tgtLinks = connectionGraph.byTile.get(tgt.id) ?? []
-        tgtLinks.push(tgtLink)
-        connectionGraph.byTile.set(tgt.id, tgtLinks)
-      }
-
-      const key = [src.id, tgt.id].sort().join('::')
-      routes.set(key, { key, route, distance: dist, locked: true })
-    }
-
-    if (autoConnectionsEnabled) {
-      for (const tile of tiles) {
-        const discovery = findDiscoveryMatch(tile.id, tiles, new Set(), gridStep, maxDistance)
-        if (!discovery?.match) continue
-
-        const key = [tile.id, discovery.match.tile.id].sort().join('::')
-        if (suppressedConnections.has(key)) continue
-        const existing = routes.get(key)
-        if (existing?.locked) continue
-        if (!existing || discovery.match.distance < existing.distance) {
-          routes.set(key, {
-            key,
-            route: discovery.match.route,
-            distance: discovery.match.distance,
-            locked: false,
-          })
-        }
-      }
-    }
-
-    const associatedTileGroups: string[][] = []
-    if (panelLayout) {
-      const panelTileGroup = getAllTileIds(panelLayout)
-      if (panelTileGroup.length > 1) associatedTileGroups.push(panelTileGroup)
-    }
-    for (const group of groups) {
-      if (!group.layoutMode) continue
-      const memberTileIds = tiles.filter(tile => tile.groupId === group.id).map(tile => tile.id)
-      if (memberTileIds.length > 1) associatedTileGroups.push(memberTileIds)
-    }
-
-    const associatedConnectionGraph = associatedTileGroups.length > 0
-      ? addAssociatedDiscoveryConnections(connectionGraph, tiles, associatedTileGroups, gridStep)
-      : connectionGraph
-    const cascadedConnectionGraph = cascadeDiscoveryConnections(associatedConnectionGraph, tiles, gridStep)
-
-    return {
-      connectedTileIds: cascadedConnectionGraph.connectedTileIds,
-      byTileConnections: cascadedConnectionGraph.byTile,
-      ambientRoutes: Array.from(routes.values()).map(({ key, route, locked }) => ({ key, route, locked })),
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnectionsEnabled, panelLayout, panelTileIds, groups, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, tiles, lockedConnections, suppressedConnections, extActionsVersion, workerDiscoveryGraph])
 
   const terminalFontFamily = settings.terminalFontFamily || settings.fonts?.mono?.family || MONO_DEFAULT
   const terminalFontSize = settings.terminalFontSize || settings.fonts?.mono?.size || 13
@@ -2576,74 +2433,6 @@ function App(): JSX.Element {
     getExtensionActions,
   })
 
-  useEffect(() => {
-    const sourceTileIds = [activeChatTileId, selectedTileId].filter((value): value is string => Boolean(value))
-    let nextTarget: string | null = null
-
-    for (const sourceTileId of sourceTileIds) {
-      const sourceTile = tileByIdMap.get(sourceTileId)
-      if (!sourceTile) continue
-      if (sourceTile.type === 'browser') {
-        nextTarget = sourceTile.id
-        break
-      }
-      const links = negotiatedDiscoveryState.byTileConnections.get(sourceTileId) ?? []
-      const browserPeer = links.find(link => tileByIdMap.get(link.peerId)?.type === 'browser')
-      if (browserPeer) {
-        nextTarget = browserPeer.peerId
-        break
-      }
-    }
-
-    if (!nextTarget) {
-      const browserTiles = tiles.filter(tile => tile.type === 'browser')
-      if (browserTiles.length === 1) nextTarget = browserTiles[0].id
-    }
-
-    preferredBrowserOpenTargetRef.current = nextTarget
-  }, [activeChatTileId, selectedTileId, negotiatedDiscoveryState.byTileConnections, tileByIdMap, tiles])
-
-  // Push peer updates into the shared peer registry when discovery state changes.
-  // The IPC name is terminal-scoped for legacy reasons, but it updates peer-state
-  // links for any tile id and writes the generated peers.md context file.
-  const prevPeerLinksRef = useRef<Map<string, string>>(new Map())
-  useEffect(() => {
-    if (!workspace?.path) return
-    const validTools = new Set(getAllNodeTools().map(t => t.name))
-    const newMap = new Map<string, string>()
-
-    for (const tile of tiles) {
-      const links = negotiatedDiscoveryState.byTileConnections.get(tile.id)
-      const peers = (links ?? []).map(link => {
-        const tools: string[] = []
-        for (const cap of link.capabilities) {
-          if (!cap.startsWith('tool:')) continue
-          const name = stripCapabilityPrefix(cap)
-          if (name && validTools.has(name)) tools.push(name)
-        }
-        return { peerId: link.peerId, peerType: link.peerType, tools }
-      }).sort((a, b) => a.peerId.localeCompare(b.peerId))
-      // Serialize to detect changes without deep-compare
-      const key = JSON.stringify(peers)
-      const previousKey = prevPeerLinksRef.current.get(tile.id)
-      if (peers.length === 0 && previousKey === undefined) continue
-      newMap.set(tile.id, key)
-
-      if (previousKey !== key) {
-        window.electron.terminal.updatePeers(tile.id, workspace.path, peers)
-      }
-    }
-
-    // Clean up peers.md / peer-state entries for tiles that lost all peers or disappeared
-    for (const [tileId, _prev] of prevPeerLinksRef.current) {
-      if (!newMap.has(tileId)) {
-        window.electron.terminal.updatePeers(tileId, workspace!.path, [])
-      }
-    }
-
-    prevPeerLinksRef.current = newMap
-  }, [negotiatedDiscoveryState.byTileConnections, tiles, workspace?.path])
-
   const { isConnectionLocked, toggleConnectionLock, deleteConnection } = useLockedConnectionHelpers({
     lockedConnections,
     persistCanvasState,
@@ -2655,97 +2444,6 @@ function App(): JSX.Element {
     setLockedConnections,
     setSuppressedConnections,
   })
-
-  const lockedConnectionKeys = React.useMemo(() => {
-    return new Set(lockedConnections.map(lc => [lc.sourceTileId, lc.targetTileId].sort().join('::')))
-  }, [lockedConnections])
-
-  const manualConnectionRenderRoutes = React.useMemo(() => {
-    const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
-    const tileMap = new Map(tiles.map(tile => [tile.id, tile]))
-    return lockedConnections.flatMap(connection => {
-      const sourceTile = tileMap.get(connection.sourceTileId)
-      const targetTile = tileMap.get(connection.targetTileId)
-      if (!sourceTile || !targetTile) return []
-      if (panelTileIds.has(sourceTile.id) || panelTileIds.has(targetTile.id)) return []
-      const sourceAnchors = getTileSpatialReference(sourceTile, gridStep).anchors
-      const targetAnchors = getTileSpatialReference(targetTile, gridStep).anchors
-      const preferredPair = findBestAnchorPair(
-        sourceAnchors.flatMap(sourceAnchor => {
-          const matchingTargets = targetAnchors.filter(targetAnchor => targetAnchor.side === getOppositeAnchorSide(sourceAnchor.side))
-          return matchingTargets.length ? [sourceAnchor] : []
-        }),
-        targetAnchors,
-      )
-      const pair = findBestAnchorPair(
-        sourceAnchors,
-        targetAnchors,
-      )
-      const facingPair = preferredPair
-        ? {
-          source: preferredPair.source,
-          target: targetAnchors.filter(targetAnchor => targetAnchor.side === getOppositeAnchorSide(preferredPair.source.side))
-            .sort((a, b) => Math.abs(a.x - preferredPair.source.x) + Math.abs(a.y - preferredPair.source.y) - (Math.abs(b.x - preferredPair.source.x) + Math.abs(b.y - preferredPair.source.y)))[0] ?? preferredPair.target,
-          distance: preferredPair.distance,
-        }
-        : pair
-      if (!facingPair) return []
-      const key = [sourceTile.id, targetTile.id].sort().join('::')
-      return [{
-        key,
-        sourceTileId: sourceTile.id,
-        targetTileId: targetTile.id,
-        source: facingPair.source,
-        target: facingPair.target,
-        path: getBezierConnectionPath(facingPair.source, facingPair.target),
-        midpoint: getBezierConnectionMidpoint(facingPair.source, facingPair.target),
-      }]
-    })
-  }, [lockedConnections, panelTileIds, settings.gridSize, settings.gridSpacingSmall, tiles])
-
-  const ambientDiscoveryRoutes = React.useMemo(() => {
-    // Never show routes where either endpoint is hidden (inside a layout or fullview panel)
-    const visibleRoutes = negotiatedDiscoveryState.ambientRoutes.filter(r => {
-      const [a, b] = r.key.split('::')
-      return !panelTileIds.has(a) && !panelTileIds.has(b)
-    })
-    if (discoveryFocusTileId) {
-      return visibleRoutes.filter(r => !lockedConnectionKeys.has(r.key) && !r.locked)
-    }
-    return visibleRoutes.filter(route => !lockedConnectionKeys.has(route.key) && !route.locked)
-  }, [discoveryFocusTileId, negotiatedDiscoveryState, lockedConnectionKeys, panelTileIds])
-
-  const ambientDiscoveryRenderRoutes = React.useMemo(() => {
-    if (ambientDiscoveryRoutes.length === 0) return []
-
-    const worldLaneSpacing = 12 / Math.max(0.25, viewport.zoom)
-    const grouped = new Map<string, Array<typeof ambientDiscoveryRoutes[number]>>()
-
-    for (const route of ambientDiscoveryRoutes) {
-      const signature = getRouteSignature(route.route)
-      const group = grouped.get(signature) ?? []
-      group.push(route)
-      grouped.set(signature, group)
-    }
-
-    const offsets = new Map<string, number>()
-    for (const routes of grouped.values()) {
-      const laneOffsets = getLaneOffsets(routes.length).map(offset => offset * worldLaneSpacing)
-      const orderedRoutes = [...routes].sort((a, b) => {
-        if (a.locked !== b.locked) return a.locked ? -1 : 1
-        return a.key.localeCompare(b.key)
-      })
-      orderedRoutes.forEach((route, index) => {
-        offsets.set(route.key, laneOffsets[index] ?? 0)
-      })
-    }
-
-    return ambientDiscoveryRoutes.map(route => ({
-      ...route,
-      baseRoute: route.route,
-      displayRoute: offsetOrthogonalRoute(route.route, offsets.get(route.key) ?? 0),
-    }))
-  }, [ambientDiscoveryRoutes, viewport.zoom])
 
   const isDraggingCanvas = dragState.type === 'pan'
 
