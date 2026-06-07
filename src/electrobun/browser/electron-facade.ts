@@ -114,6 +114,21 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
   if (channel === 'updater:check') return { ok: true, status: 'disabled-electrobun-runtime', updateAvailable: false }
   if (channel === 'chat:send') return { ok: false, error: 'Electrobun runtime chat handler was unavailable.' }
   if (channel === 'chat:writeTempAttachment') return { ok: false, error: 'Electrobun runtime attachment handler was unavailable.' }
+  if (channel === 'chat:disposeCard') return true
+  if (channel === 'chat:csagentModels') return []
+  if (channel === 'transcribe:run') return { ok: false, error: 'Electrobun runtime transcribe handler was unavailable.' }
+  if (channel === 'tts:synthesize') return { ok: false, error: 'Electrobun runtime TTS handler was unavailable.' }
+  if (channel === 'spokify:run') return { ok: false, error: 'Electrobun runtime spokify handler was unavailable.' }
+  if (channel === 'secrets:set' || channel === 'secrets:delete') return { ok: true }
+  if (channel === 'secrets:list') return { ok: true, names: [] }
+  if (channel === 'secrets:has') return { ok: true, has: false }
+  if (channel === 'ext:capability-gate') return { ok: false, reason: 'Electrobun runtime extension gate unavailable.' }
+  if (channel === 'ext:install-from-file') return null
+  if (channel === 'ext:contributions') return []
+  if (channel === 'ext:surface-html') return ''
+  if (channel === 'ext:store-get' || channel === 'ext:store-replace') return {}
+  if (channel === 'ext:store-set') return {}
+  if (channel === 'window:newWorkspaceTab') return true
   if (channel === 'localProxy:getStatus') return { running: false }
   if (channel === 'localProxy:probeBackends') return []
   if (channel === 'dreaming:status') return { running: false, auto: null, lastRun: null }
@@ -149,6 +164,12 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
     || channel.startsWith('window:')
     || channel.startsWith('appearance:')
     || channel.startsWith('mcp:')
+    || channel.startsWith('ui:')
+    || channel.startsWith('transcribe:')
+    || channel.startsWith('tts:')
+    || channel.startsWith('spokify:')
+    || channel.startsWith('secrets:')
+    || channel.startsWith('chat:')
   ) return true
 
   return null
@@ -304,9 +325,11 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       steer: makeInvoker(invoke, 'chat:steer'),
       stop: makeInvoker(invoke, 'chat:stop'),
       clearSession: makeInvoker(invoke, 'chat:clearSession'),
+      disposeCard: makeInvoker(invoke, 'chat:disposeCard'),
       opencodeModels: makeInvoker(invoke, 'chat:opencodeModels'),
       onOpencodeModelsUpdated: makeEventListener(eventHub, 'chat:opencodeModelsUpdated'),
       openclawAgents: makeInvoker(invoke, 'chat:openclawAgents'),
+      csagentModels: makeInvoker(invoke, 'chat:csagentModels'),
       selectFiles: makeInvoker(invoke, 'chat:selectFiles'),
       writeTempAttachment: makeInvoker(invoke, 'chat:writeTempAttachment'),
       answerUserQuestion: makeInvoker(invoke, 'chat:answerUserQuestion'),
@@ -327,7 +350,9 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
     },
     window: {
       new: makeInvoker(invoke, 'window:new'),
+      openDevSandbox: makeInvoker(invoke, 'window:openDevSandbox'),
       newTab: makeInvoker(invoke, 'window:newTab'),
+      newWorkspaceTab: makeInvoker(invoke, 'window:newWorkspaceTab'),
       list: makeInvoker(invoke, 'window:list'),
       getCurrentId: makeInvoker(invoke, 'window:getCurrentId'),
       setTitle: makeInvoker(invoke, 'window:setTitle'),
@@ -479,6 +504,13 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
       disable: makeInvoker(invoke, 'ext:disable'),
       refresh: makeInvoker(invoke, 'ext:refresh'),
       invoke: (extId: string, method: string, ...args: unknown[]) => invoke(`ext:${extId}:${method}`, args),
+      capabilityGate: makeInvoker(invoke, 'ext:capability-gate'),
+      installFromFile: makeInvoker(invoke, 'ext:install-from-file'),
+      contributions: makeInvoker(invoke, 'ext:contributions'),
+      surfaceHtml: makeInvoker(invoke, 'ext:surface-html'),
+      storeGet: makeInvoker(invoke, 'ext:store-get'),
+      storeSet: makeInvoker(invoke, 'ext:store-set'),
+      storeReplace: makeInvoker(invoke, 'ext:store-replace'),
       getSettings: makeInvoker(invoke, 'ext:settings-get'),
       setSettings: makeInvoker(invoke, 'ext:settings-set'),
       contextMenuItems: makeInvoker(invoke, 'ext:context-menu-items'),
@@ -522,6 +554,21 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
         zoomLevel = Number.isFinite(level) ? level : 0
         await invoke('ui:setZoomLevel', [zoomLevel])
       },
+    },
+    transcribe: {
+      run: makeInvoker(invoke, 'transcribe:run'),
+    },
+    tts: {
+      synthesize: makeInvoker(invoke, 'tts:synthesize'),
+    },
+    spokify: {
+      run: makeInvoker(invoke, 'spokify:run'),
+    },
+    secrets: {
+      set: makeInvoker(invoke, 'secrets:set'),
+      delete: makeInvoker(invoke, 'secrets:delete'),
+      list: makeInvoker(invoke, 'secrets:list'),
+      has: makeInvoker(invoke, 'secrets:has'),
     },
   }
 }
