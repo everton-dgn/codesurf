@@ -16,15 +16,17 @@ import {
   ToolPermissionCard,
   useToolPermissionContext,
 } from '../ai-elements/ToolPermission'
-import { useFonts } from './chatTileContexts'
 import {
+  useFonts,
   CheckpointRestoreContext,
   TOOL_BLOCK_MAX_WIDTH,
   NON_SELECTABLE_UI_STYLE,
+} from './chatTileContexts'
+import {
   getToolDisplayName,
   hasVisibleFileChangeStats,
   hasRenderableFileChangeDiff,
-} from '../ChatTile'
+} from './chatTileUtils'
 
 // --- Rich message sub-components -------------------------------------------------
 
