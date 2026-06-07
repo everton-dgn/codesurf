@@ -13,7 +13,7 @@
 |-------------|--------|-------|
 | SEC-01 MCP zero auth | **FIXED** | Bearer enforced on `/mcp`, `/push`, `/inject`, SSE |
 | SEC-02 `/inject` | **FIXED** | Same auth gate + expanded auth tests |
-| SEC-03 FS unrestricted | **IMPROVED** | Default-on + one-time legacy migration (`applyFsScopingMigration`) |
+| SEC-03 FS unrestricted | **IMPROVED** | Default-on + one-time legacy migration; settings copy reflects opt-out |
 | SEC-04 Terminal spawn | **FIXED** | Shell + agent CLI allowlists |
 | SEC-05 Git exec | **FIXED** | `execFile`, branch validation |
 | SEC-06 sandbox:false | **MITIGATED** | Guest webviews hardened; main window documented |
@@ -48,6 +48,7 @@
 | 6 | Panel tree utils, tile clipboard/shortcuts hooks, FS scoping migration, ChatTile dream/composer hooks, Electrobun extension policy bridge |
 | 7 | Group manager + canvas keyboard hooks, ChatTile attachment/autocomplete hooks, Electrobun ext:list scan, legacy FS migration E2E |
 | 8 | `CanvasGroupFrames` extraction, keyboard undo/redo, drag-deferred canvas persist, Electrobun ext:list-sidebar |
+| 9 | `useCanvasDragSync` extraction, skills skipped-location UX, SEC-03 settings copy, `fs:probeDir` IPC |
 
 ---
 

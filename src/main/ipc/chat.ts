@@ -570,6 +570,19 @@ function emitSelectedSkillsLoaded(cardId: string, index: Awaited<ReturnType<type
   sendStream(cardId, { type: 'tool_summary', toolId, toolName: 'Included Skills', text: summary })
 }
 
+function emitSkippedSkillLocations(cardId: string, index: Awaited<ReturnType<typeof daemonClient.listSkills>> | null | undefined): void {
+  const skipped = index?.skippedLocations ?? []
+  if (skipped.length === 0) return
+  const toolId = `codesurf-skills-skipped-${Date.now()}`
+  const lines = skipped.map(entry => `${entry.path} (${entry.code})`).join('\n')
+  const summary = `${skipped.length} skill location${skipped.length === 1 ? '' : 's'} could not be read. Skills from those paths were skipped.`
+  sendStream(cardId, { type: 'tool_start', toolId, toolName: 'Skill Scan Warning' })
+  if (lines) {
+    sendStream(cardId, { type: 'tool_input', toolId, text: lines })
+  }
+  sendStream(cardId, { type: 'tool_summary', toolId, toolName: 'Skill Scan Warning', text: summary })
+}
+
 function emitFileReferenceExpansion(
   cardId: string,
   expansion: Awaited<ReturnType<typeof daemonClient.expandFileReferences>> | null | undefined,
@@ -947,6 +960,7 @@ export function registerChatIPC(): void {
 
     emitMemoryContextLoaded(req.cardId, memoryContext)
     emitSelectedSkillsLoaded(req.cardId, skillsContext)
+    emitSkippedSkillLocations(req.cardId, skillsContext)
     syncPeerLinks(requestWithFileReferences)
 
     if (requestedRunMode === 'background') {

@@ -316,6 +316,9 @@ test('listSkills skips unreadable custom skill directories without failing', asy
 
   assert.ok(result.skills.some(skill => skill.name === 'Good Skill'))
   assert.ok(result.skills.some(skill => skill.name === '/compact'))
+  if (result.skippedLocations.length > 0) {
+    assert.ok(result.skippedLocations.some(entry => entry.path.includes('codesurf/skills')))
+  }
 })
 
 test('listSkills treats a skill location file path as unreadable and continues', async () => {
@@ -332,5 +335,7 @@ test('listSkills treats a skill location file path as unreadable and continues',
   const result = await index.listSkills({ workspaceDir })
 
   assert.ok(Array.isArray(result.skills))
+  assert.equal(result.skippedLocations.length, 1)
+  assert.equal(result.skippedLocations[0]?.code, 'ENOTDIR')
   assert.ok(result.skills.some(skill => skill.name === '/compact'))
 })

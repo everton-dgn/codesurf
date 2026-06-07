@@ -145,10 +145,16 @@ export interface DaemonSkillSelection {
   prompt?: string
 }
 
+export interface DaemonSkillSkippedLocation {
+  path: string
+  code: string
+}
+
 export interface DaemonSkillIndex {
   workspaceDir: string | null
   roots: DaemonSkillRoot[]
   skills: DaemonSkillEntry[]
+  skippedLocations: DaemonSkillSkippedLocation[]
   selection: DaemonSkillSelection
 }
 
