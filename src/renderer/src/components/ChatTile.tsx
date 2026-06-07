@@ -6,7 +6,7 @@ import type {
 import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
 
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
-import { ArrowDown } from 'lucide-react'
+
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useMCPServers } from '../hooks/useMCPServers'
 import { useAutoSpeak, bargeIn } from '../hooks/useAutoSpeak'
@@ -22,8 +22,8 @@ import { useChatTileBlockNotes } from '../hooks/useChatTileBlockNotes'
 
 import { useTheme } from '../ThemeContext'
 
-import { ChatTileLatestChangeDrawer, type LatestChangeDrawerState } from './chat/ChatTileLatestChangeDrawer'
-import { ChatTileQueuedTurnsDrawer } from './chat/ChatTileQueuedTurnsDrawer'
+import { type LatestChangeDrawerState } from './chat/ChatTileLatestChangeDrawer'
+import { ChatTileTranscriptColumn } from './chat/ChatTileTranscriptColumn'
 import { normalizeMessagesForMemory, estimateMessageChars } from './chat/messageNormalization'
 import {
   getApproxContextWindowTokens,
@@ -34,7 +34,7 @@ import type { ChatMessage, FileChange } from '../../../shared/chat-types'
 import { useChatStreamHandler } from '../hooks/useChatStreamHandler'
 
 
-import { ChatTileTranscriptMessages } from './chat/ChatTileTranscriptMessages'
+
 import { setChatStreaming } from './chatStreamingStore'
 import { setTileTodos, clearTileTodos, useTileTodos, type TileTodoItem } from '../state/tileTodosStore'
 import { CUSTOMISATION_LOCATIONS_CHANGED_EVENT, type CustomisationLocationsChangedDetail } from './CustomisationTile'
@@ -67,8 +67,6 @@ import {
   FONT_MONO,
   FONT_SIZE_DEFAULT,
   MONO_SIZE_DEFAULT,
-  CHAT_MESSAGE_MAX_WIDTH,
-
   CHAT_COMPOSER_WIDTH,
   CHAT_COMPOSER_MIN_WIDTH_STYLE,
   CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT,
@@ -2333,189 +2331,60 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         minHeight: 0,
         minWidth: 0,
       }}>
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,
-        minWidth: 0,
-        position: 'relative',
-        justifyContent: isStartScreen ? 'center' : undefined,
-      }}>
-
-      {/* Messages */}
-      <div
-        ref={messagesRef}
-        className={`chat-messages ${isStartScreen ? '' : 'cs-fade-scroll-y cs-fade-scroll-y-lg'}`}
-        onScroll={handleMessagesScroll}
-        onWheel={handleMessagesWheel}
-        onKeyDown={handleMessagesKeyDown}
-        tabIndex={-1}
-        style={{
-          flex: isStartScreen ? '0 0 auto' : 1,
-          overflowY: isStartScreen ? 'visible' : 'auto',
-          padding: isStartScreen ? '12px 14px 4px' : '12px 14px',
-          overflowX: 'hidden',
-          minHeight: 0,
-          // Keep the transcript centerline stable while chat history loads and
-          // overflow flips on. Reserve both edges so the content doesn't jump
-          // left when the scroll container becomes scrollable.
-          scrollbarGutter: 'stable both-edges' as React.CSSProperties['scrollbarGutter'],
-          scrollbarWidth: 'none' as React.CSSProperties['scrollbarWidth'],
-          // Disable Chrome's built-in scroll anchoring. React pins scrollTop =
-          // scrollHeight on every message update (useLayoutEffect below);
-          // anchoring would simultaneously try to preserve visual position as
-          // streaming content changes height, producing up-and-down judder on
-          // the currently-streaming section.
-          overflowAnchor: 'none',
+      <ChatTileTranscriptColumn
+        isStartScreen={isStartScreen}
+        messagesRef={messagesRef}
+        handleMessagesScroll={handleMessagesScroll}
+        handleMessagesWheel={handleMessagesWheel}
+        handleMessagesKeyDown={handleMessagesKeyDown}
+        hiddenMessageCount={hiddenMessageCount}
+        renderedMessages={renderedMessages}
+        pagedLinkedHistoryEnabled={pagedLinkedHistoryEnabled}
+        loadingEarlier={loadingEarlier}
+        earlierLoadError={earlierLoadError}
+        isStreaming={isStreaming}
+        toolCollapseTick={toolCollapseTick}
+        explodedChipGroups={explodedChipGroups}
+        toggleExplodedChipGroup={toggleExplodedChipGroup}
+        updateBlockNote={updateBlockNote}
+        setAnnotationComposerActive={setAnnotationComposerActive}
+        readAttachmentPaths={readAttachmentPaths}
+        fontSize={fontSize}
+        fontLineHeight={fontLineHeight}
+        fontMono={fontMono}
+        monoSize={monoSize}
+        ttsState={ttsState}
+        voiceSettings={voiceSettings}
+        showScrollToLatest={showScrollToLatest}
+        scrollToLatest={scrollToLatest}
+        liveComposerActivityChip={liveComposerActivityChip}
+        latestChangeDrawer={latestChangeDrawer}
+        latestChangeDrawerHasStats={latestChangeDrawerHasStats}
+        latestChangeDrawerExpanded={latestChangeDrawerExpanded}
+        latestChangeDrawerExpandedFiles={latestChangeDrawerExpandedFiles}
+        latestCheckpointId={latestCheckpointId}
+        isRestoringLatestCheckpoint={isRestoringLatestCheckpoint}
+        fontSans={fontSans}
+        onToggleLatestChangeDrawerExpanded={() => setLatestChangeDrawerExpanded(v => !v)}
+        onToggleLatestChangeDrawerFile={toggleLatestChangeDrawerFile}
+        onRestoreLatestCheckpoint={() => { void restoreLatestCheckpoint() }}
+        onReviewLatestChanges={reviewLatestChanges}
+        queuedTurns={queuedTurns}
+        queueCollapsed={queueCollapsed}
+        draggingTurnId={draggingTurnId}
+        dragOverTurn={dragOverTurn}
+        onToggleQueueCollapsed={() => setQueueCollapsed(v => !v)}
+        onSetDraggingTurnId={setDraggingTurnId}
+        onSetDragOverTurn={setDragOverTurn}
+        onReorderQueuedTurn={reorderQueuedTurn}
+        onSteerQueuedTurn={handleQueuedTurnSteer}
+        onDeleteQueuedTurn={(turnId) => {
+          const remaining = queuedTurns.filter(item => item.id !== turnId)
+          setQueuedTurns(remaining)
+          flushQueueStateNow(remaining)
+          logQueueEvent('delete', { queueId: turnId })
         }}
       >
-        <div className="cs-chat-message-stack" style={{
-          width: '100%',
-          margin: '0 auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-          minHeight: '100%',
-        }}>
-          {isStartScreen && (
-             <div style={{
-               display: 'flex', flexDirection: 'column',
-               alignItems: 'center', justifyContent: 'center',
-               color: theme.chat.text, textAlign: 'center',
-               fontSize: 'clamp(24px, 3vw, 34px)',
-               lineHeight: 1.15,
-               fontWeight: 550,
-               letterSpacing: 0,
-             }}>
-               What do you want to build today with CodeSurf?
-             </div>
-           )}
-
-          {hiddenMessageCount > 0 && (
-            <div style={{
-              alignSelf: 'center',
-              maxWidth: CHAT_MESSAGE_MAX_WIDTH,
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: `1px solid ${theme.chat.divider}`,
-              background: theme.chat.userBubble,
-              color: theme.chat.muted,
-              fontSize: 11,
-              textAlign: 'center',
-            }}>
-              Showing the latest {renderedMessages.length} messages. Scroll up to reveal older pages; {hiddenMessageCount} older message{hiddenMessageCount === 1 ? '' : 's'} are preserved but not mounted.
-            </div>
-          )}
-
-          {pagedLinkedHistoryEnabled && (loadingEarlier || earlierLoadError) && (
-            <div style={{
-              alignSelf: 'center',
-              padding: '6px 12px 2px',
-              borderRadius: 999,
-              border: `1px solid ${theme.chat.divider}`,
-              background: theme.chat.userBubble,
-              color: theme.chat.muted,
-              fontSize: 11,
-              textAlign: 'center',
-            }}>
-              {loadingEarlier ? 'Loading older messages…' : earlierLoadError}
-            </div>
-          )}
-
-          <ChatTileTranscriptMessages
-            renderedMessages={renderedMessages}
-            isStreaming={isStreaming}
-            toolCollapseTick={toolCollapseTick}
-            explodedChipGroups={explodedChipGroups}
-            toggleExplodedChipGroup={toggleExplodedChipGroup}
-            updateBlockNote={updateBlockNote}
-            onAnnotationComposerActiveChange={setAnnotationComposerActive}
-            readAttachmentPaths={readAttachmentPaths}
-            fontSize={fontSize}
-            fontLineHeight={fontLineHeight}
-            fontMono={fontMono}
-            monoSize={monoSize}
-            ttsState={ttsState}
-            voiceSettings={voiceSettings}
-          />
-
-        </div>
-      </div>
-
-      <div style={{ flexShrink: 0, position: 'relative', overflow: 'visible' }}>
-        {showScrollToLatest && (
-            <button
-              onClick={() => scrollToLatest()}
-              title="Jump to latest"
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-                zIndex: 3,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 30,
-                height: 30,
-                minWidth: 30,
-                padding: 0,
-                borderRadius: '50%',
-                border: `0.5px solid ${theme.border.strong}`,
-                background: theme.surface.panelElevated,
-                color: theme.text.secondary,
-                cursor: 'pointer',
-                boxShadow: theme.shadow.panel,
-                backdropFilter: 'blur(10px)',
-                ...NON_SELECTABLE_UI_STYLE,
-              }}
-            >
-              <ArrowDown size={15} strokeWidth={1.8} />
-            </button>
-        )}
-
-        {liveComposerActivityChip}
-
-        {latestChangeDrawer && (
-          <ChatTileLatestChangeDrawer
-            drawer={latestChangeDrawer}
-            hasStats={latestChangeDrawerHasStats}
-            expanded={latestChangeDrawerExpanded}
-            expandedFiles={latestChangeDrawerExpandedFiles}
-            latestCheckpointId={latestCheckpointId}
-            isRestoringLatestCheckpoint={isRestoringLatestCheckpoint}
-            fontSans={fontSans}
-            monoSize={monoSize}
-            onToggleExpanded={() => setLatestChangeDrawerExpanded(v => !v)}
-            onToggleFile={toggleLatestChangeDrawerFile}
-            onRestoreLatestCheckpoint={() => { void restoreLatestCheckpoint() }}
-            onReviewLatestChanges={reviewLatestChanges}
-          />
-        )}
-
-        <ChatTileQueuedTurnsDrawer
-          queuedTurns={queuedTurns}
-          queueCollapsed={queueCollapsed}
-          draggingTurnId={draggingTurnId}
-          dragOverTurn={dragOverTurn}
-          joinedToPrevious={Boolean(latestChangeDrawer)}
-          isStreaming={isStreaming}
-          fontSans={fontSans}
-          fontSize={fontSize}
-          onToggleCollapsed={() => setQueueCollapsed(v => !v)}
-          onSetDraggingTurnId={setDraggingTurnId}
-          onSetDragOverTurn={setDragOverTurn}
-          onReorderQueuedTurn={reorderQueuedTurn}
-          onSteerTurn={handleQueuedTurnSteer}
-          onDeleteTurn={(turnId) => {
-            const remaining = queuedTurns.filter(item => item.id !== turnId)
-            setQueuedTurns(remaining)
-            flushQueueStateNow(remaining)
-            logQueueEvent('delete', { queueId: turnId })
-          }}
-        />
-
         <ChatTileComposer
           isStartScreen={isStartScreen}
           isDropTarget={isDropTarget}
@@ -2648,8 +2517,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           contextWindowLimit={contextWindowLimit}
           systemOverheadTokens={systemOverheadTokens}
         />
-      </div>
-      </div>
+      </ChatTileTranscriptColumn>
       {isPlanOpen && planTodos && planTodos.length > 0 && (
         <PlanPane
           todos={planTodos}
