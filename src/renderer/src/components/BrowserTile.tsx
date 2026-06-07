@@ -615,19 +615,24 @@ const createClusoInjectScript = (jsContent: string, cssContent: string): string 
 // Bus bridge injection script — lets webview content publish to the EventBus
 // ---------------------------------------------------------------------------
 
-function createBusBridgeScript(tileId: string): string {
+function createBusBridgeScript(tileId: string, bridgeToken: string): string {
+  const safeToken = JSON.stringify(bridgeToken)
   return `
     (function() {
       if (window.__contexBridge) return;
       window.__contexBridge = true;
 
-      // Allow webview content to send events to the host via console.log transport
+      const BRIDGE_TOKEN = ${safeToken};
+      const BRIDGE_CHANNEL = 'browser:${tileId}';
+
+      // Allow localhost dev pages to send events to the host via console.log transport
       window.contex = {
-        publish: function(type, payload, channel) {
+        publish: function(type, payload) {
           console.log(JSON.stringify({
             __contex: true,
+            token: BRIDGE_TOKEN,
             type: type || 'data',
-            channel: channel || 'tile:${tileId}',
+            channel: BRIDGE_CHANNEL,
             payload: payload || {}
           }));
         },
@@ -852,6 +857,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
   const wvReadyRef = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(true)
+  const bridgeTokenRef = useRef(crypto.randomUUID())
   const clusoToggleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const peerRelayUnsubscribeRef = useRef<(() => void) | null>(null)
   const mcpCommandUnsubscribeRef = useRef<(() => void) | null>(null)
@@ -1267,7 +1273,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       injectCluso()
       // Inject bus bridge so webview content can publish to the EventBus
       if (shouldInjectHostBridge(webview.getURL())) {
-        executeInWebview(createBusBridgeScript(tileId))
+        executeInWebview(createBusBridgeScript(tileId, bridgeTokenRef.current))
           .catch(err => console.warn('[BrowserTile] Bus bridge injection failed:', err))
       }
     }
@@ -1336,16 +1342,22 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       const { message } = consoleEvent
 
       if (message.startsWith('{"__contex"')) {
+        if (!shouldInjectHostBridge(webview.getURL())) return
         try {
           const data = JSON.parse(message) as {
             __contex?: boolean
+            token?: string
             type?: string
             channel?: string
             payload?: Record<string, unknown>
           }
-          if (data.__contex) {
+          if (
+            data.__contex
+            && data.token === bridgeTokenRef.current
+            && (data.channel === `browser:${tileId}` || data.channel === `tile:${tileId}`)
+          ) {
             window.electron?.bus?.publish(
-              data.channel || `tile:${tileId}`,
+              `browser:${tileId}`,
               data.type || 'data',
               `browser:${tileId}`,
               data.payload || {}
@@ -1452,7 +1464,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
         }
         tryInject(0)
         if (shouldInjectHostBridge(webview.getURL())) {
-          executeInWebview(createBusBridgeScript(tileId))
+          executeInWebview(createBusBridgeScript(tileId, bridgeTokenRef.current))
             .catch(err => console.warn('[BrowserTile] Bus bridge reinjection failed:', err))
         }
       })

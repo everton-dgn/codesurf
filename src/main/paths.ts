@@ -1,5 +1,6 @@
 import { homedir } from 'os'
 import { join } from 'path'
+import { assertSafePathSegment } from './security/pathSegments.ts'
 
 export const APP_NAME = 'CodeSurf'
 export const APP_ID = 'com.huggiapps.codesurf'
@@ -15,11 +16,11 @@ export const JOBS_DIR = join(CONTEX_HOME, 'jobs')
 export const TIMELINES_DIR = join(CONTEX_HOME, 'timelines')
 
 export function workspaceTileDir(workspacePath: string, tileId: string): string {
-  return join(workspacePath, TILE_CONTEXT_DIRNAME, tileId)
+  return join(workspacePath, TILE_CONTEXT_DIRNAME, assertSafePathSegment(tileId, 'tileId'))
 }
 
 export function legacyWorkspaceTileDir(workspacePath: string, tileId: string): string {
-  return join(workspacePath, LEGACY_TILE_CONTEXT_DIRNAME, tileId)
+  return join(workspacePath, LEGACY_TILE_CONTEXT_DIRNAME, assertSafePathSegment(tileId, 'tileId'))
 }
 
 export function workspaceTileContextDir(workspacePath: string, tileId: string): string {
@@ -35,5 +36,5 @@ export function workspaceTileMessagesDir(workspacePath: string, tileId: string):
 }
 
 export function workspaceTileMessageMailboxDir(workspacePath: string, tileId: string, mailbox: string): string {
-  return join(workspaceTileMessagesDir(workspacePath, tileId), mailbox)
+  return join(workspaceTileMessagesDir(workspacePath, tileId), assertSafePathSegment(mailbox, 'mailbox'))
 }

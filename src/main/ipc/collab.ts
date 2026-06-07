@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { ipcMain, BrowserWindow } from 'electron'
 import { promises as fs } from 'fs'
-import { join, basename, resolve, relative, isAbsolute } from 'path'
+import { join, basename } from 'path'
 import type {
   CollabState,
   CollabSkills,
@@ -21,6 +21,11 @@ import {
   workspaceTileMessagesDir,
   workspaceTileMessageMailboxDir,
 } from '../paths'
+import {
+  assertSafePathSegment,
+  assertSafeWorkspacePath,
+  resolveInside,
+} from '../security/pathSegments.ts'
 
 const MESSAGE_PROTOCOL = 'contex-message/v1' as const
 const MESSAGE_MAILBOXES: CollabMailbox[] = ['inbox', 'sent', 'memory', 'bin']
@@ -28,33 +33,9 @@ const MESSAGE_MAILBOX_SET = new Set<string>(MESSAGE_MAILBOXES)
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function assertSafeWorkspacePath(workspacePath: string): string {
-  const resolved = resolve(String(workspacePath ?? '').trim())
-  if (!resolved) throw new Error('Invalid workspace path')
-  return resolved
-}
-
-function assertSafePathSegment(value: string, label: string): string {
-  const segment = String(value ?? '').trim()
-  if (!segment || segment === '.' || segment === '..' || segment.includes('/') || segment.includes('\\') || segment.includes('\0')) {
-    throw new Error(`Invalid ${label}`)
-  }
-  return segment
-}
-
 function assertSafeMailbox(mailbox: CollabMailbox): CollabMailbox {
   if (!MESSAGE_MAILBOX_SET.has(String(mailbox))) throw new Error('Invalid mailbox')
   return mailbox
-}
-
-function resolveInside(root: string, ...segments: string[]): string {
-  const base = resolve(root)
-  const target = resolve(base, ...segments)
-  const rel = relative(base, target)
-  if (rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error('Path escapes expected directory')
-  }
-  return target
 }
 
 function collabDir(workspacePath: string, tileId: string): string {
@@ -512,8 +493,10 @@ export function registerCollabIPC(): void {
   })
 
   ipcMain.handle('collab:sendMessage', async (_, workspacePath: string, fromTileId: string, draft: CollabMessageDraft) => {
-    await ensureTileProtocolDirs(workspacePath, fromTileId)
-    await ensureTileProtocolDirs(workspacePath, draft.toTileId)
+    const safeFromTileId = assertSafePathSegment(fromTileId, 'tileId')
+    const safeToTileId = assertSafePathSegment(draft.toTileId, 'toTileId')
+    await ensureTileProtocolDirs(workspacePath, safeFromTileId)
+    await ensureTileProtocolDirs(workspacePath, safeToTileId)
 
     const id = randomUUID()
     const threadId = draft.threadId ?? id
@@ -527,8 +510,8 @@ export function registerCollabIPC(): void {
       protocol: MESSAGE_PROTOCOL,
       id,
       threadId,
-      fromTileId,
-      toTileId: draft.toTileId,
+      fromTileId: safeFromTileId,
+      toTileId: safeToTileId,
       type: draft.type ?? (draft.replyToId ? 'reply' : 'request'),
       subject: draft.subject,
       createdAt: iso,
@@ -541,8 +524,8 @@ export function registerCollabIPC(): void {
     const senderMeta: CollabMessageMeta = { ...baseMeta, status: 'sent' }
     const recipientMeta: CollabMessageMeta = { ...baseMeta, status: 'unread' }
 
-    const senderPath = messageFilePath(workspacePath, fromTileId, 'sent', filename)
-    const recipientPath = messageFilePath(workspacePath, draft.toTileId, 'inbox', filename)
+    const senderPath = messageFilePath(workspacePath, safeFromTileId, 'sent', filename)
+    const recipientPath = messageFilePath(workspacePath, safeToTileId, 'inbox', filename)
 
     await Promise.all([
       fs.writeFile(senderPath, renderMessageMarkdown(senderMeta, draft.body, draft.data)),
@@ -553,8 +536,8 @@ export function registerCollabIPC(): void {
       id,
       threadId,
       filename,
-      fromTileId,
-      toTileId: draft.toTileId,
+      fromTileId: safeFromTileId,
+      toTileId: safeToTileId,
       senderPath,
       recipientPath,
     }

@@ -715,6 +715,10 @@ export function getMCPPort(): number | null {
  */
 export async function writeMCPConfigToWorkspace(workspacePath: string): Promise<void> {
   if (!serverPort) return
+
+  const { ensureWorkspaceSecretsGitignored } = await import('./security/workspaceSecrets.ts')
+  await ensureWorkspaceSecretsGitignored(workspacePath).catch(() => {})
+
   const mcpJsonPath = join(workspacePath, '.mcp.json')
   const contexUrl = `http://127.0.0.1:${serverPort}/mcp`
 
@@ -737,7 +741,8 @@ export async function writeMCPConfigToWorkspace(workspacePath: string): Promise<
     mcpServers: existingServers,
   }
 
-  await fs.writeFile(mcpJsonPath, JSON.stringify(config, null, 2))
+  await fs.writeFile(mcpJsonPath, JSON.stringify(config, null, 2), { mode: 0o600 })
+  await fs.chmod(mcpJsonPath, 0o600).catch(() => {})
   console.log(`[MCP] Wrote .mcp.json to ${workspacePath}`)
 
   // Write .claude/CLAUDE.md with peer collaboration instructions

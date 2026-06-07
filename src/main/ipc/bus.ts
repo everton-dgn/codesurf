@@ -1,6 +1,13 @@
 import { ipcMain, type WebContents } from 'electron'
 import { bus } from '../event-bus'
-import type { BusEvent, BusEventType } from '../../shared/types'
+import type { BusEvent } from '../../shared/types'
+import {
+  assertBusPublishAllowed,
+  assertBusPublishScope,
+  assertBusSubscribeAllowed,
+  assertSafeBusChannel,
+  assertSafeBusToken,
+} from '../security/busChannels.ts'
 
 const senderSubscriberIds = new WeakMap<WebContents, Set<string>>()
 const senderCleanupAttached = new WeakSet<WebContents>()
@@ -23,12 +30,20 @@ function trackSenderSubscription(sender: WebContents, subscriberId: string): voi
 }
 
 export function registerBusIPC(): void {
-  ipcMain.handle('bus:publish', (_, channel: string, type: BusEventType, source: string, payload: Record<string, unknown>) => {
-    return bus.publish({ channel, type, source, payload })
+  ipcMain.handle('bus:publish', (_, channel: string, type: string, source: string, payload: Record<string, unknown>) => {
+    const validated = assertBusPublishAllowed(channel, source, type)
+    assertBusPublishScope(validated.channel, validated.source)
+    return bus.publish({
+      channel: validated.channel,
+      type: validated.type,
+      source: validated.source,
+      payload: payload ?? {},
+    })
   })
 
   ipcMain.handle('bus:subscribe', (event, channel: string, subscriberId: string) => {
-    const sub = bus.subscribe(channel, subscriberId, (busEvent: BusEvent) => {
+    const validated = assertBusSubscribeAllowed(channel, subscriberId)
+    const sub = bus.subscribe(validated.channel, validated.subscriberId, (busEvent: BusEvent) => {
       try {
         event.sender.send('bus:event', busEvent)
       } catch {
@@ -36,41 +51,43 @@ export function registerBusIPC(): void {
       }
     })
 
-    trackSenderSubscription(event.sender, subscriberId)
+    trackSenderSubscription(event.sender, validated.subscriberId)
 
     return sub.id
   })
 
   ipcMain.handle('bus:unsubscribe', (_, subscriptionId: string) => {
-    bus.unsubscribe(subscriptionId)
+    bus.unsubscribe(assertSafeBusToken(subscriptionId, 'bus subscription'))
   })
 
   ipcMain.handle('bus:unsubscribeAll', (_, subscriberId: string) => {
-    bus.unsubscribeAll(subscriberId)
+    bus.unsubscribeAll(assertSafeBusToken(subscriberId, 'bus subscriber'))
   })
 
   ipcMain.handle('bus:history', (_, channel: string, limit?: number) => {
-    return bus.getHistory(channel, limit)
+    return bus.getHistory(assertSafeBusChannel(channel, { allowWildcard: true }), limit)
   })
 
   ipcMain.handle('bus:channelInfo', (_, channel: string) => {
-    return bus.getChannelInfo(channel)
+    return bus.getChannelInfo(assertSafeBusChannel(channel, { allowWildcard: true }))
   })
 
   ipcMain.handle('bus:unreadCount', (_, channel: string, subscriberId: string) => {
-    return bus.getUnreadCount(channel, subscriberId)
+    const validated = assertBusSubscribeAllowed(channel, subscriberId)
+    return bus.getUnreadCount(validated.channel, validated.subscriberId)
   })
 
   ipcMain.handle('bus:markRead', (_, channel: string, subscriberId: string) => {
-    bus.markRead(channel, subscriberId)
+    const validated = assertBusSubscribeAllowed(channel, subscriberId)
+    bus.markRead(validated.channel, validated.subscriberId)
   })
 
   ipcMain.handle('bus:dropChannel', (_, channel: string) => {
-    return bus.dropChannel(channel)
+    return bus.dropChannel(assertSafeBusChannel(channel))
   })
 
   ipcMain.handle('bus:dropChannelsMatching', (_, prefix: string) => {
-    return bus.dropChannelsMatching(prefix)
+    return bus.dropChannelsMatching(assertSafeBusChannel(prefix, { allowWildcard: true }))
   })
 
   ipcMain.handle('bus:stats', () => {
