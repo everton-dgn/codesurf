@@ -78,7 +78,7 @@ function snapValue(v: number, grid: number): number {
   return Math.round(v / grid) * grid
 }
 
-function rectsOverlap(
+export function rectsOverlap(
   a: { x: number; y: number; w: number; h: number },
   b: { x: number; y: number; w: number; h: number },
 ): boolean {
@@ -110,7 +110,7 @@ export function getTileCapabilities(
   return { ...base, tools: toolNames.map(withCapabilityPrefix) }
 }
 
-function getCapabilityMatches(source: TileCapabilitySet, target: TileCapabilitySet): string[] {
+export function getCapabilityMatches(source: TileCapabilitySet, target: TileCapabilitySet): string[] {
   return uniq([
     ...source.provides.filter(value => target.accepts.includes(value)),
     ...target.provides.filter(value => source.accepts.includes(value)),
@@ -148,7 +148,7 @@ export function getTileSpatialReference(
   }
 }
 
-function findBestAnchorPair(
+export function findBestAnchorPair(
   sourceAnchors: AnchorPoint[],
   targetAnchors: AnchorPoint[],
 ): { source: AnchorPoint; target: AnchorPoint; distance: number } | null {
@@ -184,7 +184,7 @@ function simplifyRoute(points: { x: number; y: number }[]): { x: number; y: numb
   return simplified
 }
 
-function getOrthogonalRoute(source: AnchorPoint, target: AnchorPoint, step: number): { x: number; y: number }[] {
+export function getOrthogonalRoute(source: AnchorPoint, target: AnchorPoint, step: number): { x: number; y: number }[] {
   const sourceLead = stepOutFromAnchor(source, step)
   const targetLead = stepOutFromAnchor(target, step)
   const points: { x: number; y: number }[] = [{ x: source.x, y: source.y }, sourceLead]

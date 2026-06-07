@@ -29,10 +29,42 @@ import { useCanvasTileShortcuts } from './hooks/useCanvasTileShortcuts'
 import { useCanvasGroupManager } from './hooks/useCanvasGroupManager'
 import { useCanvasKeyboard } from './hooks/useCanvasKeyboard'
 import { useCanvasGlow } from './hooks/useCanvasGlow'
+import { useAutoAgentProximity } from './hooks/useAutoAgentProximity'
+import { useDiscoveryPulses } from './hooks/useDiscoveryPulses'
+import {
+  addAssociatedDiscoveryConnections,
+  buildExtActionsByTileId,
+  cascadeDiscoveryConnections,
+  extensionActionRegistry,
+  findDiscoveryMatch,
+  findBestAnchorPair,
+  getCapabilityMatches,
+  getDiscoveryMaxDistance,
+  getOrthogonalRoute,
+  getTileCapabilities,
+  getTileSpatialReference,
+  uniq,
+  type AnchorPoint,
+  type DiscoveryCapabilityLink,
+} from './lib/discoveryRuntime'
+import {
+  getBezierConnectionMidpoint,
+  getBezierConnectionPath,
+  getConnectionHandlePoint,
+  getLaneOffsets,
+  getNearestTileSide,
+  getOppositeAnchorSide,
+  getRouteMidpoint,
+  getRouteSegments,
+  getRouteSignature,
+  getTileCenter,
+  offsetOrthogonalRoute,
+  routeToSvgPath,
+} from './lib/connectionRoutes'
 
-import { getMinTileHeight, getMinTileWidth, rectsOverlap } from './utils/tilePlacement'
-import { getTileNodeTools, withCapabilityPrefix, stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
-import { addAssociatedConnectionGroups, cascadeConnectionGraph } from '../../shared/connectionGraph'
+import { getMinTileHeight, getMinTileWidth } from './utils/tilePlacement'
+import { stripCapabilityPrefix, getAllNodeTools } from '../../shared/nodeTools'
+
 import { FontProvider, FontTokenProvider, SANS_DEFAULT, MONO_DEFAULT } from './FontContext'
 import { ThemeProvider } from './ThemeContext'
 import { applyContrast, DEFAULT_THEME_ID, getEdgeShadow, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
@@ -373,66 +405,6 @@ function withAlpha(color: string, alpha: number): string {
   return color
 }
 
-type AnchorSide = 'top' | 'right' | 'bottom' | 'left'
-
-type TileCapabilitySet = {
-  provides: string[]
-  accepts: string[]
-  tools?: string[]
-}
-
-type AnchorPoint = {
-  side: AnchorSide
-  x: number
-  y: number
-  gridX: number
-  gridY: number
-}
-
-type TileSpatialReference = {
-  tileId: string
-  bounds: { left: number; top: number; right: number; bottom: number }
-  gridBounds: { left: number; top: number; right: number; bottom: number }
-  anchors: AnchorPoint[]
-  capabilities: TileCapabilitySet
-}
-
-type DiscoveryMatch = {
-  tile: TileState
-  route: { x: number; y: number }[]
-  distance: number
-  matchLabels: string[]
-  targetRef: TileSpatialReference
-}
-
-type DiscoveryPulse = {
-  id: string
-  sourceTileId: string
-  targetTileId: string
-  route: { x: number; y: number }[]
-  startedAt: number
-  durationMs: number
-  matchLabels: string[]
-  sourceGridLabel: string
-  targetGridLabel: string
-}
-
-type DiscoveryCapabilityLink = {
-  peerId: string
-  peerType: TileType
-  distance: number
-  route: { x: number; y: number }[]
-  capabilities: string[]
-  lastSeen: number
-}
-
-type DiscoveryState = {
-  connectedTileIds: Set<string>
-  byTile: Map<string, DiscoveryCapabilityLink[]>
-}
-
-const DISCOVERY_PULSE_DURATION_MS = 1100
-const DISCOVERY_MAX_DISTANCE_MULTIPLIER = 2.1
 const SETTINGS_CACHE_KEY = 'contex:settings-cache'
 const WORKSPACE_TAB_STATE_KEY = 'codesurf:workspace-tabs:v1'
 const BRAND_WORDMARK_CACHE_KEY = 'contex:brand-wordmark-index'
@@ -491,392 +463,6 @@ function persistWorkspaceTabState(state: PersistedWorkspaceTabState): void {
   }
 }
 
-function getDiscoveryMaxDistance(largeGridStep: number): number {
-  return Math.max(largeGridStep * DISCOVERY_MAX_DISTANCE_MULTIPLIER, largeGridStep)
-}
-
-function uniq<T>(items: T[]): T[] {
-  return Array.from(new Set(items))
-}
-
-// Extension action registry — extensions register actions at runtime; these become
-// tool capabilities so connected peers (especially chat tiles) can discover them.
-const extensionActionRegistry = new Map<string, Array<{ name: string; description: string }>>()
-
-function getTileCapabilities(tile: TileState): TileCapabilitySet {
-  const base: TileCapabilitySet = (() => {
-    if (tile.type === 'terminal') return { provides: ['output', 'task', 'reference'], accepts: ['file', 'task', 'reference'] }
-    if (tile.type === 'code' || tile.type === 'note' || tile.type === 'file') return { provides: ['file', 'text', 'reference'], accepts: ['task', 'output', 'reference'] }
-    if (tile.type === 'browser') return { provides: ['url', 'web', 'reference'], accepts: ['text', 'task', 'reference'] }
-    if (tile.type === 'chat') return { provides: ['task', 'text', 'reference'], accepts: ['file', 'output', 'reference'] }
-    if (tile.type === 'files') return { provides: ['file', 'reference'], accepts: ['task', 'reference'] }
-
-    if (tile.type === 'kanban') return { provides: ['task', 'reference'], accepts: ['task', 'text', 'reference'] }
-    if (tile.type === 'image') return { provides: ['image', 'reference'], accepts: ['text', 'reference'] }
-    if (tile.type.startsWith('ext:')) return { provides: ['task', 'reference'], accepts: ['task', 'text', 'reference'] }
-    return { provides: ['reference'], accepts: ['reference'] }
-  })()
-
-  const toolNames = getTileNodeTools(tile.type).map(tool => tool.name)
-
-  // Include dynamically registered extension actions as tool capabilities
-  if (tile.type.startsWith('ext:')) {
-    const extActions = extensionActionRegistry.get(tile.id)
-    if (extActions) {
-      for (const action of extActions) toolNames.push(action.name)
-    }
-  }
-
-  return {
-    ...base,
-    tools: toolNames.map(withCapabilityPrefix),
-  }
-}
-
-function getTileGridBounds(tile: TileState, grid: number): TileSpatialReference['gridBounds'] {
-  return {
-    left: Math.round(tile.x / grid),
-    top: Math.round(tile.y / grid),
-    right: Math.round((tile.x + tile.width) / grid),
-    bottom: Math.round((tile.y + tile.height) / grid),
-  }
-}
-
-function makeAnchor(side: AnchorSide, x: number, y: number, grid: number): AnchorPoint {
-  const snappedX = snap(x, grid)
-  const snappedY = snap(y, grid)
-  return {
-    side,
-    x: snappedX,
-    y: snappedY,
-    gridX: Math.round(snappedX / grid),
-    gridY: Math.round(snappedY / grid),
-  }
-}
-
-function getTileSpatialReference(tile: TileState, grid: number): TileSpatialReference {
-  return {
-    tileId: tile.id,
-    bounds: {
-      left: tile.x,
-      top: tile.y,
-      right: tile.x + tile.width,
-      bottom: tile.y + tile.height,
-    },
-    gridBounds: getTileGridBounds(tile, grid),
-    anchors: [
-      makeAnchor('top', tile.x + tile.width / 2, tile.y, grid),
-      makeAnchor('right', tile.x + tile.width, tile.y + tile.height / 2, grid),
-      makeAnchor('bottom', tile.x + tile.width / 2, tile.y + tile.height, grid),
-      makeAnchor('left', tile.x, tile.y + tile.height / 2, grid),
-    ],
-    capabilities: getTileCapabilities(tile),
-  }
-}
-
-function getCapabilityMatches(source: TileCapabilitySet, target: TileCapabilitySet): string[] {
-  return uniq([
-    ...source.provides.filter(value => target.accepts.includes(value)),
-    ...target.provides.filter(value => source.accepts.includes(value)),
-  ])
-}
-
-function cascadeDiscoveryConnections(
-  graph: DiscoveryState,
-  tileList: TileState[],
-  gridStep: number,
-): DiscoveryState {
-  const capabilitiesByTile = new Map(tileList.map(tile => [tile.id, getTileCapabilities(tile)]))
-  const refs = new Map(tileList.map(tile => [tile.id, getTileSpatialReference(tile, gridStep)]))
-  return cascadeConnectionGraph(graph, tileList, {
-    resolveCapabilities: (sourceTileId, targetTileId) => {
-      const sourceCaps = capabilitiesByTile.get(sourceTileId)
-      const targetCaps = capabilitiesByTile.get(targetTileId)
-      if (!sourceCaps || !targetCaps) return []
-      return uniq([...(targetCaps.tools ?? []), ...getCapabilityMatches(sourceCaps, targetCaps)])
-    },
-    resolveRoute: (sourceTileId, targetTileId) => {
-      const sourceRef = refs.get(sourceTileId)
-      const targetRef = refs.get(targetTileId)
-      const pair = sourceRef && targetRef ? findBestAnchorPair(sourceRef.anchors, targetRef.anchors) : null
-      return pair ? { route: getOrthogonalRoute(pair.source, pair.target, gridStep), distance: pair.distance } : null
-    },
-  })
-}
-
-function addAssociatedDiscoveryConnections(
-  graph: DiscoveryState,
-  tileList: TileState[],
-  associatedTileGroups: string[][],
-  gridStep: number,
-): DiscoveryState {
-  const capabilitiesByTile = new Map(tileList.map(tile => [tile.id, getTileCapabilities(tile)]))
-  const refs = new Map(tileList.map(tile => [tile.id, getTileSpatialReference(tile, gridStep)]))
-  return addAssociatedConnectionGroups(graph, tileList, associatedTileGroups, {
-    resolveCapabilities: (sourceTileId, targetTileId) => {
-      const sourceCaps = capabilitiesByTile.get(sourceTileId)
-      const targetCaps = capabilitiesByTile.get(targetTileId)
-      if (!sourceCaps || !targetCaps) return []
-      return uniq([...(targetCaps.tools ?? []), ...getCapabilityMatches(sourceCaps, targetCaps)])
-    },
-    resolveRoute: (sourceTileId, targetTileId) => {
-      const sourceRef = refs.get(sourceTileId)
-      const targetRef = refs.get(targetTileId)
-      const pair = sourceRef && targetRef ? findBestAnchorPair(sourceRef.anchors, targetRef.anchors) : null
-      return pair ? { route: getOrthogonalRoute(pair.source, pair.target, gridStep), distance: pair.distance } : null
-    },
-  })
-}
-
-function findBestAnchorPair(sourceAnchors: AnchorPoint[], targetAnchors: AnchorPoint[]): { source: AnchorPoint; target: AnchorPoint; distance: number } | null {
-  let best: { source: AnchorPoint; target: AnchorPoint; distance: number } | null = null
-  for (const source of sourceAnchors) {
-    for (const target of targetAnchors) {
-      const distance = Math.abs(source.x - target.x) + Math.abs(source.y - target.y)
-      if (!best || distance < best.distance) best = { source, target, distance }
-    }
-  }
-  return best
-}
-
-function stepOutFromAnchor(anchor: AnchorPoint, step: number): { x: number; y: number } {
-  if (anchor.side === 'left') return { x: anchor.x - step, y: anchor.y }
-  if (anchor.side === 'right') return { x: anchor.x + step, y: anchor.y }
-  if (anchor.side === 'top') return { x: anchor.x, y: anchor.y - step }
-  return { x: anchor.x, y: anchor.y + step }
-}
-
-function simplifyRoute(points: { x: number; y: number }[]): { x: number; y: number }[] {
-  const deduped = points.filter((point, index) => index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y)
-  if (deduped.length <= 2) return deduped
-
-  const simplified = [deduped[0]]
-  for (let i = 1; i < deduped.length - 1; i += 1) {
-    const prev = simplified[simplified.length - 1]
-    const current = deduped[i]
-    const next = deduped[i + 1]
-    const collinear = (prev.x === current.x && current.x === next.x) || (prev.y === current.y && current.y === next.y)
-    if (!collinear) simplified.push(current)
-  }
-  simplified.push(deduped[deduped.length - 1])
-  return simplified
-}
-
-function getOrthogonalRoute(source: AnchorPoint, target: AnchorPoint, step: number): { x: number; y: number }[] {
-  const sourceLead = stepOutFromAnchor(source, step)
-  const targetLead = stepOutFromAnchor(target, step)
-  const points: { x: number; y: number }[] = [
-    { x: source.x, y: source.y },
-    sourceLead,
-  ]
-
-  if (sourceLead.x !== targetLead.x && sourceLead.y !== targetLead.y) {
-    const horizontalFirst = source.side === 'left' || source.side === 'right'
-    points.push(horizontalFirst
-      ? { x: targetLead.x, y: sourceLead.y }
-      : { x: sourceLead.x, y: targetLead.y })
-  }
-
-  points.push(targetLead, { x: target.x, y: target.y })
-  return simplifyRoute(points)
-}
-
-function routeToSvgPath(points: { x: number; y: number }[]): string {
-  return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
-}
-
-function getConnectionHandlePoint(tile: TileState, side: AnchorPoint['side'] = 'right'): AnchorPoint {
-  if (side === 'left') return makeAnchor(side, tile.x - 18, tile.y + tile.height / 2, GRID)
-  if (side === 'top') return makeAnchor(side, tile.x + tile.width / 2, tile.y - 18, GRID)
-  if (side === 'bottom') return makeAnchor(side, tile.x + tile.width / 2, tile.y + tile.height + 18, GRID)
-  return makeAnchor(side, tile.x + tile.width + 18, tile.y + tile.height / 2, GRID)
-}
-
-function getNearestTileSide(tile: TileState, point: { x: number; y: number }): AnchorPoint['side'] {
-  const distances: Array<{ side: AnchorPoint['side']; distance: number }> = [
-    { side: 'left', distance: Math.abs(point.x - tile.x) },
-    { side: 'right', distance: Math.abs(point.x - (tile.x + tile.width)) },
-    { side: 'top', distance: Math.abs(point.y - tile.y) },
-    { side: 'bottom', distance: Math.abs(point.y - (tile.y + tile.height)) },
-  ]
-  distances.sort((a, b) => a.distance - b.distance)
-  return distances[0]?.side ?? 'right'
-}
-
-function getOppositeAnchorSide(side: AnchorPoint['side']): AnchorPoint['side'] {
-  if (side === 'left') return 'right'
-  if (side === 'right') return 'left'
-  if (side === 'top') return 'bottom'
-  return 'top'
-}
-
-function getTileCenter(tile: TileState): { x: number; y: number } {
-  return { x: tile.x + tile.width / 2, y: tile.y + tile.height / 2 }
-}
-
-function getBezierConnectionPath(source: { x: number; y: number }, target: { x: number; y: number }, sag = 0): string {
-  const geometry = getBezierConnectionGeometry(source, target, sag)
-  return `M ${source.x} ${source.y} C ${geometry.c1.x} ${geometry.c1.y}, ${geometry.c2.x} ${geometry.c2.y}, ${target.x} ${target.y}`
-}
-
-function getBezierConnectionGeometry(source: { x: number; y: number }, target: { x: number; y: number }, sag = 0): { c1: { x: number; y: number }; c2: { x: number; y: number } } {
-  const dx = target.x - source.x
-  const dy = target.y - source.y
-  const distance = Math.hypot(dx, dy)
-  const bend = Math.min(180, Math.max(48, distance * 0.34))
-  const direction = dx >= 0 ? 1 : -1
-  const gravity = Math.min(120, Math.max(20, distance * 0.16)) + sag
-  const c1 = { x: source.x + bend * direction, y: source.y + gravity * 0.35 }
-  const c2 = { x: target.x - bend * direction, y: target.y + gravity }
-  return { c1, c2 }
-}
-
-function getBezierConnectionMidpoint(source: { x: number; y: number }, target: { x: number; y: number }): { x: number; y: number } {
-  const dx = target.x - source.x
-  const distance = Math.hypot(dx, target.y - source.y)
-  return {
-    x: source.x + dx * 0.5,
-    y: source.y + (target.y - source.y) * 0.5 + Math.min(72, Math.max(18, distance * 0.10)),
-  }
-}
-
-function getRouteSegments(points: { x: number; y: number }[], thickness = 3): Array<{ left: number; top: number; width: number; height: number; horizontal: boolean }> {
-  const segments: Array<{ left: number; top: number; width: number; height: number; horizontal: boolean }> = []
-
-  for (let i = 1; i < points.length; i += 1) {
-    const start = points[i - 1]
-    const end = points[i]
-    const horizontal = start.y === end.y
-    if (horizontal) {
-      segments.push({
-        left: Math.min(start.x, end.x),
-        top: start.y - thickness / 2,
-        width: Math.max(Math.abs(end.x - start.x), thickness),
-        height: thickness,
-        horizontal: true,
-      })
-    } else {
-      segments.push({
-        left: start.x - thickness / 2,
-        top: Math.min(start.y, end.y),
-        width: thickness,
-        height: Math.max(Math.abs(end.y - start.y), thickness),
-        horizontal: false,
-      })
-    }
-  }
-
-  return segments
-}
-
-function getRouteMidpoint(points: { x: number; y: number }[]): { x: number; y: number } {
-  if (points.length <= 1) return points[0] ?? { x: 0, y: 0 }
-
-  let total = 0
-  for (let i = 1; i < points.length; i += 1) {
-    total += Math.abs(points[i].x - points[i - 1].x) + Math.abs(points[i].y - points[i - 1].y)
-  }
-
-  let remaining = total / 2
-  for (let i = 1; i < points.length; i += 1) {
-    const start = points[i - 1]
-    const end = points[i]
-    const segment = Math.abs(end.x - start.x) + Math.abs(end.y - start.y)
-    if (remaining <= segment) {
-      if (start.x === end.x) {
-        const direction = end.y >= start.y ? 1 : -1
-        return { x: start.x, y: start.y + remaining * direction }
-      }
-      const direction = end.x >= start.x ? 1 : -1
-      return { x: start.x + remaining * direction, y: start.y }
-    }
-    remaining -= segment
-  }
-
-  return points[points.length - 1]
-}
-
-function getRouteSignature(points: { x: number; y: number }[]): string {
-  const forward = points.map(point => `${point.x},${point.y}`).join('|')
-  const reverse = [...points].reverse().map(point => `${point.x},${point.y}`).join('|')
-  return forward < reverse ? forward : reverse
-}
-
-function getLaneOffsets(count: number): number[] {
-  if (count <= 1) return [0]
-  const offsets: number[] = []
-  if (count % 2 === 1) offsets.push(0)
-  let step = count % 2 === 1 ? 1 : 0.5
-  while (offsets.length < count) {
-    offsets.push(-step, step)
-    step += 1
-  }
-  return offsets.slice(0, count)
-}
-
-function offsetOrthogonalRoute(points: { x: number; y: number }[], offset: number): { x: number; y: number }[] {
-  if (!offset || points.length <= 1) return points
-
-  return points.map((point, index) => {
-    const prev = index > 0 ? points[index - 1] : null
-    const next = index < points.length - 1 ? points[index + 1] : null
-    const touchesHorizontal = (prev ? prev.y === point.y : false) || (next ? next.y === point.y : false)
-    const touchesVertical = (prev ? prev.x === point.x : false) || (next ? next.x === point.x : false)
-
-    return {
-      x: point.x + (touchesVertical ? offset : 0),
-      y: point.y + (touchesHorizontal ? offset : 0),
-    }
-  })
-}
-
-function formatGridBounds(bounds: TileSpatialReference['gridBounds']): string {
-  return `${bounds.left},${bounds.top} → ${bounds.right},${bounds.bottom}`
-}
-
-function findDiscoveryMatch(sourceTileId: string, tileList: TileState[], hiddenTileIds: Set<string>, gridStep: number, maxDistance: number): { sourceRef: TileSpatialReference; match: DiscoveryMatch | null } | null {
-  const sourceTile = tileList.find(tile => tile.id === sourceTileId)
-  if (!sourceTile || hiddenTileIds.has(sourceTile.id)) return null
-
-  const sourceRef = getTileSpatialReference(sourceTile, gridStep)
-  let bestCompatible: DiscoveryMatch | null = null
-  let bestFallback: DiscoveryMatch | null = null
-
-  for (const candidate of tileList) {
-    if (candidate.id === sourceTileId || hiddenTileIds.has(candidate.id)) continue
-    const sourceRect = { x: sourceTile.x, y: sourceTile.y, w: sourceTile.width, h: sourceTile.height }
-    const targetRect = { x: candidate.x, y: candidate.y, w: candidate.width, h: candidate.height }
-    if (rectsOverlap(sourceRect, targetRect)) continue
-
-    const targetRef = getTileSpatialReference(candidate, gridStep)
-    const anchorPair = findBestAnchorPair(sourceRef.anchors, targetRef.anchors)
-    if (!anchorPair || anchorPair.distance > maxDistance) continue
-
-    const candidateMatch: DiscoveryMatch = {
-      tile: candidate,
-      route: getOrthogonalRoute(anchorPair.source, anchorPair.target, gridStep),
-      distance: anchorPair.distance,
-      matchLabels: getCapabilityMatches(sourceRef.capabilities, targetRef.capabilities),
-      targetRef,
-    }
-
-    if (!bestFallback || candidateMatch.distance < bestFallback.distance) {
-      bestFallback = candidateMatch
-    }
-
-    if (candidateMatch.matchLabels.length && (!bestCompatible || candidateMatch.distance < bestCompatible.distance)) {
-      bestCompatible = candidateMatch
-    }
-  }
-
-  const match = bestCompatible ?? (bestFallback ? {
-    ...bestFallback,
-    matchLabels: bestFallback.matchLabels.length ? bestFallback.matchLabels : ['nearest'],
-  } : null)
-
-  return { sourceRef, match }
-}
-
 function App(): JSX.Element {
   useAutoHideScrollbars()
   const miniChatOptions = useMemo(() => readMiniChatOptions(), [])
@@ -922,7 +508,6 @@ function App(): JSX.Element {
   const [sidebarSelectedPath, setSidebarSelectedPath] = useState<string | null>(null)
   const [canvasArrangeMode, setCanvasArrangeMode] = useState<'grid' | 'column' | 'row' | null>(null)
   const [guides, setGuides] = useState<{ x?: number; y?: number }[]>([])
-  const [discoveryPulses, setDiscoveryPulses] = useState<DiscoveryPulse[]>([])
   const [autoConnectionsEnabled] = useState(false)
   const [canvasPointerWorld, setCanvasPointerWorld] = useState<{ x: number; y: number } | null>(null)
   const [hoveredConnectionHandle, setHoveredConnectionHandle] = useState<{ tileId: string; side: AnchorPoint['side'] } | null>(null)
@@ -1061,112 +646,6 @@ function App(): JSX.Element {
     })
   }, [openWorkspaceIds, workspace?.id, workspacePickerReturnWorkspaceId, workspaces, miniChatOptions])
 
-  // ─── Auto Agent Mode Effect ───────────────────────────────────────────────
-  // Automatically enables agentMode on chat tiles when they get close to compatible tiles
-  useEffect(() => {
-    if (miniChatOptions) return
-    if (!workspace?.id) return
-    if (!autoConnectionsEnabled) return
-    // Skip during drag operations to avoid lag
-    if (dragState.type !== null) return
-
-    const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
-    const maxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
-    const enableThreshold = maxDistance * PROXIMITY_ENABLE_DISTANCE
-    const disableThreshold = maxDistance * PROXIMITY_DISABLE_DISTANCE
-
-    // Find all chat tiles and their proximity status
-    const chatTileProximities = new Map<string, { hasMatch: boolean; distance: number }>()
-    
-    for (const tile of tiles) {
-      if (tile.type !== 'chat') continue
-      
-      const discovery = findDiscoveryMatch(tile.id, tiles, panelTileIdsRef.current, gridStep, maxDistance)
-      const hasCompatibleMatch = Boolean(
-        discovery?.match && discovery.match.matchLabels.length > 0
-          && !(discovery.match.matchLabels.length === 1 && discovery.match.matchLabels[0] === 'nearest')
-      )
-      if (!hasCompatibleMatch) {
-        chatTileProximities.set(tile.id, { hasMatch: false, distance: Infinity })
-      } else {
-        chatTileProximities.set(tile.id, { hasMatch: true, distance: discovery!.match!.distance })
-      }
-    }
-
-    // Clear existing debounce timer
-    if (proximityDebounceTimerRef.current) {
-      window.clearTimeout(proximityDebounceTimerRef.current)
-    }
-
-    // Debounce the state changes
-    proximityDebounceTimerRef.current = window.setTimeout(() => {
-      const autoEnabled = autoAgentModeTilesRef.current
-      const timers = autoAgentModeTimersRef.current
-      const now = Date.now()
-      let hasChanges = false
-      const newAutoEnabled = new Set(autoEnabled)
-
-      for (const [tileId, proximity] of chatTileProximities) {
-        const isAutoEnabled = autoEnabled.has(tileId)
-        const lastChange = timers.get(tileId) || 0
-        const timeSinceChange = now - lastChange
-
-        // Minimum time between toggles to prevent thrashing (1 second)
-        if (timeSinceChange < 1000) continue
-
-        if (!isAutoEnabled && proximity.hasMatch && proximity.distance <= enableThreshold) {
-          // Auto-enable agentMode
-          newAutoEnabled.add(tileId)
-          timers.set(tileId, now)
-          hasChanges = true
-          
-          // Update tile state
-          setTiles(prev => prev.map(t => {
-            if (t.id !== tileId) return t
-            return { ...t, autoAgentMode: true }
-          }))
-          
-          // Save tile state
-          void window.electron.canvas.saveTileState(workspace.id, tileId, {
-            agentMode: true,
-            autoAgentMode: true,
-          })
-          
-          console.log(`[AutoAgent] Enabled agentMode for ${tileId} (distance: ${Math.round(proximity.distance)}px)`)
-        } else if (isAutoEnabled && (!proximity.hasMatch || proximity.distance > disableThreshold)) {
-          // Auto-disable agentMode
-          newAutoEnabled.delete(tileId)
-          timers.set(tileId, now)
-          hasChanges = true
-          
-          // Update tile state
-          setTiles(prev => prev.map(t => {
-            if (t.id !== tileId) return t
-            return { ...t, autoAgentMode: false }
-          }))
-          
-          // Save tile state
-          void window.electron.canvas.saveTileState(workspace.id, tileId, {
-            agentMode: false,
-            autoAgentMode: false,
-          })
-          
-          console.log(`[AutoAgent] Disabled agentMode for ${tileId}`)
-        }
-      }
-
-      if (hasChanges) {
-        autoAgentModeTilesRef.current = newAutoEnabled
-      }
-    }, PROXIMITY_DEBOUNCE_MS)
-
-    return () => {
-      if (proximityDebounceTimerRef.current) {
-        window.clearTimeout(proximityDebounceTimerRef.current)
-      }
-    }
-  }, [autoConnectionsEnabled, tiles, dragState.type, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge, workspace?.id, miniChatOptions])
-
   const pasteTilesRef = useRef<(pos?: { x: number; y: number }, intoGroupId?: string) => void>(() => {})
   const duplicateTilesRef = useRef<(ids?: string[]) => void>(() => {})
   const copyTilesRef = useRef<(cut?: boolean) => void>(() => {})
@@ -1247,20 +726,22 @@ function App(): JSX.Element {
     flushDeferredCanvasPersist,
   } = canvasEngine
 
-  const discoveryTimeoutsRef = useRef<number[]>([])
-
-  // ─── Auto Agent Mode (proximity-based tile discovery) ─────────────────────
-  // Tracks which chat tiles have auto-enabled agentMode due to proximity
-  const autoAgentModeTilesRef = useRef<Set<string>>(new Set())
-  // Tracks timestamps for hysteresis (prevent rapid toggle at boundary)
-  const autoAgentModeTimersRef = useRef<Map<string, number>>(new Map())
-  // Debounce timer for batching proximity changes
-  const proximityDebounceTimerRef = useRef<number | null>(null)
-  // HYSTERESIS_GAP: disable threshold is larger than enable threshold to prevent thrashing
-  const PROXIMITY_ENABLE_DISTANCE = 0.8 // 80% of max distance
-  const PROXIMITY_DISABLE_DISTANCE = 1.0 // 100% of max distance
-  const PROXIMITY_DEBOUNCE_MS = 300
   const panelTileIdsRef = useRef<Set<string>>(new Set())
+  const { discoveryPulses, triggerDiscoveryPulse } = useDiscoveryPulses({
+    enabled: autoConnectionsEnabled,
+    settings,
+    panelTileIdsRef,
+  })
+  useAutoAgentProximity({
+    enabled: autoConnectionsEnabled,
+    miniChatMode: Boolean(miniChatOptions),
+    workspaceId: workspace?.id,
+    tiles,
+    dragActive: dragState.type !== null,
+    settings,
+    panelTileIdsRef,
+    setTiles,
+  })
   const spaceHeld = useRef(false)
   const canvasGlowEnabled = settings.canvasGlowEnabled
   const canvasGlowRadius = Math.max(50, Math.min(200, settings.canvasGlowRadius ?? 120))
@@ -1702,39 +1183,6 @@ function App(): JSX.Element {
     }
     exitExpandedMode()
   }, [exitExpandedMode])
-
-  const triggerDiscoveryPulse = useCallback((tileId: string, tileList: TileState[]) => {
-    if (!autoConnectionsEnabled) return
-    const gridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
-    const maxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
-    const discovery = findDiscoveryMatch(tileId, tileList, panelTileIdsRef.current, gridStep, maxDistance)
-    if (!discovery?.match) return
-
-    const sourceTile = tileList.find(tile => tile.id === tileId)
-    if (!sourceTile) return
-
-    const pulse: DiscoveryPulse = {
-      id: `pulse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      sourceTileId: sourceTile.id,
-      targetTileId: discovery.match.tile.id,
-      route: discovery.match.route,
-      startedAt: Date.now(),
-      durationMs: DISCOVERY_PULSE_DURATION_MS,
-      matchLabels: discovery.match.matchLabels,
-      sourceGridLabel: formatGridBounds(discovery.sourceRef.gridBounds),
-      targetGridLabel: formatGridBounds(discovery.match.targetRef.gridBounds),
-    }
-
-    setDiscoveryPulses(prev => {
-      const next = prev.filter(existing => !(existing.sourceTileId === pulse.sourceTileId && existing.targetTileId === pulse.targetTileId))
-      return [...next, pulse]
-    })
-
-    const timeout = window.setTimeout(() => {
-      setDiscoveryPulses(prev => prev.filter(existing => existing.id !== pulse.id))
-    }, pulse.durationMs + 180)
-    discoveryTimeoutsRef.current.push(timeout)
-  }, [autoConnectionsEnabled, settings.gridSize, settings.gridSpacingSmall, settings.gridSpacingLarge])
 
   const lockConnection = useLockConnection({
     persistCanvasState,
@@ -3132,14 +2580,7 @@ function App(): JSX.Element {
   // The discovery worker can't access the registry directly; we pass actions
   // alongside other inputs. extActionsVersion bumps whenever the registry
   // mutates so this memo re-runs.
-  const extActionsByTileId = React.useMemo(() => {
-    const m = new Map<string, string[]>()
-    for (const [tileId, actions] of extensionActionRegistry) {
-      m.set(tileId, actions.map(a => a.name))
-    }
-    return m
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [extActionsVersion])
+  const extActionsByTileId = React.useMemo(() => buildExtActionsByTileId(), [extActionsVersion])
 
   const discoveryGridStep = Math.max(8, settings.gridSize || settings.gridSpacingSmall || GRID)
   const discoveryMaxDistance = getDiscoveryMaxDistance(settings.gridSpacingLarge || DEFAULT_SETTINGS.gridSpacingLarge)
@@ -3839,11 +3280,6 @@ function App(): JSX.Element {
     if (!canvasGlowEnabled) hideCanvasGlow()
     return () => hideCanvasGlow()
   }, [canvasGlowEnabled, hideCanvasGlow])
-
-  useEffect(() => () => {
-    discoveryTimeoutsRef.current.forEach(timeout => window.clearTimeout(timeout))
-    discoveryTimeoutsRef.current = []
-  }, [])
 
   useEffect(() => {
     const root = document.documentElement
