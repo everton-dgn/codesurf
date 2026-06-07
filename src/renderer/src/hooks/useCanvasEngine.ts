@@ -20,6 +20,13 @@ import {
 import type { TileState, GroupState, CanvasState, Workspace } from '../../../shared/types'
 import type { PanelNode } from '../components/panelLayoutTree'
 import type { CanvasAnchorPoint, CanvasAnchorSide, CanvasDragState } from './useCanvasDragSync.ts'
+import {
+  applyCanvasHistoryRedo,
+  applyCanvasHistoryUndo,
+  buildCanvasHistoryEntry,
+  isEmptyCanvasHistoryEntry,
+  type CanvasHistoryEntry,
+} from './canvasHistory.ts'
 
 // ─── Canvas constants ───────────────────────────────────────────────────────
 
@@ -48,7 +55,7 @@ export type CanvasViewport = { tx: number; ty: number; zoom: number }
 
 export const DEFAULT_CANVAS_VIEWPORT: CanvasViewport = { tx: 0, ty: 0, zoom: 1 }
 
-export type CanvasHistoryEntry = { tiles: TileState[]; groups: GroupState[] }
+export type { CanvasHistoryEntry } from './canvasHistory.ts'
 
 export type PersistCanvasStateFn = (
   tileList: TileState[],
@@ -404,12 +411,17 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     const resolvedGroups = grps ?? refs.groupsRef.current
 
     if (!skipHistory.current) {
-      historyBack.current.push({
-        tiles: refs.tilesRef.current,
-        groups: refs.groupsRef.current,
-      })
-      if (historyBack.current.length > HISTORY_MAX_ENTRIES) historyBack.current.shift()
-      historyForward.current = []
+      const entry = buildCanvasHistoryEntry(
+        refs.tilesRef.current,
+        tileList,
+        refs.groupsRef.current,
+        resolvedGroups,
+      )
+      if (!isEmptyCanvasHistoryEntry(entry)) {
+        historyBack.current.push(entry)
+        if (historyBack.current.length > HISTORY_MAX_ENTRIES) historyBack.current.shift()
+        historyForward.current = []
+      }
     }
 
     persistCanvasState(tileList, vp, nz, resolvedGroups)
@@ -548,16 +560,25 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     return () => el.removeEventListener('wheel', onWheel)
   }, [canvasRef, viewport])
 
-  const applyHistoryEntry = useCallback((entry: CanvasHistoryEntry) => {
+  const applyHistoryEntry = useCallback((
+    entry: CanvasHistoryEntry,
+    direction: 'undo' | 'redo',
+  ) => {
     skipHistory.current = true
-    setTiles(entry.tiles)
-    setGroups(entry.groups)
+    const refs = persistRefsRef.current
+    const currentTiles = refs.tilesRef.current
+    const currentGroups = refs.groupsRef.current
+    const { tiles, groups } = direction === 'undo'
+      ? applyCanvasHistoryUndo(currentTiles, currentGroups, entry)
+      : applyCanvasHistoryRedo(currentTiles, currentGroups, entry)
+    setTiles(tiles)
+    setGroups(groups)
     if (workspace) {
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
         const state: CanvasState = {
-          tiles: entry.tiles,
-          groups: entry.groups,
+          tiles,
+          groups,
           viewport: viewportRef.current,
           nextZIndex: nextZIndexRef.current,
         }
@@ -571,23 +592,17 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
 
   const undoCanvas = useCallback(() => {
     if (historyBack.current.length === 0) return
-    const prev = historyBack.current.pop()!
-    historyForward.current.push({
-      tiles: persistRefsRef.current.tilesRef.current,
-      groups: persistRefsRef.current.groupsRef.current,
-    })
-    applyHistoryEntry(prev)
+    const entry = historyBack.current.pop()!
+    historyForward.current.push(entry)
+    applyHistoryEntry(entry, 'undo')
   }, [applyHistoryEntry])
 
   const redoCanvas = useCallback(() => {
     if (historyForward.current.length === 0) return
-    const next = historyForward.current.pop()!
-    historyBack.current.push({
-      tiles: persistRefsRef.current.tilesRef.current,
-      groups: persistRefsRef.current.groupsRef.current,
-    })
+    const entry = historyForward.current.pop()!
+    historyBack.current.push(entry)
     if (historyBack.current.length > HISTORY_MAX_ENTRIES) historyBack.current.shift()
-    applyHistoryEntry(next)
+    applyHistoryEntry(entry, 'redo')
   }, [applyHistoryEntry])
 
   persistCanvasStateRef.current = persistCanvasState

@@ -8,45 +8,14 @@ import {
 } from 'react'
 import type { TileState, GroupState } from '../../../shared/types'
 import type { CanvasViewport } from './useCanvasEngine.ts'
+import {
+  computeAlignmentGuides,
+  filterTilesForAlignmentGuides,
+  type AlignmentGuide,
+} from './canvasAlignment.ts'
 
-// ─── Alignment guides (canvas drag) ─────────────────────────────────────────
-
-export const ALIGN_GUIDE_THRESH = 6
-
-export type AlignmentGuide = { x?: number; y?: number }
-
-export function computeAlignmentGuides(
-  newX: number,
-  newY: number,
-  w: number,
-  h: number,
-  others: TileState[],
-): AlignmentGuide[] {
-  const newGuides: AlignmentGuide[] = []
-  for (const o of others) {
-    const dx_checks: [number, number][] = [
-      [newX, o.x], [newX, o.x + o.width / 2 - w / 2], [newX, o.x + o.width - w],
-      [newX + w / 2, o.x + o.width / 2], [newX + w, o.x], [newX + w, o.x + o.width],
-    ]
-    for (const [a, b] of dx_checks) {
-      if (Math.abs(a - b) < ALIGN_GUIDE_THRESH) newGuides.push({ x: b })
-    }
-    const dy_checks: [number, number][] = [
-      [newY, o.y], [newY, o.y + o.height / 2 - h / 2], [newY, o.y + o.height - h],
-      [newY + h / 2, o.y + o.height / 2], [newY + h, o.y], [newY + h, o.y + o.height],
-    ]
-    for (const [a, b] of dy_checks) {
-      if (Math.abs(a - b) < ALIGN_GUIDE_THRESH) newGuides.push({ y: b })
-    }
-  }
-  const seen = new Set<string>()
-  return newGuides.filter(g => {
-    const k = g.x !== undefined ? `x:${g.x}` : `y:${g.y}`
-    if (seen.has(k)) return false
-    seen.add(k)
-    return true
-  })
-}
+export type { AlignmentGuide } from './canvasAlignment.ts'
+export { ALIGN_GUIDE_THRESH, computeAlignmentGuides, filterTilesForAlignmentGuides } from './canvasAlignment.ts'
 
 // ─── Global canvas drag listeners ─────────────────────────────────────────────
 
@@ -268,7 +237,14 @@ export function useCanvasDragSync(options: UseCanvasDragSyncOptions): void {
             pending.tileId,
             ...pending.groupSnapshots.map(g => g.id),
           ])
-          const others = tilesRef.current.filter(t => !excludeIds.has(t.id))
+          const candidates = tilesRef.current.filter(t => !excludeIds.has(t.id))
+          const others = filterTilesForAlignmentGuides(
+            pending.newX,
+            pending.newY,
+            pending.width,
+            pending.height,
+            candidates,
+          )
           setGuides(computeAlignmentGuides(
             pending.newX,
             pending.newY,

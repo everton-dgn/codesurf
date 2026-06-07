@@ -32,94 +32,136 @@ const W = 160
 const H = 100
 const PAD = 20
 
+type MinimapTransform = {
+  minX: number
+  minY: number
+  scale: number
+  offX: number
+  offY: number
+}
+
+function getBounds(tiles: TileState[]) {
+  if (tiles.length === 0) return { minX: 0, minY: 0, maxX: 1000, maxY: 600 }
+  const minX = Math.min(...tiles.map(t => t.x)) - PAD
+  const minY = Math.min(...tiles.map(t => t.y)) - PAD
+  const maxX = Math.max(...tiles.map(t => t.x + t.width)) + PAD
+  const maxY = Math.max(...tiles.map(t => t.y + t.height)) + PAD
+  return { minX, minY, maxX, maxY }
+}
+
+function getTransform(tiles: TileState[]): MinimapTransform {
+  const { minX, minY, maxX, maxY } = getBounds(tiles)
+  const worldW = maxX - minX
+  const worldH = maxY - minY
+  const scale = Math.min(W / worldW, H / worldH) * 0.9
+  const offX = (W - worldW * scale) / 2 - minX * scale
+  const offY = (H - worldH * scale) / 2 - minY * scale
+  return { minX, minY, scale, offX, offY }
+}
+
+function drawTilesLayer(ctx: CanvasRenderingContext2D, tiles: TileState[], transform: MinimapTransform) {
+  const { scale, offX, offY } = transform
+  ctx.clearRect(0, 0, W, H)
+  for (const tile of tiles) {
+    const x = tile.x * scale + offX
+    const y = tile.y * scale + offY
+    const w = Math.max(2, tile.width * scale)
+    const h = Math.max(2, tile.height * scale)
+    ctx.fillStyle = TILE_COLORS[tile.type] + '88'
+    ctx.strokeStyle = TILE_COLORS[tile.type] + 'cc'
+    ctx.lineWidth = 0.5
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, h, 1)
+    ctx.fill()
+    ctx.stroke()
+  }
+}
+
 export function Minimap({ tiles, viewport, canvasSize, onPan }: Props): JSX.Element | null {
   const theme = useTheme()
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const tilesLayerRef = useRef<HTMLCanvasElement | null>(null)
+  const transformRef = useRef<MinimapTransform | null>(null)
+  const viewportRafRef = useRef<number | null>(null)
   const dragging = useRef(false)
 
-  const getBounds = useCallback(() => {
-    if (tiles.length === 0) return { minX: 0, minY: 0, maxX: 1000, maxY: 600 }
-    const minX = Math.min(...tiles.map(t => t.x)) - PAD
-    const minY = Math.min(...tiles.map(t => t.y)) - PAD
-    const maxX = Math.max(...tiles.map(t => t.x + t.width)) + PAD
-    const maxY = Math.max(...tiles.map(t => t.y + t.height)) + PAD
-    return { minX, minY, maxX, maxY }
+  const getViewportColor = useCallback(() => {
+    const css = getComputedStyle(document.documentElement)
+    return css.getPropertyValue('--cs-th-text-primary').trim() || theme.text.primary
+  }, [theme.text.primary])
+
+  const paintTilesLayer = useCallback(() => {
+    const layer = tilesLayerRef.current
+    if (!layer) return
+    const ctx = layer.getContext('2d')
+    if (!ctx) return
+    const transform = getTransform(tiles)
+    transformRef.current = transform
+    const dpr = window.devicePixelRatio || 1
+    layer.width = W * dpr
+    layer.height = H * dpr
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    drawTilesLayer(ctx, tiles, transform)
   }, [tiles])
 
-  useEffect(() => {
+  const paintViewport = useCallback(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    const layer = tilesLayerRef.current
+    const transform = transformRef.current
+    if (!canvas || !layer || !transform) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-
     const dpr = window.devicePixelRatio || 1
     canvas.width = W * dpr
     canvas.height = H * dpr
-    ctx.scale(dpr, dpr)
-
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, W, H)
-
-    const { minX, minY, maxX, maxY } = getBounds()
-    const worldW = maxX - minX
-    const worldH = maxY - minY
-    const scale = Math.min(W / worldW, H / worldH) * 0.9
-    const offX = (W - worldW * scale) / 2 - minX * scale
-    const offY = (H - worldH * scale) / 2 - minY * scale
-
-    // Draw tiles
-    for (const t of tiles) {
-      const x = t.x * scale + offX
-      const y = t.y * scale + offY
-      const w = Math.max(2, t.width * scale)
-      const h = Math.max(2, t.height * scale)
-      ctx.fillStyle = TILE_COLORS[t.type] + '88'
-      ctx.strokeStyle = TILE_COLORS[t.type] + 'cc'
-      ctx.lineWidth = 0.5
-      ctx.beginPath()
-      ctx.roundRect(x, y, w, h, 1)
-      ctx.fill()
-      ctx.stroke()
-    }
-
-    // Draw viewport rect
+    ctx.drawImage(layer, 0, 0, W, H)
+    const { scale, offX, offY } = transform
     const vx = (-viewport.tx / viewport.zoom) * scale + offX
     const vy = (-viewport.ty / viewport.zoom) * scale + offY
     const vw = (canvasSize.w / viewport.zoom) * scale
     const vh = (canvasSize.h / viewport.zoom) * scale
-    // Viewport rect anchored on text.primary so it tracks contrast.
-    // Canvas2D doesn't accept color-mix(), so we read the resolved CSS
-    // variable off documentElement. Falls back to text.primary string if
-    // the var hasn't been published yet (first paint).
-    const css = getComputedStyle(document.documentElement)
-    const tp = css.getPropertyValue('--cs-th-text-primary').trim() || theme.text.primary
-    ctx.strokeStyle = withAlpha(tp, 0.3)
+    const viewportColor = getViewportColor()
+    ctx.strokeStyle = withAlpha(viewportColor, 0.3)
     ctx.lineWidth = 1
     ctx.strokeRect(vx, vy, vw, vh)
-    ctx.fillStyle = withAlpha(tp, 0.04)
+    ctx.fillStyle = withAlpha(viewportColor, 0.04)
     ctx.fillRect(vx, vy, vw, vh)
-  }, [tiles, viewport, canvasSize, getBounds, theme.text.primary])
+  }, [canvasSize, getViewportColor, viewport])
+
+  useEffect(() => {
+    if (!tilesLayerRef.current) {
+      tilesLayerRef.current = document.createElement('canvas')
+    }
+    paintTilesLayer()
+  }, [paintTilesLayer])
+
+  useEffect(() => {
+    if (viewportRafRef.current !== null) cancelAnimationFrame(viewportRafRef.current)
+    viewportRafRef.current = requestAnimationFrame(() => {
+      viewportRafRef.current = null
+      paintViewport()
+    })
+    return () => {
+      if (viewportRafRef.current !== null) cancelAnimationFrame(viewportRafRef.current)
+    }
+  }, [paintViewport, viewport.tx, viewport.ty, viewport.zoom, canvasSize.w, canvasSize.h, theme.text.primary, tiles])
 
   const panTo = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    const transform = transformRef.current
+    if (!canvas || !transform) return
     const rect = canvas.getBoundingClientRect()
     const mx = (clientX - rect.left) * (W / rect.width)
     const my = (clientY - rect.top) * (H / rect.height)
-
-    const { minX, minY, maxX, maxY } = getBounds()
-    const worldW = maxX - minX
-    const worldH = maxY - minY
-    const scale = Math.min(W / worldW, H / worldH) * 0.9
-    const offX = (W - worldW * scale) / 2 - minX * scale
-    const offY = (H - worldH * scale) / 2 - minY * scale
-
+    const { scale, offX, offY } = transform
     const worldX = (mx - offX) / scale
     const worldY = (my - offY) / scale
-
     const newTx = canvasSize.w / 2 - worldX * viewport.zoom
     const newTy = canvasSize.h / 2 - worldY * viewport.zoom
     onPan(newTx, newTy)
-  }, [getBounds, canvasSize, viewport.zoom, onPan])
+  }, [canvasSize, onPan, viewport.zoom])
 
   if (tiles.length === 0) return null
 
