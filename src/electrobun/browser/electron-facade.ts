@@ -104,6 +104,7 @@ export function getDefaultElectrobunInvokeResponse(channel: string): unknown {
   if (channel === 'window:getCurrentId') return 1
   if (channel === 'zoom:getLevel') return 0
   if (channel === 'mcp:getPort') return null
+  if (channel === 'mcp:getToken') return ''
   if (channel === 'mcp:getWorkspaceServers') return {}
   if (channel === 'mcp:saveWorkspaceServers') return {}
   if (channel === 'system:memStats') return { heapUsed: 0, heapTotal: 0, rss: 0 }
@@ -423,6 +424,7 @@ export function createElectrobunElectronFacade(options: FacadeOptions): any {
     },
     mcp: {
       getPort: makeInvoker(invoke, 'mcp:getPort'),
+      getToken: makeInvoker(invoke, 'mcp:getToken'),
       getConfig: makeInvoker(invoke, 'mcp:getConfig'),
       saveServers: makeInvoker(invoke, 'mcp:saveServers'),
       getWorkspaceServers: makeInvoker(invoke, 'mcp:getWorkspaceServers'),

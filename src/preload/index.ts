@@ -407,6 +407,7 @@ contextBridge.exposeInMainWorld('electron', {
   // MCP server
   mcp: {
     getPort: () => ipcRenderer.invoke('mcp:getPort'),
+    getToken: () => ipcRenderer.invoke('mcp:getToken') as Promise<string>,
     getConfig: () => ipcRenderer.invoke('mcp:getConfig'),
     saveServers: (servers: Record<string, unknown>) => ipcRenderer.invoke('mcp:saveServers', servers),
     getWorkspaceServers: (workspaceId: string) => ipcRenderer.invoke('mcp:getWorkspaceServers', workspaceId),

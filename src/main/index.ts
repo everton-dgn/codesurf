@@ -8,7 +8,7 @@ import { initWorkspaces, registerWorkspaceIPC, migrateGenerationKeysToKeychain }
 import { registerFsIPC } from './ipc/fs'
 import { registerCanvasIPC } from './ipc/canvas'
 import { registerTerminalIPC } from './ipc/terminal'
-import { startMCPServer, getMCPPort, setExtensionRegistryProvider } from './mcp-server'
+import { startMCPServer, getMCPPort, getMCPToken, setExtensionRegistryProvider } from './mcp-server'
 import { registerAgentsIPC } from './ipc/agents'
 import { registerStreamIPC } from './ipc/stream'
 import { registerGitIPC } from './ipc/git'
@@ -732,8 +732,10 @@ app.whenReady().then(async () => {
     console.log(`[MCP] Kanban tools available at http://127.0.0.1:${port}`)
   }).catch(err => console.error('[MCP] Failed to start:', err))
 
-  // Expose MCP port to renderer
+  // Expose MCP port + bearer token to renderer (token stays in main; renderer
+  // uses it only for loopback HTTP calls that cannot set EventSource headers).
   ipcMain.handle('mcp:getPort', () => getMCPPort())
+  ipcMain.handle('mcp:getToken', () => getMCPToken())
 
   // MCP config read/write
   const { join: pjoin } = await import('path')

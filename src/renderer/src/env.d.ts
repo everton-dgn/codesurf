@@ -55,6 +55,7 @@ interface ElectronAPI {
   }
   mcp?: {
     getPort(): Promise<number>
+    getToken(): Promise<string>
     getConfig(): Promise<unknown>
     saveServers(servers: Record<string, unknown>): Promise<void>
     getWorkspaceServers(workspaceId: string): Promise<Record<string, unknown>>

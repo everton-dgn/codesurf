@@ -427,9 +427,27 @@ function isSensitiveMcpRoute(method: string | undefined, isEvents: boolean): boo
   return method === 'POST'
 }
 
-export function requireMcpAuth(req: IncomingMessage, res: ServerResponse): boolean {
+function readBearerToken(req: IncomingMessage): string | null {
   const auth = req.headers.authorization ?? ''
-  if (auth !== `Bearer ${MCP_TOKEN}`) {
+  if (!auth.startsWith('Bearer ')) return null
+  return auth.slice('Bearer '.length)
+}
+
+function readQueryToken(url: URL): string | null {
+  return url.searchParams.get('token') ?? url.searchParams.get('access_token')
+}
+
+export function requireMcpAuth(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options?: { allowQueryToken?: boolean, url?: URL },
+): boolean {
+  const bearer = readBearerToken(req)
+  const queryToken = options?.allowQueryToken && options.url
+    ? readQueryToken(options.url)
+    : null
+  const token = bearer ?? queryToken
+  if (token !== MCP_TOKEN) {
     setCorsHeaders(res, req)
     res.writeHead(401, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Unauthorized' }))
@@ -478,7 +496,10 @@ export async function startMCPServer(): Promise<number> {
         return
       }
 
-      if (isSensitiveMcpRoute(req.method, isEvents) && !requireMcpAuth(req, res)) {
+      if (
+        isSensitiveMcpRoute(req.method, isEvents)
+        && !requireMcpAuth(req, res, { allowQueryToken: isEvents, url })
+      ) {
         return
       }
 

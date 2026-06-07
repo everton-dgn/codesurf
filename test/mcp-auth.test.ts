@@ -168,6 +168,28 @@ describe('MCP HTTP auth gates', () => {
     assert.deepEqual(JSON.parse(res.body), { error: 'Unauthorized' })
   })
 
+  test('GET /events accepts token query param for EventSource clients', async () => {
+    const token = getMCPToken()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 2_000)
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/events?card_id=global&token=${encodeURIComponent(token)}`, {
+        method: 'GET',
+        headers: { host: `127.0.0.1:${port}` },
+        signal: controller.signal,
+      })
+      assert.equal(res.status, 200)
+      const reader = res.body?.getReader()
+      assert.ok(reader)
+      const first = await reader.read()
+      const chunk = new TextDecoder().decode(first.value ?? new Uint8Array())
+      assert.match(chunk, /:connected/)
+      await reader.cancel()
+    } finally {
+      clearTimeout(timeout)
+    }
+  })
+
   test('POST /push with valid Bearer succeeds', async () => {
     const token = getMCPToken()
     const res = await request(port, {

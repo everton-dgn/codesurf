@@ -529,9 +529,12 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
   // Subscribe to SSE stream from MCP server
   useEffect(() => {
     let es: EventSource | null = null
-    window.electron?.mcp?.getPort?.().then((port: number | null) => {
+    void (async () => {
+      const port = await window.electron?.mcp?.getPort?.()
       if (!port) return
-      es = new EventSource(`http://127.0.0.1:${port}/events?card_id=global`)
+      const { openMcpEventSource } = await import('../utils/mcpHttp')
+      es = await openMcpEventSource(port, 'global')
+      if (!es) return
       const handle = (e: MessageEvent) => {
         try {
           const { cardId, ...rest } = JSON.parse(e.data)
@@ -541,7 +544,7 @@ export function KanbanTile({ tileId, workspaceId, workspaceDir, width: _width, h
       ;['card_complete','card_update','card_error','canvas_event'].forEach(ev => {
         es!.addEventListener(ev, handle as EventListener)
       })
-    })
+    })()
     return () => es?.close()
   }, [handleKanbanEvent])
 

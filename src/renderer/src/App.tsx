@@ -2238,13 +2238,16 @@ function App(): JSX.Element {
       }
       if (event === 'canvas_list_tiles') {
         const tileList = tiles.map(t => ({ id: t.id, type: t.type, filePath: t.filePath, x: t.x, y: t.y }))
-        ;(window as any).electron?.mcp?.getPort?.().then((port: number | null) => {
+        void (async () => {
+          const port = await (window as any).electron?.mcp?.getPort?.()
           if (!port) return
-          fetch(`http://127.0.0.1:${port}/push`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ card_id: 'global', event: 'canvas_tiles_response', data: { tiles: tileList } })
+          const { postMcpEndpoint } = await import('./utils/mcpHttp')
+          await postMcpEndpoint(port, '/push', {
+            card_id: 'global',
+            event: 'canvas_tiles_response',
+            data: { tiles: tileList },
           }).catch(() => {})
-        })
+        })()
       }
     })
     return cleanup
