@@ -6,10 +6,7 @@ import type {
 import { basename, getDroppedPaths, isImagePath } from '../utils/dnd'
 
 import { CODESURF_OPEN_CHAT_SURFACE_EVENT, normalizeOpenChatSurfaceDetail } from '../utils/appLaunchRequests'
-import {
-  ArrowUp, ArrowDown, Square, Bot,
-  Brain, Maximize2, Mic, Plus
-} from 'lucide-react'
+import { ArrowDown } from 'lucide-react'
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useMCPServers } from '../hooks/useMCPServers'
 import { useAutoSpeak, bargeIn } from '../hooks/useAutoSpeak'
@@ -42,18 +39,16 @@ import { setChatStreaming } from './chatStreamingStore'
 import { setTileTodos, clearTileTodos, useTileTodos, type TileTodoItem } from '../state/tileTodosStore'
 import { CUSTOMISATION_LOCATIONS_CHANGED_EVENT, type CustomisationLocationsChangedDetail } from './CustomisationTile'
 import { PlanPane } from './chat/PlanPane'
-import { PlanChip } from './chat/PlanChip'
+import { ChatTileComposer } from './chat/ChatTileComposer'
 
 import { ToolPermissionProvider } from './ai-elements/ToolPermission'
 import { handleBasicChatSurfaceRpc } from './chatSurfaceHostRpc'
 import { DREAM_TOOL_ID_PREFIX, DREAM_TOOL_NAME } from './chat/dreamToolActions'
 import { CHAT_STREAM_FLUSH_INTERVAL_MS } from './chat/largeContent'
-import { ChatComposerAttachments, ChatComposerAutocompletePopup, ChatComposerBranchMenu, ChatComposerCard, ChatComposerContextUsageDial, ChatComposerInput, ChatComposerLocationMenu, ChatComposerModeMenu, ChatComposerPrimaryToolbar, ChatComposerProjectPathButton, ChatComposerSecondaryToolbar, ChatComposerSurfaceHost, ChatComposerVoiceStatus, ChatComposerWrap } from './chat/ChatComposer'
 import { useChatAutocomplete, CHAT_SLASH_COMMANDS, type AutocompleteItem } from '../hooks/useChatAutocomplete'
 import { useContributions } from '../hooks/useContributions'
 import { type PaletteCommand } from '../lib/commandRegistry'
-import { ToolbarBtn, ToolbarPill } from './chat/ChatComposerControls'
-import { ComposerInsertMenu, Dropdown, DropdownItem, MenuPortal, ModelDropdown, type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
+import { type ChatSurfaceMenuEntry } from './chat/ChatComposerMenus'
 import {
   AskUserQuestionContext,
   AskUserQuestionFontsContext,
@@ -61,12 +56,9 @@ import {
 import {
   ThinkingBlockView,
   WorkingChipView,
-  StreamingLivenessIndicator,
   parsePlanToolTodos,
 } from './chat/ToolBlockView'
 import {
-  ThinkingIcon,
-  renderChatSurfaceIcon,
   normalizeChatSurfaceMenuEntry,
   ensureChatMdStyle,
 } from './chat/ChatTileViews'
@@ -79,11 +71,8 @@ import {
 
   CHAT_COMPOSER_WIDTH,
   CHAT_COMPOSER_MIN_WIDTH_STYLE,
-  CHAT_COMPOSER_MIN_HEIGHT,
   CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT,
 
-  TOOLBAR_ICON_SIZE,
-  TOOLBAR_PILL_ICON_SIZE,
   LIVE_TOOL_COLLAPSE_GRACE_MS,
 } from './chat/chatTileLayout'
 import { FontCtx } from './chat/chatTileContexts'
@@ -2527,420 +2516,138 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           }}
         />
 
-        {/* Input bar */}
-        <ChatComposerWrap style={{
-          flexShrink: 0,
-          width: CHAT_COMPOSER_WIDTH,
-          minWidth: CHAT_COMPOSER_MIN_WIDTH_STYLE,
-          margin: isStartScreen ? '12px auto 6px auto' : '0 auto 6px auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-        }}>
-        <ChatComposerCard style={{
-        minHeight: CHAT_COMPOSER_MIN_HEIGHT,
-        border: isDropTarget ? `1px solid ${theme.accent.base}` : `1px solid ${composerBorder}`, borderRadius: 14,
-        // Keep the fill on the actual input surface. The dimensional edge is
-        // handled by ChatComposerCard's stacked shadow, not by painting a gray
-        // border colour across the whole composer.
-        background: isDropTarget ? theme.surface.accentSoft : composerBackground,
-        position: 'relative',
-        display: 'flex',
-        flexDirection: 'column',
-        boxShadow: isDropTarget
-          ? `0 0 0 1px ${theme.border.accent}, 0 0 22px ${theme.accent.soft}`
-          : theme.mode === 'light'
-            ? `0 0 0 0.5px color-mix(in srgb, ${theme.text.primary} 12%, transparent), 0 10px 28px color-mix(in srgb, ${theme.text.primary} 9%, transparent)`
-            : `0 10px 28px color-mix(in srgb, #000 18%, transparent)`,
-        transition: 'border-color 120ms ease, background 120ms ease, box-shadow 120ms ease',
-      }}>
-        <ChatComposerAutocompletePopup
-          popupRef={acRef}
-          autocompleteType={acType}
-          query={acQuery}
-          items={acItems}
-          activeIndex={acIndex}
+        <ChatTileComposer
+          isStartScreen={isStartScreen}
+          isDropTarget={isDropTarget}
+          composerBackground={composerBackground}
+          composerBorder={composerBorder}
+          acRef={acRef}
+          acType={acType}
+          acQuery={acQuery}
+          acItems={acItems}
+          acIndex={acIndex}
           fontSans={fontSans}
           fontMono={fontMono}
-          onHoverIndex={setAcIndex}
-          onSelect={selectAcItem}
-        />
-
-        <ChatComposerVoiceStatus
+          onAcHoverIndex={setAcIndex}
+          onAcSelect={selectAcItem}
           isDictating={isDictating}
           dictationText={dictationText}
           dictationError={dictationError}
           ttsState={ttsState}
           onStopVoicePlayback={() => bargeIn()}
-        />
-
-        <ChatComposerSurfaceHost
-          surfaces={openChatSurfaces}
-          activeSurface={activeChatSurface}
-          fontMono={fontMono}
-          showBuilderEnhance={activeChatSurface?.extId === 'sketch' && chatSurfaceMenu.some(entry => entry.extId === 'builder' || entry.surfaceId === 'builder')}
-          renderSurfaceIcon={renderChatSurfaceIcon}
+          openChatSurfaces={openChatSurfaces}
+          activeChatSurface={activeChatSurface}
+          chatSurfaceMenu={chatSurfaceMenu}
           onActivateSurface={setActiveChatSurfaceId}
           onCloseSurface={closeChatSurface}
           onOpenBuilderFromSketch={() => { void openBuilderFromSketch() }}
           onSetSurfaceIframeRef={setChatSurfaceIframeRef}
-        />
-
-        <ChatComposerAttachments
           attachments={attachments}
-          fontMono={fontMono}
           onRemoveAttachment={removeAttachment}
-        />
-
-        <ChatComposerInput
           textareaRef={textareaRef}
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onKeyUp={handleKeyUp}
-          placeholder={isDictating ? 'Listening...' : 'Message the agent, or use /commands and /skills'}
+          input={input}
           fontSize={fontSize}
-          fontFamily={fontSans}
-          lineHeight={fontLineHeight}
-          minHeight={CHAT_COMPOSER_TEXTAREA_MIN_HEIGHT}
-          textColor={theme.chat.text}
+          fontLineHeight={fontLineHeight}
+          onInputChange={handleInputChange}
+          onInputKeyDown={handleKeyDown}
+          onInputKeyUp={handleKeyUp}
+          insertMenuRef={insertMenuRef}
+          showInsertMenu={showInsertMenu}
+          onToggleMenu={toggleMenu}
+          onAttachFiles={openAttachmentPicker}
+          mcpEnabled={mcpEnabled}
+          onToggleMcpEnabled={() => setMcpEnabled(v => !v)}
+          mcpServers={mcpServers}
+          disabledServers={disabledServers}
+          setDisabledServers={setDisabledServers}
+          peerToolNames={peerToolNames}
+          onOpenChatSurface={openChatSurface}
+          showProviderPicker={messages.length === 0}
+          providerMenuRef={providerMenuRef}
+          showProviderMenu={showProviderMenu}
+          providerEntries={providerEntries}
+          provider={provider}
+          onProviderChange={handleProviderChange}
+          modelMenuRef={modelMenuRef}
+          showModelMenu={showModelMenu}
+          currentProviderEntry={currentProviderEntry}
+          currentModelLabel={currentModel.label}
+          model={model}
+          modelFilter={modelFilter}
+          onModelFilterChange={setModelFilter}
+          optionNoun={optionNoun}
+          onSelectModel={(id) => { setModel(id); setShowModelMenu(false); setModelFilter('') }}
+          thinkingMenuRef={thinkingMenuRef}
+          showThinkingMenu={showThinkingMenu}
+          thinking={thinking}
+          thinkingOptions={thinkingOptions}
+          onSelectThinking={(id) => { setThinking(id); setShowThinkingMenu(false) }}
+          onOpenMiniChat={openMiniChat}
+          isStreaming={isStreaming}
+          lastActivityAtRef={lastActivityAtRef}
+          onToggleDictation={toggleDictation}
+          hasSendableDraft={hasSendableDraft}
+          onStopStreaming={stopStreaming}
+          onSendMessage={sendMessage}
+          locationMenuRef={locationMenuRef}
+          showLocationMenu={showLocationMenu}
+          executionTarget={executionTarget}
+          locationLabel={locationLabel}
+          localExecutionLabel={localExecutionLabel}
+          normalizedRepoRoot={normalizedRepoRoot}
+          remoteHosts={remoteHosts}
+          activeCloudHost={activeCloudHost}
+          onSelectLocalExecution={() => {
+            setExecutionTarget('local')
+            setShowLocationMenu(false)
+          }}
+          onSelectCloudExecution={() => {
+            if (remoteHosts.length > 0) {
+              setExecutionTarget('cloud')
+              setCloudHostId(activeCloudHost?.id ?? remoteHosts[0].id)
+            }
+            setShowLocationMenu(false)
+          }}
+          onSelectRemoteHost={hostId => {
+            setExecutionTarget('cloud')
+            setCloudHostId(hostId)
+            setShowLocationMenu(false)
+          }}
+          branchMenuRef={branchMenuRef}
+          showBranchMenu={showBranchMenu}
+          isGitRepo={isGitRepo}
+          filteredBranches={filteredBranches}
+          branchFilter={branchFilter}
+          branchMenuCreateEnabled={branchMenuCreateEnabled}
+          currentBranchLabel={currentBranchLabel}
+          projectFolderName={projectFolderName}
+          changedCount={gitStatus.changedCount}
+          onBranchFilterChange={setBranchFilter}
+          onSelectBranch={handleBranchSelect}
+          onCreateBranch={handleCreateBranch}
+          activeProjectPathLabel={activeProjectPathLabel}
+          onProjectFolderSwitch={handleProjectFolderSwitch}
+          modeMenuRef={modeMenuRef}
+          showModeMenu={showModeMenu}
+          mode={mode}
+          currentMode={currentMode}
+          modeOptions={modeOptions}
+          onSelectMode={modeId => {
+            setMode(modeId)
+            onChatModePreferenceChange?.(provider, modeId)
+            setShowModeMenu(false)
+          }}
+          planTodos={planTodos}
+          isPlanOpen={isPlanOpen}
+          onTogglePlanOpen={() => setIsPlanOpen(v => !v)}
+          contextMenuRef={contextMenuRef}
+          showContextMenu={showContextMenu}
+          contextUsageRatio={contextUsageRatio}
+          contextUsagePercent={contextUsagePercent}
+          estimatedContextTokens={estimatedContextTokens}
+          contextWindowLimit={contextWindowLimit}
+          systemOverheadTokens={systemOverheadTokens}
         />
-
-        {/* Primary toolbar */}
-        <ChatComposerPrimaryToolbar>
-          {/* Insert menu */}
-          <div ref={insertMenuRef} style={{ position: 'relative' }}>
-            <button
-              type="button"
-              aria-label="Open attachments and tools menu"
-              title="Open attachments and tools menu"
-              onClick={() => toggleMenu('insert')}
-              onMouseDown={e => e.preventDefault()}
-              style={{
-                width: 28,
-                height: 28,
-                minWidth: 28,
-                borderRadius: '50%',
-                border: 'none',
-                background: 'transparent',
-                color: showInsertMenu ? theme.chat.text : theme.chat.muted,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 0,
-                transition: 'background 0.15s, color 0.15s',
-                flexShrink: 0,
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.color = theme.chat.text
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = 'transparent'
-                e.currentTarget.style.color = showInsertMenu ? theme.chat.text : theme.chat.muted
-              }}
-            >
-              <Plus size={16} strokeWidth={2.2} />
-            </button>
-            {showInsertMenu && (
-              <MenuPortal anchorRef={insertMenuRef}>
-                <ComposerInsertMenu
-                  onAttachFiles={openAttachmentPicker}
-                  mcpEnabled={mcpEnabled}
-                  onToggleMcpEnabled={() => setMcpEnabled(v => !v)}
-                  mcpServers={mcpServers}
-                  disabledServers={disabledServers}
-                  setDisabledServers={setDisabledServers}
-                  peerToolNames={peerToolNames}
-                  chatSurfaces={chatSurfaceMenu}
-                  activeChatSurfaceId={activeChatSurface ? `${activeChatSurface.extId}:${activeChatSurface.surfaceId}` : null}
-                  onOpenChatSurface={openChatSurface}
-                  renderChatSurfaceIcon={renderChatSurfaceIcon}
-                />
-              </MenuPortal>
-            )}
-          </div>
-
-          {/* Provider — shown only before the conversation starts. Different
-              CLI agents have incompatible session formats (Claude SDK session
-              resumption vs. Codex subprocess streams vs. OpenCode HTTP), so
-              swapping mid-conversation would break history continuity. The
-              current provider is still implicit in the Model pill's icon.
-              Clear the conversation to expose the picker again. */}
-          {messages.length === 0 && (
-            <div ref={providerMenuRef} style={{ position: 'relative' }}>
-              <ToolbarPill
-                prefix={currentProviderEntry?.icon ?? <Bot size={TOOLBAR_PILL_ICON_SIZE} />}
-                label={currentProviderEntry?.label ?? 'Provider'}
-                active={showProviderMenu}
-                onClick={() => toggleMenu('provider')}
-                title="Choose the CLI agent (hidden once the conversation starts)"
-              />
-              {showProviderMenu && (
-                <MenuPortal anchorRef={providerMenuRef}>
-                  <Dropdown>
-                    {providerEntries.map(entry => (
-                      <DropdownItem
-                        key={entry.id}
-                        icon={entry.icon}
-                        label={entry.label}
-                        sublabel={entry.description}
-                        active={provider === entry.id}
-                        onClick={() => handleProviderChange(entry.id)}
-                      />
-                    ))}
-                  </Dropdown>
-                </MenuPortal>
-              )}
-            </div>
-          )}
-
-          {/* Model */}
-          <div ref={modelMenuRef} style={{ position: 'relative' }}>
-            <ToolbarPill
-              prefix={currentProviderEntry?.icon ?? <Bot size={TOOLBAR_PILL_ICON_SIZE} />}
-              label={currentModel.label}
-              active={showModelMenu}
-              onClick={() => toggleMenu('model')}
-            />
-            {showModelMenu && (
-              <MenuPortal anchorRef={modelMenuRef}>
-                <ModelDropdown
-                  models={currentProviderEntry?.models ?? []}
-                  activeId={model}
-                  filter={modelFilter}
-                  onFilterChange={setModelFilter}
-                  providerIcon={currentProviderEntry?.icon ?? <Bot size={TOOLBAR_PILL_ICON_SIZE} />}
-                  noun={optionNoun}
-                  onSelect={(id) => { setModel(id); setShowModelMenu(false); setModelFilter('') }}
-                />
-              </MenuPortal>
-            )}
-          </div>
-
-          {/* Thinking — brain + signal bars icon, label in dropdown */}
-          <div ref={thinkingMenuRef} style={{ position: 'relative' }}>
-            <ToolbarBtn
-              icon={<ThinkingIcon level={thinking} />}
-              tooltip={`Thinking: ${thinkingOptions.find(t => t.id === thinking)?.label ?? 'Adaptive'}`}
-              color={thinking === 'none' ? theme.chat.muted : theme.chat.textSecondary}
-              onClick={() => toggleMenu('thinking')}
-            />
-            {showThinkingMenu && (
-              <MenuPortal anchorRef={thinkingMenuRef}>
-                <Dropdown>
-                  {thinkingOptions.map(t => (
-                    <DropdownItem
-                      key={t.id}
-                      icon={<Brain size={11} />}
-                      label={t.label}
-                      sublabel={t.description}
-                      active={thinking === t.id}
-                      onClick={() => { setThinking(t.id); setShowThinkingMenu(false) }}
-                    />
-                  ))}
-                </Dropdown>
-              </MenuPortal>
-            )}
-          </div>
-
-          <div style={{ marginLeft: 'auto' }}>
-          <ToolbarBtn
-            icon={<Maximize2 size={TOOLBAR_ICON_SIZE - 1} />}
-            tooltip="Open this chat in a mini window"
-            color={theme.chat.textSecondary}
-            onClick={openMiniChat}
-          />
-          </div>
-
-          {/* Subtle liveness indicator — a breathing dot that sits next to the
-              Stop button while streaming. If the server has been quiet for
-              >2.5s we also surface a tiny "Xs" counter so the user knows the
-              turn is still alive even when nothing visible has changed. */}
-          {isStreaming && <StreamingLivenessIndicator lastActivityAtMs={lastActivityAtRef.current} />}
-
-          {/* Voice dictation — sits next to send/stop. Click toggles, or
-              hold spacebar in the empty composer for push-to-talk. The
-              underlying recognizer is the existing toggleDictation/isDictating
-              flow (Web Speech API in Electron's Chromium). */}
-          {!isStreaming && (
-            <button
-              onClick={toggleDictation}
-              onMouseDown={e => e.preventDefault()}
-              style={{
-                width: 28, height: 28, minWidth: 28, borderRadius: '50%',
-                background: isDictating ? theme.status.danger : theme.surface.panelMuted,
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                padding: 0, transition: 'background 0.15s, transform 0.15s', flexShrink: 0,
-                transform: isDictating ? 'scale(1.05)' : 'scale(1)',
-                animation: isDictating ? 'chat-pulse 1.4s ease-in-out infinite' : 'none',
-              }}
-              onMouseEnter={e => {
-                if (!isDictating) e.currentTarget.style.background = theme.chat.inputBorder ?? theme.surface.panelMuted
-              }}
-              onMouseLeave={e => {
-                if (!isDictating) e.currentTarget.style.background = theme.surface.panelMuted
-              }}
-              title={isDictating ? 'Stop recording (or release Space)' : 'Hold Space (empty composer) or click to dictate'}
-            >
-              <Mic
-                size={14}
-                color={isDictating ? theme.text.inverse : theme.chat.muted}
-                strokeWidth={2.2}
-              />
-            </button>
-          )}
-
-          {/* Stop / Send */}
-          {isStreaming ? (
-            <button
-              onClick={stopStreaming}
-              onMouseDown={e => e.preventDefault()}
-              style={{
-                width: 28, height: 28, minWidth: 28, borderRadius: '50%',
-                background: theme.text.primary, border: 'none',
-                cursor: 'pointer', display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                padding: 0, transition: 'opacity 0.15s', flexShrink: 0,
-                opacity: 0.92,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-              onMouseLeave={e => (e.currentTarget.style.opacity = '0.92')}
-              title="Stop generation"
-            >
-              <Square size={10} fill={theme.chat.background} color={theme.chat.background} />
-            </button>
-          ) : (
-            <button
-              onClick={sendMessage}
-              onMouseDown={e => e.preventDefault()}
-              disabled={!hasSendableDraft}
-              style={{
-                width: 28, height: 28, minWidth: 28, borderRadius: '50%',
-                background: hasSendableDraft ? theme.accent.base : theme.surface.panelMuted,
-                border: 'none',
-                cursor: hasSendableDraft ? 'pointer' : 'default',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                padding: 0, transition: 'background 0.15s', flexShrink: 0,
-              }}
-              onMouseEnter={e => { if (hasSendableDraft) e.currentTarget.style.background = theme.accent.hover }}
-              onMouseLeave={e => { if (hasSendableDraft) e.currentTarget.style.background = theme.accent.base }}
-              title="Send message"
-            >
-              <ArrowUp size={16} color={theme.text.inverse} strokeWidth={2.5} style={{ opacity: hasSendableDraft ? 1 : 0.3 }} />
-            </button>
-          )}
-        </ChatComposerPrimaryToolbar>
-        </ChatComposerCard>
-
-        {/* Secondary toolbar */}
-        <ChatComposerSecondaryToolbar>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <ChatComposerLocationMenu
-              anchorRef={locationMenuRef}
-              showMenu={showLocationMenu}
-              executionTarget={executionTarget}
-              locationLabel={locationLabel}
-              localExecutionLabel={localExecutionLabel}
-              normalizedRepoRoot={normalizedRepoRoot}
-              remoteHosts={remoteHosts}
-              activeCloudHost={activeCloudHost}
-              fontSans={fontSans}
-              onToggleMenu={() => toggleMenu('location')}
-              onSelectLocal={() => {
-                setExecutionTarget('local')
-                setShowLocationMenu(false)
-              }}
-              onSelectCloud={() => {
-                if (remoteHosts.length > 0) {
-                  setExecutionTarget('cloud')
-                  setCloudHostId(activeCloudHost?.id ?? remoteHosts[0].id)
-                }
-                setShowLocationMenu(false)
-              }}
-              onSelectRemoteHost={hostId => {
-                setExecutionTarget('cloud')
-                setCloudHostId(hostId)
-                setShowLocationMenu(false)
-              }}
-            />
-
-            <ChatComposerBranchMenu
-              anchorRef={branchMenuRef}
-              showMenu={showBranchMenu}
-              isGitRepo={isGitRepo}
-              branches={filteredBranches}
-              branchFilter={branchFilter}
-              branchCreateEnabled={branchMenuCreateEnabled}
-              currentBranchLabel={currentBranchLabel}
-              projectFolderName={projectFolderName}
-              normalizedRepoRoot={normalizedRepoRoot}
-              changedCount={gitStatus.changedCount}
-              fontSans={fontSans}
-              nonSelectableStyle={NON_SELECTABLE_UI_STYLE}
-              onToggleMenu={() => toggleMenu('branch')}
-              onBranchFilterChange={setBranchFilter}
-              onSelectBranch={handleBranchSelect}
-              onCreateBranch={handleCreateBranch}
-            />
-
-            <ChatComposerProjectPathButton
-              title={executionTarget === 'cloud' ? activeProjectPathLabel : `${activeProjectPathLabel} — click to switch folder`}
-              disabled={executionTarget === 'cloud'}
-              label={activeProjectPathLabel}
-              fontSans={fontSans}
-              onClick={handleProjectFolderSwitch}
-            />
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            <ChatComposerModeMenu
-              anchorRef={modeMenuRef}
-              showMenu={showModeMenu}
-              mode={mode}
-              currentMode={currentMode}
-              modeOptions={modeOptions}
-              onToggleMenu={() => toggleMenu('mode')}
-              onSelectMode={modeId => {
-                setMode(modeId)
-                onChatModePreferenceChange?.(provider, modeId)
-                setShowModeMenu(false)
-              }}
-            />
-
-            {/* Plan / Tasks chip — only visible when the agent has emitted a
-                TodoWrite block. Toggles the right-docked PlanPane. */}
-            {planTodos && planTodos.length > 0 && (
-              <PlanChip
-                todos={planTodos}
-                active={isPlanOpen}
-                onClick={() => setIsPlanOpen(v => !v)}
-              />
-            )}
-
-            {/* Context indicator sits in a 28×28 hit-box so its centre-line
-                aligns with the Stop/Send button in the primary toolbar above
-                (both buttons are now 28px wide with matching 8px container
-                padding → same centre X). The 18×18 visible dial is centred
-                inside via flex alignment. */}
-            <ChatComposerContextUsageDial
-              anchorRef={contextMenuRef}
-              showMenu={showContextMenu}
-              contextUsageRatio={contextUsageRatio}
-              contextUsagePercent={contextUsagePercent}
-              estimatedContextTokens={estimatedContextTokens}
-              contextWindowLimit={contextWindowLimit}
-              systemOverheadTokens={systemOverheadTokens}
-              composerBackground={composerBackground}
-              fontSans={fontSans}
-              nonSelectableStyle={NON_SELECTABLE_UI_STYLE}
-              onToggleMenu={() => toggleMenu('context')}
-            />
-          </div>
-        </ChatComposerSecondaryToolbar>
-        </ChatComposerWrap>
       </div>
       </div>
       {isPlanOpen && planTodos && planTodos.length > 0 && (
