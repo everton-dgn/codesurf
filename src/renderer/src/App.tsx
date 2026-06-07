@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
-import { Link2, X } from 'lucide-react'
+import { Link2 } from 'lucide-react'
 import { CanvasGroupFrames } from './components/canvas/CanvasGroupFrames'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
@@ -17,6 +17,8 @@ import { MiniChatWindow } from './components/MiniChatWindow'
 import { AppSidebarRegion } from './components/AppSidebarRegion'
 import { AppWorkspaceTabBar } from './components/AppWorkspaceTabBar'
 import { AppOverlays } from './components/AppOverlays'
+import { AppCanvasSurface } from './components/AppCanvasSurface'
+import { resolveFileTileType } from './lib/fileTileType'
 import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
   useCanvasEngine,
@@ -237,38 +239,6 @@ function dedupeLockedConnections(connections: LockedConnection[]): LockedConnect
     next.push({ sourceTileId, targetTileId })
   }
   return next
-}
-
-const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'json', 'py', 'rs', 'go', 'cpp', 'c', 'java', 'css', 'html', 'sh', 'bash', 'yaml', 'yml', 'toml', 'xml'])
-const NOTE_EXTENSIONS = new Set(['md', 'txt', 'markdown', 'mdx'])
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'heic', 'heif'])
-const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', 'webm', 'ogv', 'avi', 'mkv'])
-const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'])
-const BROWSER_DOCUMENT_EXTENSIONS = new Set(['pdf'])
-const GENERIC_DOCUMENT_EXTENSIONS = new Set(['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pages', 'numbers', 'key', 'rtf'])
-
-function extToType(filePath: string): TileState['type'] {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  if (CODE_EXTENSIONS.has(ext)) return 'code'
-  if (NOTE_EXTENSIONS.has(ext)) return 'note'
-  if (IMAGE_EXTENSIONS.has(ext)) return 'image'
-  if (VIDEO_EXTENSIONS.has(ext) || AUDIO_EXTENSIONS.has(ext)) return 'media'
-  if (BROWSER_DOCUMENT_EXTENSIONS.has(ext)) return 'browser'
-  if (GENERIC_DOCUMENT_EXTENSIONS.has(ext)) return 'file'
-  if (!filePath.includes('.')) return 'code'
-  return 'file'
-}
-
-async function resolveFileTileType(filePath: string): Promise<TileState['type']> {
-  const byExtension = extToType(filePath)
-  if (byExtension !== 'file') return byExtension
-
-  try {
-    const isText = await window.electron.fs.isProbablyTextFile(filePath)
-    return isText ? 'code' : 'file'
-  } catch {
-    return byExtension
-  }
 }
 
 function hrefToLocalPath(href: string): string | null {
@@ -2571,221 +2541,114 @@ function App(): JSX.Element {
           }}
           workspacePickerReturnWorkspaceId={workspacePickerReturnWorkspaceId}
         />
-        {/* Canvas surface — inset to the same rounded content area as panel mode */}
-        <div
-          ref={canvasRef}
-          data-canvas-surface="true"
-          className="absolute overflow-hidden"
-          style={{
-            top: mainPanelTop,
-            left: mainPanelLeft,
-            right: 6,
-            bottom: mainPanelBottomInset,
-            // Focus mode still needs a filled rounded surface so the outer
-            // corners and split gutters don't reveal the app backdrop.
-            background: mainPanelBackground,
-            borderRadius: mainPanelBorderRadius,
-            // Keep the layout border transparent; the visible panel edge is
-            // the same inset-white + 4% black shadow treatment used by buttons.
-            border: '0.5px solid transparent',
-            boxShadow: mainPanelShadow,
-            cursor: isDraggingCanvas ? 'grabbing' : (spaceHeld.current ? 'grab' : 'default'),
-            userSelect: 'none',
-            WebkitUserSelect: 'none',
-            zIndex: 0,
-            transition: 'left 0.15s ease',
-          } as React.CSSProperties}
+        <AppCanvasSurface
+          canvasRef={canvasRef}
+          mainPanelTop={mainPanelTop}
+          mainPanelLeft={mainPanelLeft}
+          mainPanelBottomInset={mainPanelBottomInset}
+          mainPanelBackground={mainPanelBackground}
+          mainPanelBorderRadius={mainPanelBorderRadius}
+          mainPanelShadow={mainPanelShadow}
+          mainPanelInsetEdgeShadow={mainPanelInsetEdgeShadow}
+          isDraggingCanvas={isDraggingCanvas}
+          spaceHeldRef={spaceHeld}
           onMouseDown={handleCanvasMouseDown}
           onDoubleClick={handleCanvasDoubleClick}
           onContextMenu={handleCanvasContextMenu}
           onWheel={handleWheel}
-          onMouseMove={e => {
-            updateCanvasGlow(e.clientX, e.clientY)
-            setCanvasPointerWorld(screenToWorld(e.clientX, e.clientY))
-          }}
-          onMouseLeave={() => {
-            hideCanvasGlow()
-            setCanvasPointerWorld(null)
-          }}
-          onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
-          onDrop={e => {
-            e.preventDefault()
-            const world = screenToWorld(e.clientX, e.clientY)
-
-            // Tile already on canvas — just pan to it (dragged from kanban card ↗)
-            const linkedTileId = e.dataTransfer.getData('application/tile-id')
-            if (linkedTileId) {
-              bringToFront(linkedTileId)
-              const target = tiles.find(t => t.id === linkedTileId)
-              if (target) panToTile(target)
-              return
-            }
-
-            // Kanban card dragged onto canvas — create new tile
-            const cardTitle = e.dataTransfer.getData('application/card-title')
-            const cardType = e.dataTransfer.getData('application/card-type') as TileState['type'] | ''
-            const cardFile = e.dataTransfer.getData('application/card-file')
-            if (cardTitle) {
-              addTile(cardType || 'note', cardFile || undefined, world)
-              return
-            }
-
-            // Files dropped from OS or sidebar
-            const droppedPaths = getDroppedPaths(e.dataTransfer)
-            if (droppedPaths.length > 0) {
-              // Check for .skill first (Claude skill bundle — zip archive).
-              // Opens the install-confirmation modal.
-              const skillPath = droppedPaths.find(p => p.toLowerCase().endsWith('.skill'))
-              if (skillPath) {
-                setSkillInstallPath(skillPath)
-                return
-              }
-              // Check for .vsix first
-              const vsixPath = droppedPaths.find(p => p.endsWith('.vsix'))
-              if (vsixPath) {
-                window.electron.extensions.installVsix?.(vsixPath).then((result) => {
-                  if (result?.ok) {
-                    console.log('[vsix] Installed:', result.name)
-                    const firstTile = result.tiles?.[0]
-                    if (firstTile) {
-                      addTile(firstTile.type as TileState['type'], undefined, world)
-                    }
-                  } else {
-                    console.error('[vsix] Install failed:', result?.error)
-                  }
-                })
-                return
-              }
-              // Create a file tile for each dropped path
-              for (const p of droppedPaths) {
-                void resolveFileTileType(p).then(type => addTile(type, p, world))
-              }
-              return
-            }
-
-            // File from sidebar (text/plain fallback)
-            const filePath = e.dataTransfer.getData('text/plain')
-            if (filePath) {
-              if (filePath.toLowerCase().endsWith('.skill')) {
-                setSkillInstallPath(filePath)
-                return
-              }
-              void resolveFileTileType(filePath).then(type => addTile(type, filePath, world))
-            }
-          }}
-        >
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              borderRadius: 'inherit',
-              boxShadow: mainPanelInsetEdgeShadow,
-              pointerEvents: 'none',
-              zIndex: 100001,
-            }}
-          />
-          {/* Canvas content wrapper — fades out when in expanded/tabbed mode */}
-          <div style={{
-            position: 'absolute', inset: 0,
-            opacity: panelLayout ? 0 : 1,
-            transition: 'opacity 0.3s ease',
-            pointerEvents: panelLayout ? 'none' : 'auto',
-          }}>
-          {/* Canvas-expanded group banner — pinned to screen, NOT world-transformed */}
-          {expandedCanvasGroupId && (() => {
-            const eg = groups.find(gr => gr.id === expandedCanvasGroupId)
-            if (!eg) return null
-            const bannerColor = eg.color ?? '#4a9eff'
-            return (
-              <div
-                style={{
+          updateCanvasGlow={updateCanvasGlow}
+          hideCanvasGlow={hideCanvasGlow}
+          setCanvasPointerWorld={setCanvasPointerWorld}
+          screenToWorld={screenToWorld}
+          tiles={tiles}
+          bringToFront={bringToFront}
+          panToTile={panToTile}
+          addTile={addTile}
+          setSkillInstallPath={setSkillInstallPath}
+          panelLayout={panelLayout}
+          expandedCanvasGroupId={expandedCanvasGroupId}
+          groups={groups}
+          exitCanvasExpanded={exitCanvasExpanded}
+          theme={theme}
+          appFonts={appFonts}
+          settings={settings}
+          viewport={viewport}
+          canvasGlowEnabled={canvasGlowEnabled}
+          dotGlowSmallRef={dotGlowSmallRef}
+          dotGlowLargeRef={dotGlowLargeRef}
+          surfaceOverlays={(
+            <>
+              {panelLayout && (
+                <div style={{
                   position: 'absolute',
-                  top: 12,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '6px 10px 6px 12px',
-                  background: theme.surface.panel,
-                  border: `1px solid ${bannerColor}aa`,
-                  borderRadius: 999,
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
-                  zIndex: 99996,
-                  fontSize: appFonts.secondarySize,
-                  color: theme.text.primary,
-                  userSelect: 'none',
-                }}
-                onMouseDown={e => e.stopPropagation()}
-              >
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: bannerColor }} />
-                <span style={{ fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>{eg.label ?? 'group'}</span>
-                <span style={{ opacity: 0.5, fontSize: appFonts.secondarySize - 1 }}>· canvas</span>
-                <button
-                  title="Exit (Esc)"
-                  onClick={e => { e.stopPropagation(); exitCanvasExpanded() }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 22, height: 22, borderRadius: 999,
-                    border: 'none', background: 'transparent',
-                    color: theme.text.secondary, cursor: 'pointer',
-                    marginLeft: 4,
-                  }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = theme.surface.app }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            )
-          })()}
-          {/* Dot grid - small */}
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backgroundImage: `radial-gradient(circle, ${settings.gridColorSmall} 1px, transparent 1px)`,
-              backgroundSize: `${settings.gridSpacingSmall * viewport.zoom}px ${settings.gridSpacingSmall * viewport.zoom}px`,
-              backgroundPosition: `${viewport.tx % (settings.gridSpacingSmall * viewport.zoom)}px ${viewport.ty % (settings.gridSpacingSmall * viewport.zoom)}px`
-            }}
-          />
-          {/* Dot grid - large */}
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backgroundImage: `radial-gradient(circle, ${settings.gridColorLarge} 2px, transparent 2px)`,
-              backgroundSize: `${settings.gridSpacingLarge * viewport.zoom}px ${settings.gridSpacingLarge * viewport.zoom}px`,
-              backgroundPosition: `${viewport.tx % (settings.gridSpacingLarge * viewport.zoom)}px ${viewport.ty % (settings.gridSpacingLarge * viewport.zoom)}px`
-            }}
-          />
-
-          {/* Dot grid glow - small (cursor proximity light) */}
-          {canvasGlowEnabled && (
-            <div
-              ref={dotGlowSmallRef}
-              className="absolute inset-0 pointer-events-none"
-              style={{
-                backgroundImage: `radial-gradient(circle, ${theme.canvas.gridGlowSmall} 1px, transparent 1px)`,
-                backgroundSize: `${settings.gridSpacingSmall * viewport.zoom}px ${settings.gridSpacingSmall * viewport.zoom}px`,
-                backgroundPosition: `${viewport.tx % (settings.gridSpacingSmall * viewport.zoom)}px ${viewport.ty % (settings.gridSpacingSmall * viewport.zoom)}px`,
-                opacity: 0,
-                transition: 'opacity 0.3s ease-out',
-              }}
-            />
+                  inset: 0,
+                  zIndex: 50,
+                }}>
+                  <Suspense fallback={null}>
+                    <LazyPanelLayout
+                      root={panelLayout}
+                      insetBottom={0}
+                      outerRadii={mainPanelCornerRadii}
+                      getTileLabel={getPanelTileLabel}
+                      renderTile={(tileId) => {
+                        const t = tiles.find(ti => ti.id === tileId)
+                        if (!t) return null
+                        return (
+                          <div style={{ width: '100%', height: '100%', background: theme.surface.panel }}>
+                            <Suspense fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12, background: theme.surface.panel }}>Loading block…</div>}>
+                              {renderTileBody(t)}
+                            </Suspense>
+                          </div>
+                        )
+                      }}
+                      onLayoutChange={setPanelLayout}
+                      onCloseTab={closeTile}
+                      onAddTile={(type) => addTile(type as TileState['type'])}
+                      onExit={exitExpandedMode}
+                      activePanelId={activePanelId}
+                      onActivePanelChange={setActivePanelId}
+                      getTileType={(tileId) => tiles.find(t => t.id === tileId)?.type ?? 'note'}
+                      getTileIcon={getPanelTileIcon}
+                      onSplitNew={(panelId, tileType, zone) => {
+                        const center = viewportCenter()
+                        const { w, h } = getInitialTileSize(tileType as TileState['type'])
+                        const newTile: TileState = {
+                          id: `tile-${Date.now()}`,
+                          type: tileType as TileState['type'],
+                          x: snapValue(center.x - w / 2), y: snapValue(center.y - h / 2),
+                          width: w, height: h, zIndex: nextZIndex,
+                        }
+                        setTiles(prev => [...prev, newTile])
+                        setNextZIndex(prev => prev + 1)
+                        setPanelLayout(prev => prev ? splitLeaf(prev, panelId, newTile.id, zone) : prev)
+                      }}
+                      onCloseOthers={(panelId, tileId) => {
+                        setPanelLayout(prev => prev ? closeOthersInLeaf(prev, panelId, tileId) : prev)
+                      }}
+                      onCloseToRight={(panelId, tileId) => {
+                        setPanelLayout(prev => prev ? closeToRightInLeaf(prev, panelId, tileId) : prev)
+                      }}
+                      onLaunchTemplate={handleLaunchTemplate}
+                    />
+                  </Suspense>
+                </div>
+              )}
+              {showMinimap && (
+                <Suspense fallback={null}>
+                  <LazyMinimap
+                    tiles={tiles}
+                    viewport={viewport}
+                    canvasSize={{
+                      w: canvasRef.current?.clientWidth ?? 1200,
+                      h: canvasRef.current?.clientHeight ?? 800
+                    }}
+                    onPan={(tx, ty) => setViewport(prev => ({ ...prev, tx, ty }))}
+                  />
+                </Suspense>
+              )}
+            </>
           )}
-          {/* Dot grid glow - large (cursor proximity light) */}
-          {canvasGlowEnabled && (
-            <div
-              ref={dotGlowLargeRef}
-              className="absolute inset-0 pointer-events-none"
-              style={{
-                backgroundImage: `radial-gradient(circle, ${theme.canvas.gridGlowLarge} 2px, transparent 2px)`,
-                backgroundSize: `${settings.gridSpacingLarge * viewport.zoom}px ${settings.gridSpacingLarge * viewport.zoom}px`,
-                backgroundPosition: `${viewport.tx % (settings.gridSpacingLarge * viewport.zoom)}px ${viewport.ty % (settings.gridSpacingLarge * viewport.zoom)}px`,
-                opacity: 0,
-                transition: 'opacity 0.3s ease-out',
-              }}
-            />
-          )}
-
+        >
           {/* World container */}
           <div
             className="absolute"
@@ -3447,84 +3310,7 @@ function App(): JSX.Element {
             </div>
           )}
 
-          </div>{/* end canvas content wrapper */}
-
-          {/* Expanded panel layout — shares the rounded content surface with canvas mode */}
-          {panelLayout && (
-            <div style={{
-              position: 'absolute',
-              inset: 0,
-              // Wrapper reserves geometry only; each LeafPanel draws its own
-              // 0.5px edge so splits appear as individually-rounded tiles with
-              // the shared panel surface visible in the 6px gutters between them.
-              zIndex: 50,
-            }}>
-            <Suspense fallback={null}>
-              <LazyPanelLayout
-                root={panelLayout}
-                insetBottom={0}
-                outerRadii={mainPanelCornerRadii}
-                getTileLabel={getPanelTileLabel}
-                renderTile={(tileId) => {
-                  const t = tiles.find(ti => ti.id === tileId)
-                  if (!t) return null
-                  return (
-                    <div style={{ width: '100%', height: '100%', background: theme.surface.panel }}>
-                      <Suspense fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12, background: theme.surface.panel }}>Loading block…</div>}>
-                        {renderTileBody(t)}
-                      </Suspense>
-                    </div>
-                  )
-                }}
-                onLayoutChange={setPanelLayout}
-                onCloseTab={closeTile}
-                onAddTile={(type) => addTile(type as TileState['type'])}
-                onExit={exitExpandedMode}
-                activePanelId={activePanelId}
-                onActivePanelChange={setActivePanelId}
-                getTileType={(tileId) => tiles.find(t => t.id === tileId)?.type ?? 'note'}
-                getTileIcon={getPanelTileIcon}
-                onSplitNew={(panelId, tileType, zone) => {
-                  const center = viewportCenter()
-                  const { w, h } = getInitialTileSize(tileType as TileState['type'])
-                  const newTile: TileState = {
-                    id: `tile-${Date.now()}`,
-                    type: tileType as TileState['type'],
-                    x: snapValue(center.x - w / 2), y: snapValue(center.y - h / 2),
-                    width: w, height: h, zIndex: nextZIndex,
-                  }
-                  setTiles(prev => [...prev, newTile])
-                  setNextZIndex(prev => prev + 1)
-                  setPanelLayout(prev => prev ? splitLeaf(prev, panelId, newTile.id, zone) : prev)
-                }}
-                onCloseOthers={(panelId, tileId) => {
-                  setPanelLayout(prev => prev ? closeOthersInLeaf(prev, panelId, tileId) : prev)
-                }}
-                onCloseToRight={(panelId, tileId) => {
-                  setPanelLayout(prev => prev ? closeToRightInLeaf(prev, panelId, tileId) : prev)
-                }}
-                onLaunchTemplate={handleLaunchTemplate}
-              />
-            </Suspense>
-            </div>
-          )}
-
-          {/* Minimap */}
-          {showMinimap && (
-            <Suspense fallback={null}>
-              <LazyMinimap
-                tiles={tiles}
-                viewport={viewport}
-                canvasSize={{
-                  w: canvasRef.current?.clientWidth ?? 1200,
-                  h: canvasRef.current?.clientHeight ?? 800
-                }}
-                onPan={(tx, ty) => setViewport(prev => ({ ...prev, tx, ty }))}
-              />
-            </Suspense>
-          )}
-
-        </div>
+        </AppCanvasSurface>
 
         {/* Arrange toolbar — render above the titlebar drag layer */}
         <Suspense fallback={null}>
