@@ -52,6 +52,7 @@ import { useDiscoveryPulses } from './hooks/useDiscoveryPulses'
 import { usePanelTileChrome } from './hooks/usePanelTileChrome'
 import { useAppPanelViewMode } from './hooks/useAppPanelViewMode'
 import { useAppCanvasConnectionProps, useAppCanvasPanelRegionProps } from './hooks/useAppCanvasViewProps'
+import { useAppWorkspaceOrchestration } from './hooks/useAppWorkspaceOrchestration'
 import {
   getCanonicalWorkspaceId,
   normalizeWorkspacePath,
@@ -63,7 +64,7 @@ import {
   persistWorkspaceTabState,
   SETTINGS_CACHE_KEY,
 } from './lib/appShellPersistence'
-import { dedupeLockedConnections, hrefToLocalPath, snapToCanvasGrid } from './lib/canvasStateHelpers'
+import { hrefToLocalPath, snapToCanvasGrid } from './lib/canvasStateHelpers'
 import { buildSessionEntryHint, isRuntimeSessionEntryId } from './lib/sessionEntryHelpers'
 import {
   extensionActionRegistry,
@@ -82,7 +83,6 @@ import { ThemeProvider } from './ThemeContext'
 import { applyContrast, DEFAULT_THEME_ID, getThemeById, resolveEffectiveThemeId, registerCustomTheme, unregisterCustomTheme } from './theme'
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
 import {
-  createLeaf,
   getAllTileIds,
   findLeafById,
   setActiveTab,
@@ -90,8 +90,6 @@ import {
   findFirstLeafId,
   findLeafIdContainingTile,
   collectPanelLeaves,
-  replaceLeafInPanelTree,
-  sanitizePanelLayout,
 } from './components/panelLayoutTree'
 import { basename, getDroppedPaths } from './utils/dnd'
 import { CODESURF_OPEN_LINK_EVENT, type CodeSurfOpenLinkDetail } from './utils/links'
@@ -395,22 +393,47 @@ function App(): JSX.Element {
     settings.snapToGrid ? snapToCanvasGrid(value, settings.gridSize) : value
   ), [settings.snapToGrid, settings.gridSize])
 
-  const showEmptyLayoutPage = useCallback((options?: { preserveOpenTabs?: boolean }) => {
-    const preserveOpenTabs = options?.preserveOpenTabs ?? false
-    const emptyPanel = createLeaf([])
-    setShowWorkspacePickerTab(true)
-    setWorkspacePickerReturnWorkspaceId(preserveOpenTabs ? currentWorkspaceIdRef.current : null)
-    setWorkspace(null)
-    if (!preserveOpenTabs) setOpenWorkspaceIds([])
-    setTiles([])
-    setGroups([])
-    setLockedConnections([])
-    resetViewportState()
-    savedLayoutRef.current = emptyPanel
-    setPanelLayout(emptyPanel)
-    setActivePanelId(emptyPanel.id)
-    setExpandedTileId(null)
-  }, [resetViewportState])
+  const {
+    showEmptyLayoutPage,
+    handleSwitchWorkspace,
+    handleDeleteWorkspace,
+    handleCloseWorkspaceTab,
+    handleNewWorkspace,
+    handleOpenFolder,
+    handleLaunchTemplate,
+    applySavedCanvasState: applyLoadedCanvasState,
+  } = useAppWorkspaceOrchestration({
+    workspace,
+    workspaces,
+    openWorkspaceIds,
+    tilesRef,
+    groupsRef,
+    panelLayoutRef,
+    activePanelIdRef,
+    viewportRef,
+    nextZIndexRef,
+    lockedConnectionsRef,
+    savedLayoutRef,
+    expandedCanvasGroupIdRef,
+    expandedCanvasPriorViewportRef,
+    currentWorkspaceIdRef,
+    setWorkspace,
+    setWorkspaces,
+    setOpenWorkspaceIds,
+    setShowWorkspacePickerTab,
+    setWorkspacePickerReturnWorkspaceId,
+    setTiles,
+    setGroups,
+    setLockedConnections,
+    setViewport,
+    setNextZIndex,
+    setPanelLayout,
+    setActivePanelId,
+    setExpandedTileId,
+    setExpandedCanvasGroupId,
+    restoreViewport,
+    resetViewportState,
+  })
 
   // ─── Load workspace + canvas state on mount ───────────────────────────────
   useEffect(() => {
@@ -572,22 +595,7 @@ function App(): JSX.Element {
         const savedTiles = saved?.tiles ?? []
         void window.electron.collab.pruneOrphanedTileDirs(targetWorkspace.path, savedTiles.map(tile => tile.id))
         if (saved) {
-          const sanitizedPanel = sanitizePanelLayout((saved.panelLayout as PanelNode | null) ?? null, savedTiles.map(tile => tile.id))
-          const nextActivePanelId = saved.activePanelId && sanitizedPanel.layout && findLeafById(sanitizedPanel.layout, saved.activePanelId)
-            ? saved.activePanelId
-            : sanitizedPanel.fallbackActivePanelId
-          setTiles(savedTiles)
-          setGroups(saved.groups ?? [])
-          setLockedConnections(saved.lockedConnections ?? [])
-          restoreViewport(saved.viewport)
-          setNextZIndex(saved.nextZIndex ?? 1)
-          savedLayoutRef.current = sanitizedPanel.layout
-          setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
-          setActivePanelId(saved.tabViewActive ? nextActivePanelId : null)
-          setExpandedTileId(saved.expandedTileId ?? null)
-          setExpandedCanvasGroupId(saved.expandedCanvasGroupId ?? null)
-          expandedCanvasGroupIdRef.current = saved.expandedCanvasGroupId ?? null
-          expandedCanvasPriorViewportRef.current = saved.expandedCanvasPriorViewport ?? null
+          applyLoadedCanvasState(saved)
         } else {
           showEmptyLayoutPage({ preserveOpenTabs: true })
         }
@@ -607,7 +615,7 @@ function App(): JSX.Element {
         }).catch(() => {})
       }
     }
-  }, [showEmptyLayoutPage, miniChatOptions?.workspaceId])
+  }, [showEmptyLayoutPage, applyLoadedCanvasState, miniChatOptions?.workspaceId])
 
   // ─── Subscribe to custom theme registrations from extensions ─────────────
   useEffect(() => {
@@ -1054,269 +1062,6 @@ function App(): JSX.Element {
     getMinTileWidth,
     getMinTileHeight,
   })
-
-  // ─── Workspace switching ──────────────────────────────────────────────────
-  const handleSwitchWorkspace = useCallback(async (id: string) => {
-    let workspaceList = workspaces
-    let targetWorkspaceId = getCanonicalWorkspaceId(workspaceList, id) ?? id
-    let ws = workspaceList.find(w => w.id === targetWorkspaceId) ?? null
-    if (!ws) {
-      const refreshed = await window.electron.workspace.list().catch(() => [])
-      if (refreshed.length > 0) {
-        setWorkspaces(refreshed)
-        workspaceList = refreshed
-        targetWorkspaceId = getCanonicalWorkspaceId(refreshed, targetWorkspaceId) ?? targetWorkspaceId
-        ws = refreshed.find(w => w.id === targetWorkspaceId) ?? null
-      }
-    }
-    await window.electron.workspace.setActive(targetWorkspaceId)
-    setWorkspace(ws)
-    setShowWorkspacePickerTab(false)
-    setWorkspacePickerReturnWorkspaceId(null)
-    if (ws) {
-      const saved = await window.electron.canvas.load(targetWorkspaceId)
-      const savedTiles = saved?.tiles ?? []
-      void window.electron.collab.pruneOrphanedTileDirs(ws.path, savedTiles.map(tile => tile.id))
-      if (saved) {
-        const sanitizedPanel = sanitizePanelLayout((saved.panelLayout as PanelNode | null) ?? null, savedTiles.map(tile => tile.id))
-        const nextActivePanelId = saved.activePanelId && sanitizedPanel.layout && findLeafById(sanitizedPanel.layout, saved.activePanelId)
-          ? saved.activePanelId
-          : sanitizedPanel.fallbackActivePanelId
-        setTiles(savedTiles)
-        setGroups(saved.groups ?? [])
-        restoreViewport(saved.viewport)
-        setNextZIndex(saved.nextZIndex ?? 1)
-        savedLayoutRef.current = sanitizedPanel.layout
-        setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
-        setActivePanelId(saved.tabViewActive ? nextActivePanelId : null)
-        setExpandedTileId(saved.expandedTileId ?? null)
-        setExpandedCanvasGroupId(saved.expandedCanvasGroupId ?? null)
-        expandedCanvasGroupIdRef.current = saved.expandedCanvasGroupId ?? null
-        expandedCanvasPriorViewportRef.current = saved.expandedCanvasPriorViewport ?? null
-      } else {
-        setTiles([])
-        setGroups([])
-        resetViewportState()
-        savedLayoutRef.current = null
-        setPanelLayout(null)
-        setActivePanelId(null)
-        setExpandedTileId(null)
-      }
-    }
-  }, [workspaces, restoreViewport, resetViewportState])
-
-  const handleDeleteWorkspace = useCallback(async (id: string) => {
-    const wasActive = workspace?.id === id
-    const nextOpenIds = openWorkspaceIds.filter(wsId => wsId !== id)
-
-    await window.electron.workspace.delete(id)
-    const updated = await window.electron.workspace.list()
-    setWorkspaces(updated)
-    setOpenWorkspaceIds(nextOpenIds)
-
-    if (!wasActive) return
-
-    const nextId = nextOpenIds.find(wsId => updated.some(ws => ws.id === wsId)) ?? updated[0]?.id ?? null
-    if (nextId) {
-      await handleSwitchWorkspace(nextId)
-      return
-    }
-
-    showEmptyLayoutPage()
-  }, [workspace?.id, openWorkspaceIds, handleSwitchWorkspace, showEmptyLayoutPage])
-
-  const handleCloseWorkspaceTab = useCallback(async (id: string) => {
-    const tabIndex = openWorkspaceIds.indexOf(id)
-    if (tabIndex === -1) return
-
-    const nextOpenIds = openWorkspaceIds.filter(wsId => wsId !== id)
-    setOpenWorkspaceIds(nextOpenIds)
-
-    if (workspace?.id !== id) return
-
-    const nextId = nextOpenIds[tabIndex] ?? nextOpenIds[tabIndex - 1] ?? null
-    if (nextId) {
-      await handleSwitchWorkspace(nextId)
-      return
-    }
-
-    showEmptyLayoutPage()
-  }, [openWorkspaceIds, workspace?.id, handleSwitchWorkspace, showEmptyLayoutPage])
-
-  const handleNewWorkspace = useCallback(async (name: string) => {
-    if (!name.trim()) return
-    const ws = await window.electron.workspace.create(name.trim())
-    const updated = await window.electron.workspace.list()
-    setWorkspaces(updated)
-    await handleSwitchWorkspace(ws.id)
-  }, [handleSwitchWorkspace])
-
-  const handleOpenFolder = useCallback(async () => {
-    const folderPath = await window.electron.workspace.openFolder()
-    if (!folderPath) return
-    const ws = await window.electron.workspace.createFromFolder(folderPath)
-    const updated = await window.electron.workspace.list()
-    setWorkspaces(updated)
-    await handleSwitchWorkspace(ws.id)
-  }, [handleSwitchWorkspace])
-
-  // Cmd+T → open next available workspace as a pill tab
-  useEffect(() => {
-    return window.electron?.window?.onNewTab?.(() => {
-      const next = workspaces.find(w => !openWorkspaceIds.includes(w.id))
-      if (next) {
-        setOpenWorkspaceIds(prev => [...prev, next.id])
-        handleSwitchWorkspace(next.id)
-      }
-    })
-  }, [workspaces, openWorkspaceIds, handleSwitchWorkspace])
-
-  // Launch a layout template into the current workspace instead of creating a
-  // separate "Project:Layout" workspace tab.
-  const handleLaunchTemplate = useCallback(async (template: import('../../shared/types').LayoutTemplate) => {
-    const baseId = Date.now()
-    const generatedTiles: TileState[] = []
-    let zIdx = workspace?.id ? nextZIndexRef.current : 1
-    const VW = 1600, VH = 900
-    let tileCounter = 0
-
-    const generateTiles = (node: import('../../shared/types').LayoutTemplateNode, x: number, y: number, w: number, h: number) => {
-      if (node.type === 'leaf') {
-        for (const slot of node.slots) {
-          generatedTiles.push({
-            id: `tile-template-${baseId}-${tileCounter++}`,
-            type: slot.tileType,
-            x: Math.round(x), y: Math.round(y),
-            width: Math.round(w), height: Math.round(h),
-            zIndex: zIdx++,
-            label: slot.label,
-          })
-        }
-        return
-      }
-      const { direction, children, sizes } = node
-      let offset = 0
-      children.forEach((child, i) => {
-        const pct = (sizes[i] ?? 50) / 100
-        if (direction === 'horizontal') {
-          generateTiles(child, x + offset, y, w * pct, h)
-          offset += w * pct
-        } else {
-          generateTiles(child, x, y + offset, w, h * pct)
-          offset += h * pct
-        }
-      })
-    }
-
-    generateTiles(template.tree, 0, 0, VW, VH)
-
-    let panelCounter = 0
-    const generatePanel = (node: import('../../shared/types').LayoutTemplateNode, tileIdx: { v: number }): PanelNode => {
-      if (node.type === 'leaf') {
-        const tabs = node.slots.map(() => generatedTiles[tileIdx.v++]?.id).filter(Boolean)
-        return { type: 'leaf', id: `panel-template-${baseId}-${panelCounter++}`, tabs, activeTab: tabs[0] ?? '' }
-      }
-      return {
-        type: 'split',
-        id: `split-template-${baseId}-${panelCounter++}`,
-        direction: node.direction,
-        children: node.children.map(c => generatePanel(c, tileIdx)),
-        sizes: node.sizes,
-      }
-    }
-
-    const generatedPanelLayout = generatePanel(template.tree, { v: 0 })
-    const generatedActivePanelId = findFirstLeafId(generatedPanelLayout)
-    if (!generatedActivePanelId) return
-
-    const generatedConnections: LockedConnection[] = []
-    for (let i = 0; i < generatedTiles.length; i++) {
-      for (let j = i + 1; j < generatedTiles.length; j++) {
-        const a = generatedTiles[i], b = generatedTiles[j]
-        const touchH = (Math.round(a.x + a.width) === b.x || Math.round(b.x + b.width) === a.x) && !(a.y + a.height <= b.y || b.y + b.height <= a.y)
-        const touchV = (Math.round(a.y + a.height) === b.y || Math.round(b.y + b.height) === a.y) && !(a.x + a.width <= b.x || b.x + b.width <= a.x)
-        if (touchH || touchV) {
-          generatedConnections.push({ sourceTileId: a.id, targetTileId: b.id })
-        }
-      }
-    }
-
-    if (!workspace?.id) {
-      const workspaceName = template.name.trim() || 'Workspace'
-      const ws = await window.electron.workspace.create(workspaceName)
-      const updatedList = await window.electron.workspace.list()
-      setWorkspaces(updatedList)
-
-      const nextState: CanvasState = {
-        tiles: generatedTiles,
-        groups: [],
-        viewport: { tx: 0, ty: 0, zoom: 1 },
-        nextZIndex: zIdx,
-        panelLayout: generatedPanelLayout,
-        activePanelId: generatedActivePanelId,
-        tabViewActive: true,
-        expandedTileId: null,
-        lockedConnections: generatedConnections.length > 0 ? generatedConnections : undefined,
-      }
-
-      await window.electron.canvas.save(ws.id, nextState)
-      await window.electron.workspace.setActive(ws.id)
-      setWorkspace(ws)
-      setTiles(generatedTiles)
-      setGroups([])
-      setLockedConnections(generatedConnections)
-      setViewport({ tx: 0, ty: 0, zoom: 1 })
-      setNextZIndex(zIdx)
-      savedLayoutRef.current = generatedPanelLayout
-      setPanelLayout(generatedPanelLayout)
-      setActivePanelId(generatedActivePanelId)
-      setExpandedTileId(null)
-      setOpenWorkspaceIds(prev => prev.includes(ws.id) ? prev : [...prev, ws.id])
-      return
-    }
-
-    const currentLayout = panelLayoutRef.current
-    const currentPanelId = activePanelIdRef.current
-    const activeLeaf = currentLayout && currentPanelId ? findLeafById(currentLayout, currentPanelId) : null
-    const canInsertIntoActiveLeaf = Boolean(currentLayout && activeLeaf && activeLeaf.tabs.length === 0)
-    const canReplaceWorkspaceState = !currentLayout && tilesRef.current.length === 0 && groupsRef.current.length === 0
-    if (!canInsertIntoActiveLeaf && !canReplaceWorkspaceState) return
-
-    const nextTiles = canInsertIntoActiveLeaf
-      ? [...tilesRef.current, ...generatedTiles]
-      : generatedTiles
-    const nextGroups = canInsertIntoActiveLeaf ? groupsRef.current : []
-    const nextViewport = canInsertIntoActiveLeaf ? viewportRef.current : { tx: 0, ty: 0, zoom: 1 }
-    const nextConnections = canInsertIntoActiveLeaf
-      ? dedupeLockedConnections([...lockedConnectionsRef.current, ...generatedConnections])
-      : generatedConnections
-    const nextPanelLayout = canInsertIntoActiveLeaf && currentLayout && activeLeaf
-      ? replaceLeafInPanelTree(currentLayout, activeLeaf.id, generatedPanelLayout)
-      : generatedPanelLayout
-
-    const nextState: CanvasState = {
-      tiles: nextTiles,
-      groups: nextGroups,
-      viewport: nextViewport,
-      nextZIndex: zIdx,
-      panelLayout: nextPanelLayout,
-      activePanelId: generatedActivePanelId,
-      tabViewActive: true,
-      expandedTileId: null,
-      lockedConnections: nextConnections.length > 0 ? nextConnections : undefined,
-    }
-
-    setTiles(nextTiles)
-    setGroups(nextGroups)
-    setLockedConnections(nextConnections)
-    setViewport(nextViewport)
-    setNextZIndex(zIdx)
-    savedLayoutRef.current = nextPanelLayout
-    setPanelLayout(nextPanelLayout)
-    setActivePanelId(generatedActivePanelId)
-    setExpandedTileId(null)
-    await window.electron.canvas.save(workspace.id, nextState).catch(() => {})
-  }, [workspace])
 
   const focusTileInWorkspace = useCallback((tileId: string) => {
     bringToFront(tileId)

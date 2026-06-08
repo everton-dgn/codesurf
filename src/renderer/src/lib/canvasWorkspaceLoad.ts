@@ -1,0 +1,72 @@
+import type { CanvasState } from '../../../shared/types'
+import type { PanelNode } from '../components/panelLayoutTree'
+import {
+  createLeaf,
+  findLeafById,
+  sanitizePanelLayout,
+} from '../components/panelLayoutTree'
+
+export type CanvasWorkspaceLoadAppliers = {
+  setTiles: (tiles: CanvasState['tiles']) => void
+  setGroups: (groups: CanvasState['groups']) => void
+  restoreViewport: (viewport: CanvasState['viewport']) => void
+  setNextZIndex: (nextZIndex: number) => void
+  setPanelLayout: (layout: PanelNode | null) => void
+  setActivePanelId: (panelId: string | null) => void
+  setExpandedTileId: (tileId: string | null) => void
+  setExpandedCanvasGroupId: (groupId: string | null) => void
+  savedLayoutRef: { current: PanelNode | null }
+  expandedCanvasGroupIdRef: { current: string | null }
+  expandedCanvasPriorViewportRef: { current: CanvasState['viewport'] | null }
+  setLockedConnections?: (connections: CanvasState['lockedConnections']) => void
+}
+
+export function applySavedCanvasState(
+  saved: CanvasState,
+  appliers: CanvasWorkspaceLoadAppliers,
+): void {
+  const savedTiles = saved.tiles ?? []
+  const sanitizedPanel = sanitizePanelLayout(
+    (saved.panelLayout as PanelNode | null) ?? null,
+    savedTiles.map(tile => tile.id),
+  )
+  const nextActivePanelId = saved.activePanelId
+    && sanitizedPanel.layout
+    && findLeafById(sanitizedPanel.layout, saved.activePanelId)
+    ? saved.activePanelId
+    : sanitizedPanel.fallbackActivePanelId
+
+  appliers.setTiles(savedTiles)
+  appliers.setGroups(saved.groups ?? [])
+  appliers.setLockedConnections?.(saved.lockedConnections ?? [])
+  appliers.restoreViewport(saved.viewport)
+  appliers.setNextZIndex(saved.nextZIndex ?? 1)
+  appliers.savedLayoutRef.current = sanitizedPanel.layout
+  appliers.setPanelLayout(saved.tabViewActive ? (sanitizedPanel.layout ?? createLeaf([])) : null)
+  appliers.setActivePanelId(saved.tabViewActive ? nextActivePanelId : null)
+  appliers.setExpandedTileId(saved.expandedTileId ?? null)
+  appliers.setExpandedCanvasGroupId(saved.expandedCanvasGroupId ?? null)
+  appliers.expandedCanvasGroupIdRef.current = saved.expandedCanvasGroupId ?? null
+  appliers.expandedCanvasPriorViewportRef.current = saved.expandedCanvasPriorViewport ?? null
+}
+
+export function applyEmptyCanvasWorkspaceState(
+  appliers: Pick<
+    CanvasWorkspaceLoadAppliers,
+    | 'setTiles'
+    | 'setGroups'
+    | 'setPanelLayout'
+    | 'setActivePanelId'
+    | 'setExpandedTileId'
+    | 'savedLayoutRef'
+  >,
+  resetViewportState: () => void,
+): void {
+  appliers.setTiles([])
+  appliers.setGroups([])
+  resetViewportState()
+  appliers.savedLayoutRef.current = null
+  appliers.setPanelLayout(null)
+  appliers.setActivePanelId(null)
+  appliers.setExpandedTileId(null)
+}
