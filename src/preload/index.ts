@@ -9,6 +9,39 @@ function channelMatches(pattern: string, channel: string): boolean {
   return pattern === channel
 }
 
+type BusListener = (event: any) => void
+
+interface RendererBusSubscription {
+  channel: string
+  subscriberId: string
+  callback: BusListener
+}
+
+const rendererBusSubscriptions = new Map<string, RendererBusSubscription>()
+const rendererBusGlobalListeners = new Set<BusListener>()
+let rendererBusIpcAttached = false
+
+function dispatchRendererBusEvent(evt: any): void {
+  for (const sub of rendererBusSubscriptions.values()) {
+    if (evt.channel === sub.channel || channelMatches(sub.channel, evt.channel)) {
+      sub.callback(evt)
+    }
+  }
+  for (const listener of rendererBusGlobalListeners) {
+    listener(evt)
+  }
+}
+
+function ensureRendererBusIpcListener(): void {
+  if (rendererBusIpcAttached) return
+  rendererBusIpcAttached = true
+  ipcRenderer.on('bus:event', (_evt, payload) => dispatchRendererBusEvent(payload))
+}
+
+function dropRendererBusSubscription(subscriberId: string): void {
+  rendererBusSubscriptions.delete(subscriberId)
+}
+
 // Expose IPC bridges to the renderer
 contextBridge.exposeInMainWorld('electron', {
   // OS dark/light (Electron nativeTheme) — used when appearance is "system"
@@ -548,25 +581,26 @@ contextBridge.exposeInMainWorld('electron', {
     publish: (channel: string, type: string, source: string, payload: Record<string, unknown>) =>
       ipcRenderer.invoke('bus:publish', channel, type, source, payload),
     subscribe: (channel: string, subscriberId: string, callback: (event: any) => void) => {
-      ipcRenderer.invoke('bus:subscribe', channel, subscriberId)
-      const handler = (_: any, evt: any) => {
-        if (evt.channel === channel || channelMatches(channel, evt.channel)) callback(evt)
-      }
-      ipcRenderer.on('bus:event', handler)
+      ensureRendererBusIpcListener()
+      rendererBusSubscriptions.set(subscriberId, { channel, subscriberId, callback })
+      void ipcRenderer.invoke('bus:subscribe', channel, subscriberId)
       return () => {
-        ipcRenderer.removeListener('bus:event', handler)
-        ipcRenderer.invoke('bus:unsubscribeAll', subscriberId)
+        dropRendererBusSubscription(subscriberId)
+        void ipcRenderer.invoke('bus:unsubscribeAll', subscriberId)
       }
     },
-    unsubscribeAll: (subscriberId: string) => ipcRenderer.invoke('bus:unsubscribeAll', subscriberId),
+    unsubscribeAll: (subscriberId: string) => {
+      dropRendererBusSubscription(subscriberId)
+      return ipcRenderer.invoke('bus:unsubscribeAll', subscriberId)
+    },
     history: (channel: string, limit?: number) => ipcRenderer.invoke('bus:history', channel, limit),
     channelInfo: (channel: string) => ipcRenderer.invoke('bus:channelInfo', channel),
     unreadCount: (channel: string, subscriberId: string) => ipcRenderer.invoke('bus:unreadCount', channel, subscriberId),
     markRead: (channel: string, subscriberId: string) => ipcRenderer.invoke('bus:markRead', channel, subscriberId),
     onEvent: (callback: (event: any) => void) => {
-      const handler = (_: any, evt: any) => callback(evt)
-      ipcRenderer.on('bus:event', handler)
-      return () => ipcRenderer.removeListener('bus:event', handler)
+      ensureRendererBusIpcListener()
+      rendererBusGlobalListeners.add(callback)
+      return () => { rendererBusGlobalListeners.delete(callback) }
     }
   },
 

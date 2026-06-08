@@ -813,8 +813,7 @@ function App(): JSX.Element {
   // ─── Subscribe to custom theme registrations from extensions ─────────────
   useEffect(() => {
     const subscriberId = 'app:theme-bus'
-    window.electron.bus?.subscribe('themes', subscriberId, () => {})
-    const unsubEvent = window.electron.bus?.onEvent((event: { channel: string; payload: unknown }) => {
+    const unsubscribe = window.electron.bus?.subscribe('themes', subscriberId, (event: { channel: string; payload: unknown }) => {
       if (event?.channel !== 'themes') return
       const data = event.payload as { action?: string; theme?: unknown; themeId?: string } | null
       if (!data) return
@@ -834,10 +833,7 @@ function App(): JSX.Element {
         setSettings(s => s.themeId === deletedThemeId ? { ...s, themeId: DEFAULT_THEME_ID } : s)
       }
     })
-    return () => {
-      window.electron.bus?.unsubscribeAll(subscriberId)
-      unsubEvent?.()
-    }
+    return () => { unsubscribe?.() }
   }, [])
 
   // ─── Promote single-tile fullscreen → layout-group fullscreen ───────────
