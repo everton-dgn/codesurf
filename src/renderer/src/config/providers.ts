@@ -195,3 +195,28 @@ export function getApproxSystemOverheadTokens(providerId: string, modelId: strin
   if (normalizedProvider === 'hermes') return 8_000
   return 6_000
 }
+
+/**
+ * Tokenised substring match for model search: every whitespace-separated token
+ * in the query must appear somewhere in the model's label, id, or description
+ * (case-insensitive). Unlike a single `includes`, this matches multi-word queries
+ * across separators — e.g. "claude opus" matches the model id `claude-opus-4-8`,
+ * and "4.8 opus" matches "Opus 4.8".
+ *
+ * Algorithm adapted from Helmor's `scoreModel` (Apache-2.0).
+ */
+export function matchesModelQuery(model: ModelOption, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const haystack = `${model.label} ${model.id} ${model.description ?? ''}`.toLowerCase()
+  for (const token of q.split(/\s+/)) {
+    if (!haystack.includes(token)) return false
+  }
+  return true
+}
+
+/** Filter a model list by a free-text query, preserving the original order. */
+export function filterModels(models: ModelOption[], query: string): ModelOption[] {
+  if (!query.trim()) return models
+  return models.filter(model => matchesModelQuery(model, query))
+}

@@ -4,6 +4,7 @@ import { Check, ChevronRight, Paperclip } from 'lucide-react'
 import { useAppFonts } from '../../FontContext'
 import { useTheme } from '../../ThemeContext'
 import type { ModelOption } from '../../config/providers'
+import { filterModels } from '../../config/providers'
 import type { MCPServerEntry } from '../../hooks/useMCPServers'
 
 const NON_SELECTABLE_UI_STYLE = {
@@ -256,9 +257,7 @@ export function ModelDropdown({ models, activeId, filter, onFilterChange, provid
 
   useEffect(() => { if (hasMany) inputRef.current?.focus() }, [hasMany])
 
-  const filtered = filter
-    ? models.filter(m => m.label.toLowerCase().includes(filter.toLowerCase()) || m.id.toLowerCase().includes(filter.toLowerCase()))
-    : models
+  const filtered = filterModels(models, filter)
 
   return (
     <div style={{
