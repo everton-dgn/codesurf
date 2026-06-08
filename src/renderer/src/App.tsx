@@ -8,6 +8,7 @@ import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
 import { useLayoutTemplates } from './hooks/useLayoutTemplates'
 import { useAutoHideScrollbars } from './hooks/useAutoHideScrollbars'
+import { useTitleTooltips } from './hooks/useTitleTooltips'
 import { useScrollFadeIndicators } from './hooks/useScrollFadeIndicators'
 import { useShellLayoutMetrics } from './hooks/useShellLayoutMetrics'
 import { useBrandWordmarkPrefs } from './hooks/useBrandWordmarkPrefs'
@@ -100,6 +101,7 @@ import { resolveProviderModeId } from './config/providers'
 
 function App(): JSX.Element {
   useAutoHideScrollbars()
+  useTitleTooltips()
   useScrollFadeIndicators()
   const miniChatOptions = useMemo(() => readMiniChatOptions(), [])
 
