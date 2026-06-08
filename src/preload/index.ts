@@ -389,6 +389,26 @@ contextBridge.exposeInMainWorld('electron', {
     }
   },
 
+  owl: {
+    health: () => ipcRenderer.invoke('owl:health'),
+    createSession: (options?: { appName?: string; buildFlavor?: string }) =>
+      ipcRenderer.invoke('owl:session:create', options ?? {}),
+    createProfile: (options: { sessionId: string; name?: string; persistent?: boolean; storageKey?: string; isolateForAgent?: boolean }) =>
+      ipcRenderer.invoke('owl:profile:create', options),
+    createWebView: (options: { profileId: string; initialUrl?: string; width?: number; height?: number; deviceScaleFactor?: number; visible?: boolean }) =>
+      ipcRenderer.invoke('owl:webview:create', options),
+    navigate: (options: { webViewId: string; url: string }) =>
+      ipcRenderer.invoke('owl:webview:navigate', options),
+    setGeometry: (options: { webViewId: string; width: number; height: number; deviceScaleFactor?: number }) =>
+      ipcRenderer.invoke('owl:webview:setGeometry', options),
+    dispatchInput: (options: { webViewId: string; route?: 'content' | 'browser'; event: Record<string, unknown> }) =>
+      ipcRenderer.invoke('owl:webview:dispatchInput', options),
+    capture: (options: { webViewId: string; includePopups?: boolean }) =>
+      ipcRenderer.invoke('owl:webview:capture', options),
+    destroy: (webViewId: string) => ipcRenderer.invoke('owl:webview:destroy', webViewId),
+    stop: () => ipcRenderer.invoke('owl:stop'),
+  },
+
   // Chrome data sync
   chromeSync: {
     listProfiles: () => ipcRenderer.invoke('chromeSync:listProfiles'),

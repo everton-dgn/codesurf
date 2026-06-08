@@ -1,0 +1,6 @@
+{
+  "runtimeName": "owl",
+  "hostKind": "electron",
+  "frameworkVersion": "codesurf-split-host",
+  "packagedFrom": "collaborator-clone"
+}

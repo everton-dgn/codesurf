@@ -49,6 +49,7 @@ import {
   attachGuestWebviewSecurityHandlers,
   createMainWindowWebPreferences,
 } from './secure-web-preferences'
+import { getOwlSupervisor, isOwlHostProcess, runOwlHostProcess, stopOwlSupervisor } from './owl/runtime'
 // browserTile BrowserView IPC was removed — renderer uses <webview> tag directly
 
 const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 8192
@@ -69,23 +70,27 @@ app.commandLine.appendSwitch('enable-zero-copy')
 app.commandLine.appendSwitch('enable-native-gpu-memory-buffers')
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
 
+const isOwlHost = isOwlHostProcess()
+
 // .skill file association support -----------------------------------------
 // Capture launch-via-Finder / `open "X.skill"` before app.whenReady so the
 // path isn't dropped. On macOS Finder uses the `open-file` event; on other
 // platforms the path arrives via argv. `queuePendingSkillFile` stashes the
 // path and forwards it to the first renderer window once it's ready.
-app.on('open-file', (event, filePath) => {
-  event.preventDefault()
-  queuePendingSkillFile(filePath)
-})
+if (!isOwlHost) {
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault()
+    queuePendingSkillFile(filePath)
+  })
+}
 
 // Single-instance lock so a second `open foo.skill` invocation reuses the
 // existing window instead of launching a new one. Argv inspection finds
 // `.skill` paths from Windows/Linux file associations (macOS uses open-file).
-const gotSingleInstanceLock = app.requestSingleInstanceLock()
+const gotSingleInstanceLock = isOwlHost || app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()
-} else {
+} else if (!isOwlHost) {
   app.on('second-instance', (_evt, argv) => {
     for (const arg of argv) {
       if (typeof arg === 'string' && arg.toLowerCase().endsWith('.skill')) {
@@ -622,6 +627,62 @@ async function openExternalIfSafe(rawUrl: string, source: 'window' | 'ipc'): Pro
   }
 }
 
+function registerOwlIPC(): void {
+  const callOwl = (method: string, params?: Record<string, unknown>) =>
+    getOwlSupervisor().call(method, (params ?? {}) as Record<string, never>)
+
+  ipcMain.handle('owl:health', () => callOwl('health'))
+  ipcMain.handle('owl:session:create', (_event, options: {
+    appName?: string
+    buildFlavor?: string
+  } = {}) => callOwl('session.create', {
+    appName: typeof options.appName === 'string' && options.appName.trim() ? options.appName.trim() : APP_NAME,
+    buildFlavor: typeof options.buildFlavor === 'string' ? options.buildFlavor : app.isPackaged ? 'prod' : 'dev',
+  }))
+  ipcMain.handle('owl:profile:create', (_event, options: {
+    sessionId: string
+    name?: string
+    persistent?: boolean
+    storageKey?: string
+    isolateForAgent?: boolean
+  }) => callOwl('profile.create', options as Record<string, unknown>))
+  ipcMain.handle('owl:webview:create', (_event, options: {
+    profileId: string
+    initialUrl?: string
+    width?: number
+    height?: number
+    deviceScaleFactor?: number
+    visible?: boolean
+  }) => callOwl('webview.create', options as Record<string, unknown>))
+  ipcMain.handle('owl:webview:navigate', (_event, options: { webViewId: string; url: string }) =>
+    callOwl('webview.navigate', options))
+  ipcMain.handle('owl:webview:setGeometry', (_event, options: {
+    webViewId: string
+    width: number
+    height: number
+    deviceScaleFactor?: number
+  }) => callOwl('webview.setGeometry', options as Record<string, unknown>))
+  ipcMain.handle('owl:webview:dispatchInput', (_event, options: {
+    webViewId: string
+    route?: 'content' | 'browser'
+    event: Record<string, unknown>
+  }) => callOwl('webview.dispatchInput', options as Record<string, unknown>))
+  ipcMain.handle('owl:webview:capture', (_event, options: { webViewId: string; includePopups?: boolean }) =>
+    callOwl('webview.capture', options as Record<string, unknown>))
+  ipcMain.handle('owl:webview:destroy', (_event, webViewId: string) =>
+    callOwl('webview.destroy', { webViewId }))
+  ipcMain.handle('owl:stop', () => {
+    stopOwlSupervisor()
+    return { ok: true }
+  })
+}
+
+if (isOwlHost) {
+  void runOwlHostProcess().catch(error => {
+    console.error('[owl-host] failed to start:', error)
+    app.quit()
+  })
+} else {
 app.whenReady().then(async () => {
   applyRuntimeAppBranding()
   installMediaPermissionHandlers()
@@ -686,6 +747,7 @@ app.whenReady().then(async () => {
   registerTtsIpc()
   registerTranscribeIpc()
   registerSecretsIpc()
+  registerOwlIPC()
   registerFileProtocol()
   registerAgentPathsIPC()
   registerChromeSyncIPC()
@@ -1132,6 +1194,7 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+}
 
 app.on('before-quit', () => {
   flushActivityStore()
@@ -1139,6 +1202,7 @@ app.on('before-quit', () => {
   extensionRegistry?.deactivateAll()
   stopAllRelayServices()
   killAllChatProcesses()
+  stopOwlSupervisor()
   closeDb()
 })
 

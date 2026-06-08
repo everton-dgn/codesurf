@@ -298,6 +298,18 @@ interface ElectronAPI {
     destroy(tileId: string): Promise<void>
     onEvent(cb: (event: { tileId: string; currentUrl: string; canGoBack: boolean; canGoForward: boolean; isLoading: boolean; mode: 'desktop' | 'mobile' }) => void): () => void
   }
+  owl: {
+    health(): Promise<{ ok: true; runtime: 'electron'; pid: number }>
+    createSession(options?: { appName?: string; buildFlavor?: string }): Promise<{ id: string; appName: string; createdAt: number; buildFlavor?: string }>
+    createProfile(options: { sessionId: string; name?: string; persistent?: boolean; storageKey?: string; isolateForAgent?: boolean }): Promise<{ id: string; sessionId: string; name: string; persistent: boolean; partition: string; createdAt: number }>
+    createWebView(options: { profileId: string; initialUrl?: string; width?: number; height?: number; deviceScaleFactor?: number; visible?: boolean }): Promise<{ id: string; profileId: string; url: string | null; width: number; height: number; deviceScaleFactor: number; visible: boolean; createdAt: number }>
+    navigate(options: { webViewId: string; url: string }): Promise<{ id: string; profileId: string; url: string | null; width: number; height: number; deviceScaleFactor: number; visible: boolean; createdAt: number }>
+    setGeometry(options: { webViewId: string; width: number; height: number; deviceScaleFactor?: number }): Promise<{ id: string; profileId: string; url: string | null; width: number; height: number; deviceScaleFactor: number; visible: boolean; createdAt: number }>
+    dispatchInput(options: { webViewId: string; route?: 'content' | 'browser'; event: Record<string, unknown> }): Promise<{ accepted: boolean; returnedToClient: boolean }>
+    capture(options: { webViewId: string; includePopups?: boolean }): Promise<{ webViewId: string; mimeType: 'image/png'; dataBase64: string; width: number; height: number }>
+    destroy(webViewId: string): Promise<{ ok: true }>
+    stop(): Promise<{ ok: true }>
+  }
   agents: {
     detect(): Promise<Array<{ id: string; label: string; cmd: string; path?: string; version?: string; available: boolean }>>
   }

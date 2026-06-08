@@ -1468,7 +1468,16 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
           }
         }
         tryInject(0)
-        if (shouldInjectHostBridge(webview.getURL())) {
+        // Reused webviews may not be re-attached to the DOM on this rAF tick yet,
+        // so getURL() (→ getWebContentsId) can throw. Mirror updateNav()'s guard:
+        // skip silently — the bus bridge reinjects on the next dom-ready/navigate.
+        let reattachUrl: string | null = null
+        try {
+          reattachUrl = webview.getURL()
+        } catch {
+          reattachUrl = null
+        }
+        if (reattachUrl && shouldInjectHostBridge(reattachUrl)) {
           executeInWebview(createBusBridgeScript(tileId, bridgeTokenRef.current))
             .catch(err => console.warn('[BrowserTile] Bus bridge reinjection failed:', err))
         }

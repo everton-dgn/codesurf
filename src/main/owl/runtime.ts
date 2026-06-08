@@ -1,0 +1,442 @@
+import { app, BrowserWindow, session, type KeyboardInputEvent, type MouseInputEvent } from 'electron'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+
+export type OwlRuntimeKind = 'electron'
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+export type JsonObject = { [key: string]: JsonValue }
+
+export interface OwlSessionRecord {
+  id: string
+  appName: string
+  createdAt: number
+  buildFlavor?: string
+}
+
+export interface OwlProfileRecord {
+  id: string
+  sessionId: string
+  name: string
+  persistent: boolean
+  partition: string
+  createdAt: number
+}
+
+export interface OwlWebViewRecord {
+  id: string
+  profileId: string
+  url: string | null
+  width: number
+  height: number
+  deviceScaleFactor: number
+  visible: boolean
+  createdAt: number
+}
+
+export interface OwlCaptureResult {
+  webViewId: string
+  mimeType: 'image/png'
+  dataBase64: string
+  width: number
+  height: number
+}
+
+export type OwlInputEvent =
+  | { type: 'mouseDown' | 'mouseUp' | 'mouseMove'; x: number; y: number; button?: 'left' | 'right' | 'middle' }
+  | { type: 'keyDown' | 'keyUp'; key: string; modifiers?: string[] }
+  | { type: 'text'; text: string }
+
+interface HostedWebView {
+  record: OwlWebViewRecord
+  profile: OwlProfileRecord
+  window: BrowserWindow
+}
+
+interface RpcResponse {
+  jsonrpc: '2.0'
+  id: number
+  result?: JsonValue
+  error?: { code: number; message: string }
+}
+
+type RpcHandler = (method: string, params: JsonObject) => Promise<JsonValue> | JsonValue
+
+function id(prefix: string): string {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+}
+
+function assertString(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`${name} must be a non-empty string`)
+  return value
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function translateOwlInputToElectron(event: OwlInputEvent): KeyboardInputEvent | MouseInputEvent {
+  switch (event.type) {
+    case 'mouseDown':
+    case 'mouseUp':
+    case 'mouseMove':
+      return { type: event.type, x: event.x, y: event.y, button: event.button ?? 'left' }
+    case 'keyDown':
+    case 'keyUp':
+      return { type: event.type, keyCode: event.key, modifiers: event.modifiers as KeyboardInputEvent['modifiers'] ?? [] }
+    case 'text':
+      return { type: 'char', keyCode: event.text }
+  }
+}
+
+class JsonRpcPeer {
+  private nextId = 1
+  private buffer = ''
+  private closed = false
+  private pending = new Map<number, { resolve: (value: JsonValue) => void; reject: (error: Error) => void }>()
+
+  constructor(
+    private readonly writeLine: (line: string) => void,
+    private readonly handler?: RpcHandler,
+  ) {}
+
+  call<T extends JsonValue = JsonValue>(method: string, params: JsonObject = {}, timeoutMs = 15_000): Promise<T> {
+    if (this.closed) return Promise.reject(new Error('OWL transport is closed'))
+    const request = { jsonrpc: '2.0' as const, id: this.nextId++, method, params }
+
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(request.id)
+        reject(new Error(`OWL request timed out: ${method}`))
+      }, timeoutMs)
+      this.pending.set(request.id, {
+        resolve: value => {
+          clearTimeout(timeout)
+          resolve(value as T)
+        },
+        reject: error => {
+          clearTimeout(timeout)
+          reject(error)
+        },
+      })
+      try {
+        this.writeLine(JSON.stringify(request))
+      } catch (error) {
+        this.pending.delete(request.id)
+        clearTimeout(timeout)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  }
+
+  feed(chunk: string): void {
+    if (this.closed) return
+    this.buffer += chunk
+    while (true) {
+      const idx = this.buffer.indexOf('\n')
+      if (idx < 0) break
+      const line = this.buffer.slice(0, idx).trim()
+      this.buffer = this.buffer.slice(idx + 1)
+      if (line.length > 0) void this.handleLine(line)
+    }
+  }
+
+  close(reason = 'OWL transport closed'): void {
+    if (this.closed) return
+    this.closed = true
+    const error = new Error(reason)
+    for (const pending of this.pending.values()) pending.reject(error)
+    this.pending.clear()
+  }
+
+  private async handleLine(line: string): Promise<void> {
+    let message: { id?: unknown; method?: unknown; params?: unknown; error?: { message?: unknown }; result?: JsonValue }
+    try {
+      message = JSON.parse(line)
+    } catch {
+      return
+    }
+
+    if (typeof message.method === 'string') {
+      if (!this.handler || typeof message.id !== 'number') return
+      try {
+        const params = message.params && typeof message.params === 'object' && !Array.isArray(message.params)
+          ? message.params as JsonObject
+          : {}
+        const result = await this.handler(message.method, params)
+        this.writeLine(JSON.stringify({ jsonrpc: '2.0', id: message.id, result } satisfies RpcResponse))
+      } catch (error) {
+        const err = error instanceof Error ? error.message : String(error)
+        this.writeLine(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: err } } satisfies RpcResponse))
+      }
+      return
+    }
+
+    if (typeof message.id !== 'number') return
+    const pending = this.pending.get(message.id)
+    if (!pending) return
+    this.pending.delete(message.id)
+    if (message.error) pending.reject(new Error(String(message.error.message ?? 'OWL request failed')))
+    else pending.resolve(message.result ?? null)
+  }
+}
+
+class ElectronOwlHost {
+  readonly runtime: OwlRuntimeKind = 'electron'
+  private sessions = new Map<string, OwlSessionRecord>()
+  private profiles = new Map<string, OwlProfileRecord>()
+  private webViews = new Map<string, HostedWebView>()
+
+  async handle(method: string, params: JsonObject = {}): Promise<JsonValue> {
+    switch (method) {
+      case 'health':
+        return { ok: true, runtime: this.runtime, pid: process.pid }
+      case 'session.create':
+        return this.createSession(params) as unknown as JsonValue
+      case 'profile.create':
+        return this.createProfile(params) as unknown as JsonValue
+      case 'webview.create':
+        return await this.createWebView(params) as unknown as JsonValue
+      case 'webview.navigate':
+        return await this.navigate(params) as unknown as JsonValue
+      case 'webview.setGeometry':
+        return this.setGeometry(params) as unknown as JsonValue
+      case 'webview.dispatchInput':
+        return this.dispatchInput(params) as unknown as JsonValue
+      case 'webview.capture':
+        return await this.capture(params) as unknown as JsonValue
+      case 'webview.destroy':
+        return this.destroy(params) as unknown as JsonValue
+      case 'plugin.list':
+        return { plugins: [] }
+      default:
+        throw new Error(`Unknown OWL method: ${method}`)
+    }
+  }
+
+  destroyAll(): void {
+    for (const hosted of this.webViews.values()) {
+      if (!hosted.window.isDestroyed()) hosted.window.destroy()
+    }
+    this.webViews.clear()
+  }
+
+  private createSession(params: JsonObject): OwlSessionRecord {
+    const record: OwlSessionRecord = {
+      id: id('session'),
+      appName: assertString(params.appName, 'appName'),
+      createdAt: Date.now(),
+      buildFlavor: optionalString(params.buildFlavor),
+    }
+    this.sessions.set(record.id, record)
+    return record
+  }
+
+  private createProfile(params: JsonObject): OwlProfileRecord {
+    const sessionId = assertString(params.sessionId, 'sessionId')
+    if (!this.sessions.has(sessionId)) throw new Error(`Unknown session: ${sessionId}`)
+
+    const persistent = params.persistent === true && params.isolateForAgent !== true
+    const name = optionalString(params.name) ?? (params.isolateForAgent ? 'agent-ephemeral' : 'default')
+    const storageKey = optionalString(params.storageKey) ?? id(name.replace(/[^a-z0-9_-]/gi, '-'))
+    const partition = persistent ? `persist:owl:${storageKey}` : `owl:memory:${storageKey}`
+    session.fromPartition(partition)
+
+    const record: OwlProfileRecord = { id: id('profile'), sessionId, name, persistent, partition, createdAt: Date.now() }
+    this.profiles.set(record.id, record)
+    return record
+  }
+
+  private async createWebView(params: JsonObject): Promise<OwlWebViewRecord> {
+    const profile = this.profile(params.profileId)
+    const record: OwlWebViewRecord = {
+      id: id('webview'),
+      profileId: profile.id,
+      url: optionalString(params.initialUrl) ?? null,
+      width: numberOr(params.width, 1280),
+      height: numberOr(params.height, 800),
+      deviceScaleFactor: numberOr(params.deviceScaleFactor, 1),
+      visible: params.visible === true,
+      createdAt: Date.now(),
+    }
+    const show = process.env.CODESURF_OWL_HOST_SHOW_WINDOWS === '1' && record.visible
+    const window = new BrowserWindow({
+      show,
+      width: record.width,
+      height: record.height,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        offscreen: true,
+        sandbox: true,
+        partition: profile.partition,
+      },
+    })
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    this.webViews.set(record.id, { record, profile, window })
+    if (record.url) await window.loadURL(record.url)
+    return record
+  }
+
+  private async navigate(params: JsonObject): Promise<OwlWebViewRecord> {
+    const hosted = this.webView(params.webViewId)
+    const url = assertString(params.url, 'url')
+    await hosted.window.loadURL(url)
+    hosted.record = { ...hosted.record, url }
+    return hosted.record
+  }
+
+  private setGeometry(params: JsonObject): OwlWebViewRecord {
+    const hosted = this.webView(params.webViewId)
+    const width = numberOr(params.width, hosted.record.width)
+    const height = numberOr(params.height, hosted.record.height)
+    const deviceScaleFactor = numberOr(params.deviceScaleFactor, hosted.record.deviceScaleFactor)
+    hosted.window.setBounds({ width, height })
+    hosted.record = { ...hosted.record, width, height, deviceScaleFactor }
+    return hosted.record
+  }
+
+  private dispatchInput(params: JsonObject): { accepted: boolean; returnedToClient: boolean } {
+    const hosted = this.webView(params.webViewId)
+    if (params.route === 'browser') return { accepted: false, returnedToClient: true }
+    const event = params.event
+    if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('event must be an object')
+    hosted.window.webContents.sendInputEvent(translateOwlInputToElectron(event as OwlInputEvent))
+    return { accepted: true, returnedToClient: false }
+  }
+
+  private async capture(params: JsonObject): Promise<OwlCaptureResult> {
+    const hosted = this.webView(params.webViewId)
+    const image = await hosted.window.webContents.capturePage()
+    const png = image.toPNG()
+    return {
+      webViewId: hosted.record.id,
+      mimeType: 'image/png',
+      dataBase64: png.toString('base64'),
+      width: hosted.record.width,
+      height: hosted.record.height,
+    }
+  }
+
+  private destroy(params: JsonObject): { ok: true } {
+    const hosted = this.webView(params.webViewId)
+    if (!hosted.window.isDestroyed()) hosted.window.destroy()
+    this.webViews.delete(hosted.record.id)
+    return { ok: true }
+  }
+
+  private profile(profileId: unknown): OwlProfileRecord {
+    const profile = this.profiles.get(assertString(profileId, 'profileId'))
+    if (!profile) throw new Error(`Unknown profile: ${String(profileId)}`)
+    return profile
+  }
+
+  private webView(webViewId: unknown): HostedWebView {
+    const hosted = this.webViews.get(assertString(webViewId, 'webViewId'))
+    if (!hosted) throw new Error(`Unknown webView: ${String(webViewId)}`)
+    return hosted
+  }
+}
+
+export function isOwlHostProcess(): boolean {
+  return process.env.CODESURF_OWL_HOST === '1' || process.argv.includes('--codesurf-owl-host')
+}
+
+export async function runOwlHostProcess(): Promise<void> {
+  await app.whenReady()
+  const host = new ElectronOwlHost()
+  const peer = new JsonRpcPeer(
+    line => process.stdout.write(line + '\n'),
+    (method, params) => host.handle(method, params),
+  )
+
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', chunk => peer.feed(String(chunk)))
+  process.stdin.on('end', () => app.quit())
+  process.on('SIGTERM', () => app.quit())
+  app.on('before-quit', () => {
+    host.destroyAll()
+    peer.close('OWL host process quitting')
+  })
+}
+
+export class StdioOwlHostSupervisor {
+  private child: ChildProcessWithoutNullStreams | null = null
+  private peer: JsonRpcPeer | null = null
+  private stderr = ''
+
+  async start(): Promise<void> {
+    if (this.child && this.peer) return
+
+    const args = process.defaultApp ? [app.getAppPath(), '--codesurf-owl-host'] : ['--codesurf-owl-host']
+    const child = spawn(process.execPath, args, {
+      cwd: app.getAppPath(),
+      env: {
+        ...process.env,
+        CODESURF_OWL_HOST: '1',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    const peer = new JsonRpcPeer(line => child.stdin.write(line + '\n'))
+    this.child = child
+    this.peer = peer
+
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', chunk => peer.feed(String(chunk)))
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', chunk => {
+      this.stderr += String(chunk)
+      if (this.stderr.length > 128 * 1024) this.stderr = this.stderr.slice(-128 * 1024)
+    })
+    child.once('error', error => {
+      peer.close(`OWL host process error: ${error.message}`)
+      this.child = null
+      this.peer = null
+    })
+    child.once('exit', (code, signal) => {
+      peer.close(`OWL host process exited: code=${code ?? 'null'} signal=${signal ?? 'null'} stderr=${this.stderr.slice(-1000)}`)
+      this.child = null
+      this.peer = null
+    })
+
+    await peer.call('health', {}, 5000)
+  }
+
+  async call(method: string, params: JsonObject = {}): Promise<JsonValue> {
+    await this.start()
+    if (!this.peer) throw new Error('OWL host is not started')
+    return this.peer.call(method, params)
+  }
+
+  stop(): void {
+    const child = this.child
+    this.child = null
+    this.peer?.close('OWL host supervisor stopped')
+    this.peer = null
+    if (!child) return
+    child.stdin.end()
+    child.kill('SIGTERM')
+  }
+
+  getStderrTail(): string {
+    return this.stderr
+  }
+}
+
+let supervisor: StdioOwlHostSupervisor | null = null
+
+export function getOwlSupervisor(): StdioOwlHostSupervisor {
+  supervisor ??= new StdioOwlHostSupervisor()
+  return supervisor
+}
+
+export function stopOwlSupervisor(): void {
+  supervisor?.stop()
+  supervisor = null
+}
