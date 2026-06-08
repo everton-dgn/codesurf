@@ -1,9 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
-import { Link2 } from 'lucide-react'
 import { CanvasGroupFrames } from './components/canvas/CanvasGroupFrames'
 import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
 import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
-import { TileColorProvider } from './TileColorContext'
+
 import { withDefaultSettings, DEFAULT_SETTINGS } from '../../shared/types'
 import type { MenuItem } from './components/ContextMenu'
 import { useExtensions } from './hooks/useExtensions'
@@ -18,6 +17,7 @@ import { AppSidebarRegion } from './components/AppSidebarRegion'
 import { AppWorkspaceTabBar } from './components/AppWorkspaceTabBar'
 import { AppOverlays } from './components/AppOverlays'
 import { AppCanvasSurface } from './components/AppCanvasSurface'
+import { AppCanvasTiles } from './components/AppCanvasTiles'
 import { resolveFileTileType } from './lib/fileTileType'
 import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
@@ -52,7 +52,6 @@ import {
 import {
   getBezierConnectionPath,
   getConnectionHandlePoint,
-  getNearestTileSide,
   getOppositeAnchorSide,
   getRouteMidpoint,
   getRouteSegments,
@@ -127,10 +126,8 @@ function buildSessionEntryHint(session: AggregatedSessionEntry): SessionEntryHin
   }
 }
 
-const LazyTileChrome = React.lazy(() => import('./components/TileChrome').then(m => ({ default: m.TileChrome })))
 const LazyArrangeToolbar = React.lazy(() => import('./components/ArrangeToolbar').then(m => ({ default: m.ArrangeToolbar })))
 const LazyMinimap = React.lazy(() => import('./components/Minimap').then(m => ({ default: m.Minimap })))
-const LazyStickyColorPicker = React.lazy(() => import('./components/NoteTile').then(m => ({ default: m.StickyColorPicker })))
 const LazyConnectionPill = React.lazy(() => import('./components/ConnectionPill').then(m => ({ default: m.ConnectionPill })))
 
 const GRID = 20 // default, overridden by settings at runtime
@@ -2794,173 +2791,35 @@ function App(): JSX.Element {
               </div>
             )}
 
-            {tiles.filter(tile => !panelTileIds.has(tile.id)).filter(tile => !expandedCanvasMembership || expandedCanvasMembership.tileIds.has(tile.id)).map(tile => {
-              // Tile being dragged (or part of a group being dragged) gets max z-index
-              const isActiveDrag =
-                (dragState.type === 'tile' && (dragState.tileId === tile.id || dragState.groupSnapshots.some(s => s.id === tile.id))) ||
-                (dragState.type === 'resize' && dragState.tileId === tile.id) ||
-                ((dragState.type === 'group' || dragState.type === 'group-resize') && tile.groupId === dragState.groupId)
-              const activeTile = isActiveDrag ? { ...tile, zIndex: 99990 } : tile
-              const isConnectionSource = dragState.type === 'connection' && dragState.sourceTileId === tile.id
-              const isConnectionTarget = dragState.type === 'connection' && dragState.targetTileId === tile.id
-              const hoveredSide = hoveredConnectionHandle?.tileId === tile.id ? hoveredConnectionHandle.side : null
-              const showConnectionHandle = isConnectionSource || Boolean(hoveredSide)
-              const activeHandleSide = isConnectionSource
-                ? dragState.side
-                : hoveredSide
-                  ? hoveredSide
-                : getNearestTileSide(tile, canvasPointerWorld ?? getTileCenter(tile))
-              const handlePoint = getConnectionHandlePoint(tile, activeHandleSide)
-              const handleSize = 22 / Math.max(0.25, viewport.zoom)
-              const sensorThickness = 52 / Math.max(0.25, viewport.zoom)
-              const sensorOverlap = 16 / Math.max(0.25, viewport.zoom)
-              return (
-                <Suspense
-                  key={tile.id}
-                  fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12, background: theme.surface.panel }}>Loading block…</div>}
-                >
-                  <>
-                  <TileColorProvider>
-                  <LazyTileChrome
-                    tile={activeTile}
-                    workspaceId={workspace?.id}
-                    workspaceDir={workspace?.path}
-                    onClose={() => closeTile(tile.id)}
-                    onActivate={() => bringToFront(tile.id)}
-                    onTitlebarMouseDown={e => handleTileMouseDown(e, tile)}
-                    onResizeMouseDown={(e, dir) => handleResizeMouseDown(e, tile, dir)}
-                    onContextMenu={e => handleTileContextMenu(e, tile)}
-                    isSelected={tile.id === selectedTileId || selectedTileIds.has(tile.id)}
-                    // Image tiles need to render their inspector controls
-                    // OUTSIDE the rounded block when selected. Allow overflow
-                    // so the negative-positioned palette/meta/input escape.
-                    allowOverflow={tile.type === 'image' && (tile.id === selectedTileId || selectedTileIds.has(tile.id))}
-                    forceExpanded={panelTileIds.has(tile.id)}
-                    onExpandChange={expanded => expanded ? enterExpandedMode(tile.id) : exitExpandedMode()}
-                    discoveryConnected={negotiatedDiscoveryState.connectedTileIds.has(tile.id)}
-                    connectedPeers={negotiatedDiscoveryState.byTileConnections.get(tile.id)?.map(link => link.peerId) ?? []}
-                    titlebarExtra={tile.type === 'note' && !tile.filePath ? <Suspense fallback={null}><LazyStickyColorPicker /></Suspense> : undefined}
-                  >
-                    <Suspense fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12, background: theme.surface.panelMuted }}>Loading block…</div>}>
-                      {renderTileBody(tile, { isInteracting: isActiveDrag, isSelected: tile.id === selectedTileId || selectedTileIds.has(tile.id) })}
-                    </Suspense>
-                  </LazyTileChrome>
-                  </TileColorProvider>
-                  {isConnectionTarget && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: tile.x - 7 / viewport.zoom,
-                        top: tile.y - 7 / viewport.zoom,
-                        width: tile.width + 14 / viewport.zoom,
-                        height: tile.height + 14 / viewport.zoom,
-                        borderRadius: 12,
-                        border: `${2 / Math.max(0.25, viewport.zoom)}px solid rgba(${dsc.line}, 0.78)`,
-                        boxShadow: `0 0 ${18 / Math.max(0.25, viewport.zoom)}px rgba(${dsc.line}, 0.24)`,
-                        pointerEvents: 'none',
-                        zIndex: 99991,
-                      }}
-                    />
-                  )}
-                  {(['left', 'right', 'top', 'bottom'] as const).map(side => {
-                    // Image tiles in selection mode show inspector controls
-                    // (palette/meta/dots/edit input) outside the block. The
-                    // link sensors sit at zIndex 99991 — well above the
-                    // chrome's tile.zIndex — so they would intercept clicks
-                    // intended for those inspector controls. Disable pointer
-                    // events on sensors for the selected image tile.
-                    const isSelectedImageTile =
-                      tile.type === 'image' &&
-                      (tile.id === selectedTileId || selectedTileIds.has(tile.id))
-                    const sensorStyle: React.CSSProperties = {
-                      position: 'absolute',
-                      pointerEvents: (dragState.type === 'connection' || isSelectedImageTile) ? 'none' : 'all',
-                      zIndex: 99991,
-                    }
-                    if (side === 'left') Object.assign(sensorStyle, {
-                      left: tile.x - sensorThickness,
-                      top: tile.y - sensorOverlap,
-                      width: sensorThickness,
-                      height: tile.height + sensorOverlap * 2,
-                    })
-                    if (side === 'right') Object.assign(sensorStyle, {
-                      left: tile.x + tile.width,
-                      top: tile.y - sensorOverlap,
-                      width: sensorThickness,
-                      height: tile.height + sensorOverlap * 2,
-                    })
-                    if (side === 'top') Object.assign(sensorStyle, {
-                      left: tile.x - sensorOverlap,
-                      top: tile.y - sensorThickness,
-                      width: tile.width + sensorOverlap * 2,
-                      height: sensorThickness,
-                    })
-                    if (side === 'bottom') Object.assign(sensorStyle, {
-                      left: tile.x - sensorOverlap,
-                      top: tile.y + tile.height,
-                      width: tile.width + sensorOverlap * 2,
-                      height: sensorThickness,
-                    })
-                    return (
-                      <div
-                        key={`${tile.id}-link-sensor-${side}`}
-                        // Marked as part of the tile chrome so the canvas's
-                        // mousedown handler doesn't clear selection when the
-                        // user clicks within a sensor zone (e.g. trying to
-                        // reach the image-tile inspector controls below the
-                        // block, or the group toolbar above it).
-                        data-tile-chrome="true"
-                        style={sensorStyle}
-                        onMouseDown={e => e.stopPropagation()}
-                        onMouseEnter={() => showConnectionHandleForSide(tile.id, side)}
-                        onMouseMove={e => {
-                          showConnectionHandleForSide(tile.id, side)
-                          setCanvasPointerWorld(screenToWorld(e.clientX, e.clientY))
-                        }}
-                        onMouseLeave={() => scheduleConnectionHandleHide(tile.id, side)}
-                      />
-                    )
-                  })}
-                  <button
-                    type="button"
-                    title="Drag to link blocks"
-                    aria-label="Drag to link blocks"
-                    onMouseDown={e => handleConnectionMouseDown(e, tile, activeHandleSide)}
-                    style={{
-                      position: 'absolute',
-                      left: handlePoint.x - handleSize / 2,
-                      top: handlePoint.y - handleSize / 2,
-                      width: handleSize,
-                      height: handleSize,
-                      borderRadius: '50%',
-                      border: `${1.5 / Math.max(0.25, viewport.zoom)}px solid rgba(${dsc.line}, ${isConnectionSource ? 0.9 : 0.48})`,
-                      background: isConnectionSource ? `rgba(${dsc.line}, 0.28)` : theme.surface.panelElevated,
-                      color: dsc.text,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      cursor: isConnectionSource ? 'grabbing' : 'grab',
-                      opacity: showConnectionHandle ? 1 : 0,
-                      pointerEvents: showConnectionHandle ? 'all' : 'none',
-                      zIndex: 99992,
-                      boxShadow: isConnectionSource ? `0 0 ${14 / Math.max(0.25, viewport.zoom)}px rgba(${dsc.line}, 0.34)` : '0 2px 8px rgba(0,0,0,0.22)',
-                    }}
-                    onMouseEnter={() => showConnectionHandleForSide(tile.id, activeHandleSide)}
-                    onMouseMove={e => {
-                      showConnectionHandleForSide(tile.id, activeHandleSide)
-                      setCanvasPointerWorld(screenToWorld(e.clientX, e.clientY))
-                    }}
-                    onMouseLeave={() => {
-                      if (!isConnectionSource) scheduleConnectionHandleHide(tile.id, activeHandleSide)
-                    }}
-                  >
-                    <Link2 size={Math.max(8, 11 / Math.max(0.25, viewport.zoom))} strokeWidth={2.2} aria-hidden="true" />
-                  </button>
-                  </>
-                </Suspense>
-              )
-            })}
+            <AppCanvasTiles
+              tiles={tiles}
+              panelTileIds={panelTileIds}
+              expandedCanvasMembership={expandedCanvasMembership}
+              dragState={dragState}
+              viewport={viewport}
+              canvasPointerWorld={canvasPointerWorld}
+              theme={theme}
+              dsc={dsc}
+              workspaceId={workspace?.id}
+              workspaceDir={workspace?.path}
+              selectedTileId={selectedTileId}
+              selectedTileIds={selectedTileIds}
+              negotiatedDiscoveryState={negotiatedDiscoveryState}
+              onCloseTile={closeTile}
+              onBringToFront={bringToFront}
+              onTitlebarMouseDown={handleTileMouseDown}
+              onResizeMouseDown={handleResizeMouseDown}
+              onContextMenu={handleTileContextMenu}
+              onEnterExpandedMode={enterExpandedMode}
+              onExitExpandedMode={exitExpandedMode}
+              onConnectionMouseDown={handleConnectionMouseDown}
+              showConnectionHandleForSide={showConnectionHandleForSide}
+              scheduleConnectionHandleHide={scheduleConnectionHandleHide}
+              hoveredConnectionHandle={hoveredConnectionHandle}
+              setCanvasPointerWorld={setCanvasPointerWorld}
+              screenToWorld={screenToWorld}
+              renderTileBody={renderTileBody}
+            />
 
             {!panelLayout && (manualConnectionRenderRoutes.length > 0 || ambientDiscoveryRenderRoutes.length > 0 || discoveryPreview?.match || discoveryPulses.length > 0 || dragState.type === 'connection') && (
               <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: dragState.type === 'connection' ? 99996 : discoveryHighlightZIndex }}>
