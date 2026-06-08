@@ -31,12 +31,16 @@ export function useScrollFadeIndicators(): void {
     }
     scheduleUpdate()
     const mutationObserver = new MutationObserver(scheduleUpdate)
+    // Only react to elements being added/removed (new or removed scroll containers).
+    // Deliberately NOT observing `attributes` (style/class) or `characterData`: those
+    // fire on every tile drag-transform and every streamed terminal/chat token, turning
+    // this whole-document getComputedStyle + clientHeight/scrollHeight scan into a
+    // forced-reflow storm. Content growth inside a scroll container still arrives via
+    // childList (streamed nodes are appended), the ResizeObserver covers viewport
+    // resizes, and the 1s interval is the correctness backstop for anything missed.
     mutationObserver.observe(document.body, {
       childList: true,
       subtree: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: ['class', 'style', 'data-scroll-fade', 'data-scroll-fade-active'],
     })
     const resizeObserver = new ResizeObserver(scheduleUpdate)
     resizeObserver.observe(document.documentElement)
