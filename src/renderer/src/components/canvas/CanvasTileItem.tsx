@@ -107,6 +107,7 @@ function CanvasTileItemComponent(props: CanvasTileItemProps): JSX.Element {
             onResizeMouseDown={(e, dir) => onResizeMouseDown(e, tile, dir)}
             onContextMenu={e => onContextMenu(e, tile)}
             isSelected={isSelected}
+            isInteracting={isActiveDrag}
             allowOverflow={isSelectedImageTile}
             forceExpanded={forceExpanded}
             onExpandChange={expanded => expanded ? onEnterExpandedMode(tile.id) : onExitExpandedMode()}

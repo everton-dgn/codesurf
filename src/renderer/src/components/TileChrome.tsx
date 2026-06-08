@@ -77,6 +77,10 @@ interface Props {
   onExpandChange?: (expanded: boolean) => void
   children: React.ReactNode
   isSelected?: boolean
+  /** True while this tile is being actively dragged/resized. Switches positioning to a
+   *  GPU-composited transform + will-change so movement skips layout. Kept off when idle
+   *  so the tile root never becomes a containing block for fixed-position descendants. */
+  isInteracting?: boolean
   forceExpanded?: boolean
   /** When true, the tile body can render content that extends OUTSIDE the
    *  block's rounded box (e.g. external controls flanking image tiles).
@@ -1003,6 +1007,7 @@ function processEvent(evt: { type: string; payload: Record<string, unknown>; id:
 
 function areTileChromePropsEqual(prev: Props, next: Props): boolean {
   if (prev.isSelected !== next.isSelected) return false
+  if (prev.isInteracting !== next.isInteracting) return false
   const prevTile = prev.tile
   const nextTile = next.tile
   return (
@@ -1018,7 +1023,7 @@ function areTileChromePropsEqual(prev: Props, next: Props): boolean {
 
 function TileChromeComponent({
   tile, workspaceId, workspaceDir, onClose, onActivate, onTitlebarMouseDown, onResizeMouseDown, onContextMenu,
-  onExpandChange, children, isSelected, forceExpanded, allowOverflow,
+  onExpandChange, children, isSelected, isInteracting, forceExpanded, allowOverflow,
   busUnreadCount, onBusPopupToggle, showBusPopup, discoveryConnected, connectedPeers, titlebarColor: titlebarColorProp, titlebarExtra, busEvents
 }: Props): JSX.Element {
   const theme = useTheme()
@@ -1350,7 +1355,14 @@ function TileChromeComponent({
       data-tile-chrome="true"
       className="absolute"
       style={{
-        left: tile.x, top: tile.y,
+        // While dragging/resizing, position via a GPU-composited transform so movement
+        // skips layout — heavy tile bodies (Monaco, terminals) don't relayout per frame.
+        // When idle, fall back to left/top so the root is NOT a containing block; that
+        // keeps inline `position: fixed` descendants (e.g. the customisation fullscreen
+        // overlay) anchored to the viewport instead of the tile.
+        ...(isInteracting
+          ? { left: 0, top: 0, transform: `translate(${tile.x}px, ${tile.y}px)`, willChange: 'transform' }
+          : { left: tile.x, top: tile.y }),
         width: tile.width, height: tile.height,
         zIndex: tile.zIndex,
         visibility: forceExpanded ? 'hidden' : 'visible',
