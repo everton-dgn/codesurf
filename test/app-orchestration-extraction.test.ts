@@ -14,7 +14,6 @@ describe('wave 27 orchestration helpers extraction', () => {
     expect(APP_SOURCE).toContain("from './lib/workspaceHelpers'")
     expect(APP_SOURCE).toContain("from './lib/appShellPersistence'")
     expect(APP_SOURCE).toContain("from './lib/canvasStateHelpers'")
-    expect(APP_SOURCE).toContain("from './lib/sessionEntryHelpers'")
     expect(APP_SOURCE).toContain("from './hooks/usePanelTileChrome'")
     expect(APP_SOURCE).toContain("from './hooks/useAppPanelViewMode'")
     expect(APP_SOURCE).toContain("from './hooks/useAppCanvasViewProps'")

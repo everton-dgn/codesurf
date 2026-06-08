@@ -1,4 +1,6 @@
 import type { AggregatedSessionEntry, SessionEntryHint } from '../../../shared/session-types'
+import type { TileState } from '../../../shared/types'
+import { getChatTileRuntimeState } from '../components/chatTileRuntimeState'
 
 export function isRuntimeSessionEntryId(sessionEntryId: string): boolean {
   return sessionEntryId.startsWith('codesurf-runtime:')
@@ -18,4 +20,20 @@ export function buildSessionEntryHint(session: AggregatedSessionEntry): SessionE
     title: session.title,
     projectPath: session.projectPath ?? null,
   }
+}
+
+export type ChatTileSessionMatch = { entryId: string | null; sessionId: string | null }
+
+export function findMatchingChatTileIdForSession(
+  tiles: TileState[],
+  session: AggregatedSessionEntry,
+  chatTileSessionMatches: Record<string, ChatTileSessionMatch>,
+): string | null {
+  return tiles.find(tile => {
+    if (tile.type !== 'chat') return false
+    if (session.tileId && tile.id === session.tileId) return true
+    const remembered = chatTileSessionMatches[tile.id]
+    const runtimeState = getChatTileRuntimeState<{ linkedSessionEntryId?: string | null }>(tile.id)
+    return remembered?.entryId === session.id || runtimeState?.linkedSessionEntryId === session.id
+  })?.id ?? null
 }
