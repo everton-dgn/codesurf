@@ -19,6 +19,8 @@ import { AppOverlays } from './components/AppOverlays'
 import { AppCanvasSurface } from './components/AppCanvasSurface'
 import { AppCanvasTiles } from './components/AppCanvasTiles'
 import { AppCanvasConnections } from './components/AppCanvasConnections'
+import { AppCanvasPanelRegion } from './components/AppCanvasPanelRegion'
+import { AppCanvasArrangeToolbar } from './components/AppCanvasArrangeToolbar'
 import { resolveFileTileType } from './lib/fileTileType'
 import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
@@ -65,9 +67,6 @@ import {
   removeTileFromTree,
   addTabToLeaf,
   getAllTileIds,
-  splitLeaf,
-  closeOthersInLeaf,
-  closeToRightInLeaf,
   findLeafById,
   setActiveTab,
   pinTabInLeaf,
@@ -89,8 +88,6 @@ import {
 } from './utils/appLaunchRequests'
 import { getChatTileRuntimeState, setChatTileRuntimeState } from './components/chatTileRuntimeState'
 import { resolveProviderModeId } from './config/providers'
-
-const LazyPanelLayout = React.lazy(() => import('./components/PanelLayout').then(m => ({ default: m.PanelLayout })))
 
 type PendingSessionOpen =
   | { kind: 'chat'; session: SessionTargetEntry; workspaceId: string; options?: FocusOpenOptions }
@@ -120,7 +117,6 @@ function buildSessionEntryHint(session: AggregatedSessionEntry): SessionEntryHin
   }
 }
 
-const LazyArrangeToolbar = React.lazy(() => import('./components/ArrangeToolbar').then(m => ({ default: m.ArrangeToolbar })))
 const LazyMinimap = React.lazy(() => import('./components/Minimap').then(m => ({ default: m.Minimap })))
 const GRID = 20 // default, overridden by settings at runtime
 const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
@@ -2446,6 +2442,48 @@ function App(): JSX.Element {
     deleteConnection,
   ])
 
+  const appCanvasPanelRegionProps = React.useMemo(() => ({
+    panelLayout,
+    mainPanelCornerRadii,
+    tiles,
+    theme,
+    activePanelId,
+    nextZIndex,
+    getPanelTileLabel,
+    getPanelTileIcon,
+    renderTileBody,
+    viewportCenter,
+    getInitialTileSize,
+    snapValue,
+    onLayoutChange: setPanelLayout,
+    onCloseTab: closeTile,
+    onAddTile: addTile,
+    onExitExpandedMode: exitExpandedMode,
+    onActivePanelChange: setActivePanelId,
+    onLaunchTemplate: handleLaunchTemplate,
+    setTiles,
+    setNextZIndex,
+  }), [
+    panelLayout,
+    mainPanelCornerRadii,
+    tiles,
+    theme,
+    activePanelId,
+    nextZIndex,
+    getPanelTileLabel,
+    getPanelTileIcon,
+    renderTileBody,
+    viewportCenter,
+    getInitialTileSize,
+    snapValue,
+    closeTile,
+    addTile,
+    exitExpandedMode,
+    handleLaunchTemplate,
+    setTiles,
+    setNextZIndex,
+  ])
+
   useEffect(() => {
     if (!canvasGlowEnabled) hideCanvasGlow()
     return () => hideCanvasGlow()
@@ -2610,61 +2648,7 @@ function App(): JSX.Element {
           dotGlowLargeRef={dotGlowLargeRef}
           surfaceOverlays={(
             <>
-              {panelLayout && (
-                <div style={{
-                  position: 'absolute',
-                  inset: 0,
-                  zIndex: 50,
-                }}>
-                  <Suspense fallback={null}>
-                    <LazyPanelLayout
-                      root={panelLayout}
-                      insetBottom={0}
-                      outerRadii={mainPanelCornerRadii}
-                      getTileLabel={getPanelTileLabel}
-                      renderTile={(tileId) => {
-                        const t = tiles.find(ti => ti.id === tileId)
-                        if (!t) return null
-                        return (
-                          <div style={{ width: '100%', height: '100%', background: theme.surface.panel }}>
-                            <Suspense fallback={<div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.text.muted, fontSize: 12, background: theme.surface.panel }}>Loading block…</div>}>
-                              {renderTileBody(t)}
-                            </Suspense>
-                          </div>
-                        )
-                      }}
-                      onLayoutChange={setPanelLayout}
-                      onCloseTab={closeTile}
-                      onAddTile={(type) => addTile(type as TileState['type'])}
-                      onExit={exitExpandedMode}
-                      activePanelId={activePanelId}
-                      onActivePanelChange={setActivePanelId}
-                      getTileType={(tileId) => tiles.find(t => t.id === tileId)?.type ?? 'note'}
-                      getTileIcon={getPanelTileIcon}
-                      onSplitNew={(panelId, tileType, zone) => {
-                        const center = viewportCenter()
-                        const { w, h } = getInitialTileSize(tileType as TileState['type'])
-                        const newTile: TileState = {
-                          id: `tile-${Date.now()}`,
-                          type: tileType as TileState['type'],
-                          x: snapValue(center.x - w / 2), y: snapValue(center.y - h / 2),
-                          width: w, height: h, zIndex: nextZIndex,
-                        }
-                        setTiles(prev => [...prev, newTile])
-                        setNextZIndex(prev => prev + 1)
-                        setPanelLayout(prev => prev ? splitLeaf(prev, panelId, newTile.id, zone) : prev)
-                      }}
-                      onCloseOthers={(panelId, tileId) => {
-                        setPanelLayout(prev => prev ? closeOthersInLeaf(prev, panelId, tileId) : prev)
-                      }}
-                      onCloseToRight={(panelId, tileId) => {
-                        setPanelLayout(prev => prev ? closeToRightInLeaf(prev, panelId, tileId) : prev)
-                      }}
-                      onLaunchTemplate={handleLaunchTemplate}
-                    />
-                  </Suspense>
-                </div>
-              )}
+              <AppCanvasPanelRegion {...appCanvasPanelRegionProps} />
               {showMinimap && (
                 <Suspense fallback={null}>
                   <LazyMinimap
@@ -2850,26 +2834,18 @@ function App(): JSX.Element {
 
         </AppCanvasSurface>
 
-        {/* Arrange toolbar — render above the titlebar drag layer */}
-        <Suspense fallback={null}>
-          <LazyArrangeToolbar
-            tiles={tiles}
-            groups={groups}
-            onArrange={(updated, mode) => {
-              if (panelLayout) exitExpandedMode()
-              setCanvasArrangeMode(mode)
-              handleArrange(updated)
-            }}
-            zoom={viewport.zoom}
-            isTabbedView={!!panelLayout}
-            activeCanvasMode={canvasArrangeMode}
-            onToggleTabs={() => {
-              if (panelLayout) exitExpandedMode()
-              else enterTabbedView()
-            }}
-            onZoomToggle={toggleZoomOne}
-          />
-        </Suspense>
+        <AppCanvasArrangeToolbar
+          tiles={tiles}
+          groups={groups}
+          panelLayout={panelLayout}
+          viewportZoom={viewport.zoom}
+          canvasArrangeMode={canvasArrangeMode}
+          onArrangeTiles={handleArrange}
+          onSetCanvasArrangeMode={setCanvasArrangeMode}
+          onExitExpandedMode={exitExpandedMode}
+          onEnterTabbedView={enterTabbedView}
+          onZoomToggle={toggleZoomOne}
+        />
       </div>
       <AppOverlays
         showMCP={showMCP}
