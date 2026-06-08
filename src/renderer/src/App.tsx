@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo, Suspense } from 'react'
 import { CanvasGroupFrames } from './components/canvas/CanvasGroupFrames'
-import type { AggregatedSessionEntry, SessionEntryHint, WorkspaceSessionEntry } from '../../shared/session-types'
-import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType, LockedConnection } from '../../shared/types'
+import type { AggregatedSessionEntry, WorkspaceSessionEntry } from '../../shared/session-types'
+import type { TileState, GroupState, CanvasState, Workspace, AppSettings, TileType } from '../../shared/types'
 
 import { withDefaultSettings, DEFAULT_SETTINGS } from '../../shared/types'
 import type { MenuItem } from './components/ContextMenu'
@@ -46,6 +46,22 @@ import { useRenderTileBody } from './hooks/useRenderTileBody'
 import { useAppThemeCssVars } from './hooks/useAppThemeCssVars'
 import { useAutoAgentProximity } from './hooks/useAutoAgentProximity'
 import { useDiscoveryPulses } from './hooks/useDiscoveryPulses'
+import { usePanelTileChrome } from './hooks/usePanelTileChrome'
+import { useAppPanelViewMode } from './hooks/useAppPanelViewMode'
+import { useAppCanvasConnectionProps, useAppCanvasPanelRegionProps } from './hooks/useAppCanvasViewProps'
+import {
+  getCanonicalWorkspaceId,
+  normalizeWorkspacePath,
+  resolveWorkspaceCandidateForProjectPath,
+} from './lib/workspaceHelpers'
+import {
+  readCachedSettings,
+  readPersistedWorkspaceTabState,
+  persistWorkspaceTabState,
+  SETTINGS_CACHE_KEY,
+} from './lib/appShellPersistence'
+import { dedupeLockedConnections, hrefToLocalPath, snapToCanvasGrid } from './lib/canvasStateHelpers'
+import { buildSessionEntryHint, isRuntimeSessionEntryId } from './lib/sessionEntryHelpers'
 import {
   extensionActionRegistry,
   type AnchorPoint,
@@ -64,8 +80,6 @@ import { applyContrast, DEFAULT_THEME_ID, getThemeById, resolveEffectiveThemeId,
 import type { PanelLeaf, PanelNode } from './components/panelLayoutTree'
 import {
   createLeaf,
-  removeTileFromTree,
-  addTabToLeaf,
   getAllTileIds,
   findLeafById,
   setActiveTab,
@@ -76,9 +90,8 @@ import {
   replaceLeafInPanelTree,
   sanitizePanelLayout,
 } from './components/panelLayoutTree'
-import { panelTreeHasSplit } from './lib/layoutSnap'
 import { basename, getDroppedPaths } from './utils/dnd'
-import { CODESURF_OPEN_LINK_EVENT, normalizeLocalPathCandidate, type CodeSurfOpenLinkDetail } from './utils/links'
+import { CODESURF_OPEN_LINK_EVENT, type CodeSurfOpenLinkDetail } from './utils/links'
 import {
   CODESURF_CREATE_TILE_EVENT,
   CODESURF_OPEN_CHAT_SURFACE_EVENT,
@@ -97,193 +110,7 @@ type SessionTargetEntry = AggregatedSessionEntry | WorkspaceSessionEntry
 type FocusOpenOptions = { persist?: boolean; sourceTileId?: string }
 const INITIAL_EXTERNAL_SESSION_TAIL_LOAD = 20
 
-function isRuntimeSessionEntryId(sessionEntryId: string): boolean {
-  return sessionEntryId.startsWith('codesurf-runtime:')
-    || sessionEntryId.startsWith('codesurf-tile:')
-    || sessionEntryId.startsWith('codesurf-job:')
-}
-
-function buildSessionEntryHint(session: AggregatedSessionEntry): SessionEntryHint {
-  return {
-    id: session.id,
-    source: session.source,
-    filePath: session.filePath,
-    sessionId: session.sessionId,
-    provider: session.provider,
-    model: session.model,
-    messageCount: session.messageCount,
-    title: session.title,
-    projectPath: session.projectPath ?? null,
-  }
-}
-
 const LazyMinimap = React.lazy(() => import('./components/Minimap').then(m => ({ default: m.Minimap })))
-const GRID = 20 // default, overridden by settings at runtime
-const snap = (v: number, grid = GRID) => Math.round(v / grid) * grid
-
-function normalizeWorkspacePath(path: string | null | undefined): string {
-  return String(path ?? '').replace(/\\/g, '/').replace(/\/+$/, '')
-}
-
-function getWorkspaceProjectPaths(workspace: Workspace): string[] {
-  const seen = new Set<string>()
-  const next: string[] = []
-  const push = (path: string | null | undefined) => {
-    const normalized = normalizeWorkspacePath(path)
-    if (!normalized || seen.has(normalized)) return
-    seen.add(normalized)
-    next.push(normalized)
-  }
-  push(workspace.path)
-  for (const projectPath of workspace.projectPaths ?? []) push(projectPath)
-  return next
-}
-
-function isLayoutVariantWorkspace(workspace: Workspace, projectPath?: string | null): boolean {
-  const normalizedProjectPath = normalizeWorkspacePath(projectPath ?? workspace.path)
-  const projectBase = basename(normalizedProjectPath)
-  const workspaceName = workspace.name?.trim() ?? ''
-  if (!normalizedProjectPath || !projectBase || !workspaceName.startsWith(`${projectBase}:`)) return false
-  const projectPaths = getWorkspaceProjectPaths(workspace)
-  return projectPaths.length === 1 && projectPaths[0] === normalizedProjectPath
-}
-
-function getCanonicalWorkspaceId(workspaceList: Workspace[], workspaceId: string | null | undefined): string | null {
-  if (!workspaceId) return null
-  const target = workspaceList.find(candidate => candidate.id === workspaceId) ?? null
-  if (!target) return null
-
-  const normalizedProjectPath = normalizeWorkspacePath(target.path)
-  if (!normalizedProjectPath || !isLayoutVariantWorkspace(target, normalizedProjectPath)) return target.id
-
-  const canonical = workspaceList.find(candidate =>
-    candidate.id !== target.id
-    && normalizeWorkspacePath(candidate.path) === normalizedProjectPath
-    && !isLayoutVariantWorkspace(candidate, normalizedProjectPath),
-  ) ?? null
-
-  return canonical?.id ?? target.id
-}
-
-function resolveWorkspaceCandidateForProjectPath(workspaceList: Workspace[], projectPath: string | null | undefined, currentWorkspaceId?: string | null): Workspace | null {
-  const normalizedProjectPath = normalizeWorkspacePath(projectPath)
-  if (!normalizedProjectPath) {
-    const canonicalCurrentId = getCanonicalWorkspaceId(workspaceList, currentWorkspaceId)
-    return canonicalCurrentId
-      ? (workspaceList.find(candidate => candidate.id === canonicalCurrentId) ?? null)
-      : null
-  }
-
-  const canonicalCurrentId = getCanonicalWorkspaceId(workspaceList, currentWorkspaceId)
-  const currentWorkspace = canonicalCurrentId
-    ? (workspaceList.find(candidate => candidate.id === canonicalCurrentId) ?? null)
-    : null
-
-  const currentWorkspacePath = normalizeWorkspacePath(currentWorkspace?.path)
-  const currentWorkspaceProjects = currentWorkspace ? new Set(getWorkspaceProjectPaths(currentWorkspace)) : new Set<string>()
-
-  if (currentWorkspace && currentWorkspaceProjects.has(normalizedProjectPath) && currentWorkspacePath !== normalizedProjectPath) {
-    return currentWorkspace
-  }
-
-  if (currentWorkspace && currentWorkspacePath === normalizedProjectPath && !isLayoutVariantWorkspace(currentWorkspace, normalizedProjectPath)) {
-    return currentWorkspace
-  }
-
-  const exactMatches = workspaceList.filter(candidate => normalizeWorkspacePath(candidate.path) === normalizedProjectPath)
-  const canonicalExactMatch = exactMatches.find(candidate => !isLayoutVariantWorkspace(candidate, normalizedProjectPath)) ?? null
-  if (canonicalExactMatch) return canonicalExactMatch
-
-  if (currentWorkspace && exactMatches.some(candidate => candidate.id === currentWorkspace.id)) {
-    return currentWorkspace
-  }
-  if (exactMatches.length > 0) return exactMatches[0]
-
-  if (currentWorkspace && currentWorkspaceProjects.has(normalizedProjectPath)) {
-    return currentWorkspace
-  }
-
-  const projectMatches = workspaceList.filter(candidate => getWorkspaceProjectPaths(candidate).includes(normalizedProjectPath))
-  const canonicalProjectMatch = projectMatches.find(candidate => !isLayoutVariantWorkspace(candidate, normalizedProjectPath)) ?? null
-  return canonicalProjectMatch ?? projectMatches[0] ?? null
-}
-
-function dedupeLockedConnections(connections: LockedConnection[]): LockedConnection[] {
-  const seen = new Set<string>()
-  const next: LockedConnection[] = []
-  for (const connection of connections) {
-    const sourceTileId = connection.sourceTileId?.trim()
-    const targetTileId = connection.targetTileId?.trim()
-    if (!sourceTileId || !targetTileId || sourceTileId === targetTileId) continue
-    const [left, right] = sourceTileId < targetTileId
-      ? [sourceTileId, targetTileId]
-      : [targetTileId, sourceTileId]
-    const key = `${left}::${right}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    next.push({ sourceTileId, targetTileId })
-  }
-  return next
-}
-
-function hrefToLocalPath(href: string): string | null {
-  return normalizeLocalPathCandidate(href)
-}
-
-const SETTINGS_CACHE_KEY = 'contex:settings-cache'
-const WORKSPACE_TAB_STATE_KEY = 'codesurf:workspace-tabs:v1'
-type PersistedWorkspaceTabState = {
-  openWorkspaceIds: string[]
-  currentWorkspaceId: string | null
-}
-
-function readCachedSettings(): AppSettings {
-  if (typeof window === 'undefined') return DEFAULT_SETTINGS
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_CACHE_KEY)
-    return raw ? withDefaultSettings(JSON.parse(raw)) : DEFAULT_SETTINGS
-  } catch {
-    return DEFAULT_SETTINGS
-  }
-}
-
-function readPersistedWorkspaceTabState(): PersistedWorkspaceTabState {
-  if (typeof window === 'undefined') {
-    return { openWorkspaceIds: [], currentWorkspaceId: null }
-  }
-
-  try {
-    const raw = window.localStorage.getItem(WORKSPACE_TAB_STATE_KEY)
-    if (!raw) return { openWorkspaceIds: [], currentWorkspaceId: null }
-    const parsed = JSON.parse(raw) as Partial<PersistedWorkspaceTabState>
-    const openWorkspaceIds = Array.isArray(parsed.openWorkspaceIds)
-      ? parsed.openWorkspaceIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      : []
-    const currentWorkspaceId = typeof parsed.currentWorkspaceId === 'string' && parsed.currentWorkspaceId.trim().length > 0
-      ? parsed.currentWorkspaceId
-      : null
-    return {
-      openWorkspaceIds: Array.from(new Set(openWorkspaceIds)),
-      currentWorkspaceId,
-    }
-  } catch {
-    return { openWorkspaceIds: [], currentWorkspaceId: null }
-  }
-}
-
-function persistWorkspaceTabState(state: PersistedWorkspaceTabState): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(WORKSPACE_TAB_STATE_KEY, JSON.stringify({
-      openWorkspaceIds: Array.from(new Set(state.openWorkspaceIds.filter(id => typeof id === 'string' && id.trim().length > 0))),
-      currentWorkspaceId: typeof state.currentWorkspaceId === 'string' && state.currentWorkspaceId.trim().length > 0
-        ? state.currentWorkspaceId
-        : null,
-    }))
-  } catch {
-    // ignore localStorage failures
-  }
-}
 
 function App(): JSX.Element {
   useAutoHideScrollbars()
@@ -413,25 +240,11 @@ function App(): JSX.Element {
     if (selectedWorkspaceFilePath) setSidebarSelectedPath(selectedWorkspaceFilePath)
   }, [selectedWorkspaceFilePath])
 
-  const getPanelTileLabel = useCallback((tileId: string): string => {
-    const tile = tiles.find(ti => ti.id === tileId)
-    if (!tile) return 'Unknown'
-    if (tile.label?.trim()) return tile.label.trim()
-    if (tile.filePath) return tile.filePath.replace(/\\/g, '/').split('/').pop() ?? tile.filePath
-    if (tile.type.startsWith('ext:')) {
-      const tileLabel = extensionTileByType.get(tile.type)?.label
-      if (tileLabel?.trim()) return tileLabel.trim()
-      const friendlyName = extensionNameById.get(tile.type.slice(4))
-      if (friendlyName?.trim()) return friendlyName.trim()
-    }
-    return tile.type.charAt(0).toUpperCase() + tile.type.slice(1)
-  }, [extensionNameById, extensionTileByType, tiles])
-
-  const getPanelTileIcon = useCallback((tileId: string): string | undefined => {
-    const tile = tiles.find(ti => ti.id === tileId)
-    if (!tile?.type.startsWith('ext:')) return undefined
-    return extensionTileByType.get(tile.type)?.icon
-  }, [extensionTileByType, tiles])
+  const { getPanelTileLabel, getPanelTileIcon } = usePanelTileChrome({
+    tiles,
+    extensionNameById,
+    extensionTileByType,
+  })
 
   // Workspace pill tabs — open workspace ids within this window
   const [openWorkspaceIds, setOpenWorkspaceIds] = useState<string[]>([])
@@ -578,7 +391,7 @@ function App(): JSX.Element {
     viewportZoom: viewport.zoom,
   })
   const snapValue = React.useCallback((value: number) => (
-    settings.snapToGrid ? snap(value, settings.gridSize) : value
+    settings.snapToGrid ? snapToCanvasGrid(value, settings.gridSize) : value
   ), [settings.snapToGrid, settings.gridSize])
 
   const showEmptyLayoutPage = useCallback((options?: { preserveOpenTabs?: boolean }) => {
@@ -821,184 +634,31 @@ function App(): JSX.Element {
     return () => { unsubscribe?.() }
   }, [])
 
-  // ─── Promote single-tile fullscreen → layout-group fullscreen ───────────
-  // When the user is in path-2 (double-clicked a single tile) and the panel
-  // grows beyond one tile (via split / new tab), we materialize the panel as
-  // a real layout-group on the canvas immediately. From that moment on, the
-  // fullscreen panel and the canvas group share the same layout tree —
-  // identical to path 3. This means: no "magic group appears at exit"; the
-  // group exists from the moment a layout becomes a layout.
-  const promoteExpandedTileToLayoutGroup = useCallback(() => {
-    // Already a real layout group (path 3) — nothing to do
-    if (expandLayoutGroupIdRef.current) return
-    // Not in single-tile-expand mode (path 1 or no panel) — skip
-    const anchorTileId = expandedTileIdRef.current
-    if (!anchorTileId) return
-    const layout = panelLayoutRef.current
-    if (!layout) return
-    // tabs != layout: a single leaf full of tabs is just "siblings reachable as
-    // tabs" and must stay transient. Only a real spatial split promotes.
-    if (!panelTreeHasSplit(layout)) return
-    const tileIds = getAllTileIds(layout)
-
-    const groupId = `group-${Date.now()}`
-    const anchor = tilesRef.current.find(t => t.id === anchorTileId)
-
-    // ── Placement strategy ──────────────────────────────────────────────────
-    // TODO(design): refine where the new layout-group lands on canvas.
-    //   (A) anchor.x/y with a generous default size — keeps originating tile
-    //       visually anchored to its starting spot
-    //   (B) viewport-center, default size — predictable but loses spatial link
-    //   (C) anchor.x/y but size = max(anchor, 800x600) — current
-    // 5–10 line tweak opportunity if you want to try (B) or push neighbors aside.
-    const DEFAULT_W = 800
-    const DEFAULT_H = 600
-    const baseX = anchor?.x ?? (viewportRef.current ? -viewportRef.current.tx / viewportRef.current.zoom : 0)
-    const baseY = anchor?.y ?? (viewportRef.current ? -viewportRef.current.ty / viewportRef.current.zoom : 0)
-    const w = Math.max(anchor?.width ?? 0, DEFAULT_W)
-    const h = Math.max(anchor?.height ?? 0, DEFAULT_H)
-    const layoutBounds = { x: baseX, y: baseY, w, h }
-
-    const newGroup: GroupState = {
-      id: groupId,
-      color: '#4a9eff',
-      layoutMode: true,
-      layout,
-      layoutBounds,
-    }
-
-    const ids = new Set(tileIds)
-    setGroups(prev => {
-      const updatedGroups = [...prev, newGroup]
-      setTiles(tPrev => {
-        const updatedTiles = tPrev.map(t => ids.has(t.id) ? { ...t, groupId } : t)
-        setTimeout(() => persistCanvasStateRef.current?.(updatedTiles, viewportRef.current, nextZIndexRef.current, updatedGroups), 0)
-        return updatedTiles
-      })
-      return updatedGroups
-    })
-
-    // Switch from path-2 mode to path-3 mode — exit/escape now flows through
-    // the existing "save layout back to group" branch.
-    setExpandLayoutGroupId(groupId)
-    expandLayoutGroupIdRef.current = groupId
-    setExpandedTileId(null)
-  }, [])
-
-  // ─── Eager promotion: as soon as a single-tile-expand grows to ≥2 tiles,
-  //     materialize it as a real layout-group on the canvas. From that
-  //     moment on, the fullscreen view is just path-3 (group fullscreen).
-  useEffect(() => {
-    if (!panelLayout) return
-    if (expandLayoutGroupIdRef.current) return  // already a group
-    if (!expandedTileIdRef.current) return       // not path-2
-    if (panelTreeHasSplit(panelLayout)) {
-      promoteExpandedTileToLayoutGroup()
-    }
-  }, [panelLayout, promoteExpandedTileToLayoutGroup])
-
-  // ─── Escape to collapse expanded tile ────────────────────────────────────
-  const exitExpandedMode = useCallback(() => {
-    // Safety net: if the promotion useEffect hasn't fired yet (shouldn't
-    // happen under normal React scheduling, but defensive), promote now.
-    promoteExpandedTileToLayoutGroup()
-
-    const expandingGroup = expandLayoutGroupIdRef.current
-    setPanelLayout(prev => {
-      if (expandingGroup && prev) {
-        // Path 3 — fullscreen of an existing layout group (or a freshly-
-        // promoted one from path 2). Save layout back so canvas-side syncs.
-        setGroups(grps => {
-          const updated = grps.map(g => g.id === expandingGroup ? { ...g, layout: prev } : g)
-          setTimeout(() => persistCanvasStateRef.current?.(tilesRef.current, viewportRef.current, nextZIndexRef.current, updated), 0)
-          return updated
-        })
-      } else if (expandedTileIdRef.current) {
-        // Path 2 with only the original tile (never grew to a layout) —
-        // clean exit, don't touch savedLayoutRef (that belongs to path 1).
-      } else if (!expandingGroup) {
-        // Path 1 — toolbar tab toggle. Preserve current "revert to canvas as
-        // it was" semantics by saving the layout for the next toggle restore.
-        savedLayoutRef.current = prev
-      }
-      return null
-    })
-    setExpandedTileId(null)
-    setActivePanelId(null)
-    setExpandLayoutGroupId(null)
-    expandLayoutGroupIdRef.current = null
-  }, [promoteExpandedTileToLayoutGroup])
-
-  const enterExpandedMode = useCallback((tileId: string) => {
-    // Fullscreen the clicked tile; its SAME-GROUP siblings become tabs in the same
-    // leaf (PanelLayout's existing tab strip renders them). Deliberately scoped to
-    // group siblings (not ALL canvas tiles): seeding every tile would, once one tab
-    // is dragged into a split, vacuum the whole canvas into one persistent layout
-    // group on exit. Tabs alone never promote (panelTreeHasSplit gate); only a real
-    // split does. Other canvas tiles stay on canvas.
-    const SIBLING_CAP = 8
-    const clicked = tilesRef.current.find(t => t.id === tileId)
-    const siblingIds = clicked?.groupId
-      ? tilesRef.current
-          .filter(t => t.id !== tileId && t.groupId === clicked.groupId && !panelTileIdsRef.current.has(t.id))
-          .map(t => t.id)
-          .slice(0, SIBLING_CAP - 1)
-      : []
-    const ordered = [tileId, ...siblingIds]
-    const leaf = createLeaf(ordered, tileId)
-    setExpandedTileId(tileId)
-    setPanelLayout(leaf)
-    setActivePanelId(leaf.id)
-  }, [])
-
-  const enterTabbedView = useCallback(() => {
-    const currentIds = tilesRef.current.map(t => t.id)
-    const currentIdSet = new Set(currentIds)
-
-    if (savedLayoutRef.current) {
-      // Restore saved layout — prune removed tiles, append any new ones
-      let restored: PanelNode = savedLayoutRef.current
-
-      // Remove tiles that no longer exist on canvas
-      const savedIds = getAllTileIds(savedLayoutRef.current)
-      for (const id of savedIds) {
-        if (!currentIdSet.has(id)) {
-          restored = removeTileFromTree(restored, id) ?? restored
-        }
-      }
-
-      // Append new tiles (not in saved layout) to the first leaf
-      const restoredIds = new Set(getAllTileIds(restored))
-      const newIds = currentIds.filter(id => !restoredIds.has(id))
-      // Find active panel id from restored tree
-      const firstLeaf = (function find(n: PanelNode): string | null {
-        if (n.type === 'leaf') return n.id
-        return find(n.children[0])
-      })(restored)
-
-      for (const id of newIds) {
-        if (firstLeaf) restored = addTabToLeaf(restored, firstLeaf, id)
-      }
-
-      setPanelLayout(restored)
-      setActivePanelId(firstLeaf)
-      setExpandedTileId(null)
-    } else {
-      // No saved layout — fresh leaf with all tiles
-      const leaf = createLeaf(currentIds, currentIds[0])
-      setPanelLayout(leaf)
-      setActivePanelId(leaf.id)
-      setExpandedTileId(null)
-    }
-  }, [])
-
-  const handleCanvasEscape = useCallback(() => {
-    if (expandedCanvasGroupIdRef.current) {
-      exitCanvasExpandedRef.current()
-      return
-    }
-    exitExpandedMode()
-  }, [exitExpandedMode])
+  const {
+    exitExpandedMode,
+    enterExpandedMode,
+    enterTabbedView,
+    handleCanvasEscape,
+  } = useAppPanelViewMode({
+    panelLayout,
+    panelLayoutRef,
+    expandedTileIdRef,
+    expandLayoutGroupIdRef,
+    expandedCanvasGroupIdRef,
+    panelTileIdsRef,
+    tilesRef,
+    viewportRef,
+    nextZIndexRef,
+    persistCanvasStateRef,
+    savedLayoutRef,
+    setPanelLayout,
+    setExpandedTileId,
+    setActivePanelId,
+    setExpandLayoutGroupId,
+    setGroups,
+    setTiles,
+    exitCanvasExpandedRef,
+  })
 
   const lockConnection = useLockConnection({
     persistCanvasState,
@@ -2395,7 +2055,7 @@ function App(): JSX.Element {
     appFonts,
   })
 
-  const appCanvasConnectionProps = React.useMemo(() => ({
+  const appCanvasConnectionProps = useAppCanvasConnectionProps({
     panelLayout,
     manualConnectionRenderRoutes,
     ambientDiscoveryRenderRoutes,
@@ -2416,33 +2076,11 @@ function App(): JSX.Element {
     discoveryGlowRef,
     worldToScreenPoint,
     isConnectionLocked,
-    onToggleConnectionLock: toggleConnectionLock,
-    onDeleteConnection: deleteConnection,
-  }), [
-    panelLayout,
-    manualConnectionRenderRoutes,
-    ambientDiscoveryRenderRoutes,
-    discoveryPreview,
-    discoveryFocusTileId,
-    lockedConnectionKeys,
-    discoveryPulses,
-    dragState,
-    viewport.zoom,
-    settings.gridSize,
-    settings.gridSpacingSmall,
-    dsc,
-    tileByIdMap,
-    discoveryPillZIndex,
-    discoveryHighlightZIndex,
-    discoveryGlowZIndex,
-    canvasGlowEnabled,
-    worldToScreenPoint,
-    isConnectionLocked,
     toggleConnectionLock,
     deleteConnection,
-  ])
+  })
 
-  const appCanvasPanelRegionProps = React.useMemo(() => ({
+  const appCanvasPanelRegionProps = useAppCanvasPanelRegionProps({
     panelLayout,
     mainPanelCornerRadii,
     tiles,
@@ -2455,34 +2093,15 @@ function App(): JSX.Element {
     viewportCenter,
     getInitialTileSize,
     snapValue,
-    onLayoutChange: setPanelLayout,
-    onCloseTab: closeTile,
-    onAddTile: addTile,
-    onExitExpandedMode: exitExpandedMode,
-    onActivePanelChange: setActivePanelId,
-    onLaunchTemplate: handleLaunchTemplate,
-    setTiles,
-    setNextZIndex,
-  }), [
-    panelLayout,
-    mainPanelCornerRadii,
-    tiles,
-    theme,
-    activePanelId,
-    nextZIndex,
-    getPanelTileLabel,
-    getPanelTileIcon,
-    renderTileBody,
-    viewportCenter,
-    getInitialTileSize,
-    snapValue,
+    setPanelLayout,
     closeTile,
     addTile,
     exitExpandedMode,
+    setActivePanelId,
     handleLaunchTemplate,
     setTiles,
     setNextZIndex,
-  ])
+  })
 
   useEffect(() => {
     if (!canvasGlowEnabled) hideCanvasGlow()
