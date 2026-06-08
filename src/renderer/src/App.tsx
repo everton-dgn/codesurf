@@ -21,6 +21,9 @@ import { AppCanvasTiles } from './components/AppCanvasTiles'
 import { AppCanvasConnections } from './components/AppCanvasConnections'
 import { AppCanvasPanelRegion } from './components/AppCanvasPanelRegion'
 import { AppCanvasArrangeToolbar } from './components/AppCanvasArrangeToolbar'
+import { AppCanvasWorldOverlays } from './components/AppCanvasWorldOverlays'
+import { AppCanvasGroupToolbar } from './components/AppCanvasGroupToolbar'
+import { AppCanvasMinimapOverlay } from './components/AppCanvasMinimapOverlay'
 import { resolveFileTileType } from './lib/fileTileType'
 import { useNegotiatedDiscovery } from './hooks/useNegotiatedDiscovery'
 import {
@@ -109,8 +112,6 @@ type PendingSessionOpen =
 type SessionTargetEntry = AggregatedSessionEntry | WorkspaceSessionEntry
 type FocusOpenOptions = { persist?: boolean; sourceTileId?: string }
 const INITIAL_EXTERNAL_SESSION_TAIL_LOAD = 20
-
-const LazyMinimap = React.lazy(() => import('./components/Minimap').then(m => ({ default: m.Minimap })))
 
 function App(): JSX.Element {
   useAutoHideScrollbars()
@@ -2268,19 +2269,14 @@ function App(): JSX.Element {
           surfaceOverlays={(
             <>
               <AppCanvasPanelRegion {...appCanvasPanelRegionProps} />
-              {showMinimap && (
-                <Suspense fallback={null}>
-                  <LazyMinimap
-                    tiles={tiles}
-                    viewport={viewport}
-                    canvasSize={{
-                      w: canvasRef.current?.clientWidth ?? 1200,
-                      h: canvasRef.current?.clientHeight ?? 800
-                    }}
-                    onPan={(tx, ty) => setViewport(prev => ({ ...prev, tx, ty }))}
-                  />
-                </Suspense>
-              )}
+              <AppCanvasMinimapOverlay
+                enabled={showMinimap}
+                tiles={tiles}
+                viewport={viewport}
+                canvasWidth={canvasRef.current?.clientWidth ?? 1200}
+                canvasHeight={canvasRef.current?.clientHeight ?? 800}
+                onPan={(tx, ty) => setViewport(prev => ({ ...prev, tx, ty }))}
+              />
             </>
           )}
         >
@@ -2330,51 +2326,7 @@ function App(): JSX.Element {
               renderTileBody={renderTileBody}
             />
 
-            {/* Rubber-band selection rect */}
-            {dragState.type === 'select' && (() => {
-              const x = Math.min(dragState.startWx, dragState.curWx)
-              const y = Math.min(dragState.startWy, dragState.curWy)
-              const w = Math.abs(dragState.curWx - dragState.startWx)
-              const h = Math.abs(dragState.curWy - dragState.startWy)
-              return (
-                <div style={{
-                  position: 'absolute', left: x, top: y, width: w, height: h,
-                  border: '1px solid rgba(74,158,255,0.6)',
-                  background: 'rgba(74,158,255,0.06)',
-                  borderRadius: 3,
-                  pointerEvents: 'none',
-                  zIndex: 99998,
-                  boxSizing: 'border-box'
-                }} />
-              )
-            })()}
-
-            {/* Alignment guides */}
-            {guides.map((g, i) =>
-              g.x !== undefined ? (
-                <div key={`gx-${i}`} style={{
-                  position: 'absolute',
-                  left: g.x,
-                  top: -9999,
-                  width: 1,
-                  height: 99999,
-                  background: 'rgba(74,158,255,0.7)',
-                  pointerEvents: 'none',
-                  zIndex: 99999
-                }} />
-              ) : (
-                <div key={`gy-${i}`} style={{
-                  position: 'absolute',
-                  top: g.y,
-                  left: -9999,
-                  height: 1,
-                  width: 99999,
-                  background: 'rgba(74,158,255,0.7)',
-                  pointerEvents: 'none',
-                  zIndex: 99999
-                }} />
-              )
-            )}
+            <AppCanvasWorldOverlays dragState={dragState} guides={guides} />
 
             <AppCanvasConnections layer="pills" {...appCanvasConnectionProps} />
 
@@ -2413,43 +2365,13 @@ function App(): JSX.Element {
 
           <AppCanvasConnections layer="glow" {...appCanvasConnectionProps} />
 
-          {/* Group button — appears when 2+ tiles are rubber-band selected */}
-          {selectedTileIds.size >= 2 && (
-            <div
-              onMouseDown={e => e.stopPropagation()}
-              style={{
-              position: 'absolute', bottom: 62, left: '50%', transform: 'translateX(-50%)',
-              display: 'flex', gap: 8, alignItems: 'center',
-              background: theme.surface.overlay, border: `1px solid ${theme.border.default}`,
-              borderRadius: 8, padding: '5px 12px',
-              backdropFilter: 'blur(8px)',
-              boxShadow: theme.shadow.panel,
-              zIndex: 1000
-            }}>
-              <span style={{ fontSize: appFonts.secondarySize, color: theme.text.muted }}>{selectedTileIds.size} block{selectedTileIds.size !== 1 ? 's' : ''} selected</span>
-              <button
-                onClick={groupSelectedTiles}
-                style={{
-                  fontSize: appFonts.secondarySize, color: theme.accent.base, background: theme.accent.soft,
-                  border: `1px solid ${theme.border.accent}`, borderRadius: 5,
-                  padding: '3px 10px', cursor: 'pointer'
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = theme.surface.selection}
-                onMouseLeave={e => e.currentTarget.style.background = theme.accent.soft}
-              >
-                Group
-              </button>
-              <button
-                onClick={() => setSelectedTileIds(new Set())}
-                style={{
-                  fontSize: appFonts.secondarySize, color: theme.text.disabled, background: 'transparent',
-                  border: 'none', cursor: 'pointer', padding: '3px 6px'
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
+          <AppCanvasGroupToolbar
+            selectedTileCount={selectedTileIds.size}
+            theme={theme}
+            appFonts={appFonts}
+            onGroupSelected={groupSelectedTiles}
+            onClearSelection={() => setSelectedTileIds(new Set())}
+          />
 
         </AppCanvasSurface>
 
