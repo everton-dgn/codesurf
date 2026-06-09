@@ -10,8 +10,8 @@
  * That cross-origin boundary is required for the @mcp-ui/client double-iframe sandbox
  * isolation to hold.
  *
- * Authority MUST be `extension` and the route token MUST be the first PATH segment —
- * this mirrors the existing `__runext_codicons__` / `__runext_resource__` routes, which
- * the handler matches as `segments[0]` of the pathname (not the URL authority).
+ * The proxy is served on its own dedicated host `__runext_sandbox__`, distinct from every
+ * extension's origin (`contex-ext://<extId>`). This ensures extension code cannot script
+ * or read the proxy document via same-origin access.
  */
-export const MCP_UI_SANDBOX_PROXY_URL = 'contex-ext://extension/__runext_sandbox__/proxy.html'
+export const MCP_UI_SANDBOX_PROXY_URL = 'contex-ext://__runext_sandbox__/proxy.html'

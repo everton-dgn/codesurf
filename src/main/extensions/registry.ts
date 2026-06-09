@@ -12,7 +12,7 @@ import { promises as fs } from 'fs'
 import { join, resolve } from 'path'
 import { CONTEX_HOME } from '../paths'
 import { ExtensionContext } from './context'
-import { loadPowerExtension } from './loader'
+import { loadPowerExtension, type ExtensionScope } from './loader'
 import { bus } from '../event-bus'
 import { adapters, tryAdaptExtension } from './adapters'
 import type { ExtensionManifest, ExtensionTileContrib, ExtensionChatSurfaceContrib, ExtensionMCPToolContrib, ExtensionContextMenuContrib, ExtensionCommandContrib, ExtensionFooterContrib, ExtensionPanelContrib, ExtensionSettingsSectionContrib, ExtensionLayoutPresetContrib } from '../../shared/types'
@@ -374,14 +374,21 @@ export class ExtensionRegistry {
 
     // Load power tier extensions
     if (manifest.tier === 'power' && manifest.main && manifest._enabled) {
+      // Derive the scope for the audit log and defense-in-depth gate in loader.ts.
+      const scope: ExtensionScope = opts?.untrustedScope
+        ? 'workspace'
+        : opts?.defaultEnabled === false
+          ? 'catalog'
+          : this.bundledDirs.some(d => resolve(extDir).startsWith(resolve(d)))
+            ? 'bundled'
+            : 'global'
       const ctx = new ExtensionContext(manifest, bus, this)
-      const deactivate = await loadPowerExtension(manifest, ctx)
+      const deactivate = await loadPowerExtension(manifest, ctx, scope)
       loaded.deactivate = deactivate ?? undefined
-
-      // Collect MCP tools registered by the extension
-      for (const tool of ctx.getRegisteredTools()) {
-        this.extraMCPTools.push({ ...tool, extId: manifest.id })
-      }
+      // NOTE: MCP tools are registered directly into this.extraMCPTools during
+      // activate() via ExtensionContext.mcp.registerTool -> registry.registerMCPTool.
+      // Do NOT push ctx.getRegisteredTools() here as well — that would cause each
+      // tool to appear twice in getMCPTools() output (double-registration bug).
     }
 
     this.extensions.set(manifest.id, loaded)
@@ -417,12 +424,16 @@ export class ExtensionRegistry {
     const loaded: LoadedExtension = { manifest }
 
     if (manifest.tier === 'power' && manifest.main && manifest._enabled && manifest._path) {
+      const scope: ExtensionScope = opts?.untrustedScope
+        ? 'workspace'
+        : opts?.defaultEnabled === false
+          ? 'catalog'
+          : 'global'
       const ctx = new ExtensionContext(manifest, bus, this)
-      const deactivate = await loadPowerExtension(manifest, ctx)
+      const deactivate = await loadPowerExtension(manifest, ctx, scope)
       loaded.deactivate = deactivate ?? undefined
-      for (const tool of ctx.getRegisteredTools()) {
-        this.extraMCPTools.push({ ...tool, extId: manifest.id })
-      }
+      // NOTE: tools are registered directly via registerMCPTool during activate();
+      // do not push ctx.getRegisteredTools() here to avoid double-registration.
     }
 
     this.extensions.set(manifest.id, loaded)
@@ -613,7 +624,7 @@ export class ExtensionRegistry {
       .map(segment => encodeURIComponent(segment))
     const query = tileId ? `?tileId=${encodeURIComponent(tileId)}&_t=${Date.now()}` : ''
 
-    return `contex-ext://extension/${encodeURIComponent(extId)}/${entrySegments.join('/')}${query}`
+    return `contex-ext://${encodeURIComponent(extId)}/${entrySegments.join('/')}${query}`
   }
 
   getChatSurfaceEntry(extId: string, surfaceId: string, instanceId?: string): string | null {
@@ -632,7 +643,7 @@ export class ExtensionRegistry {
     params.push(`_t=${Date.now()}`)
     const query = `?${params.join('&')}`
 
-    return `contex-ext://extension/${encodeURIComponent(extId)}/${entrySegments.join('/')}${query}`
+    return `contex-ext://${encodeURIComponent(extId)}/${entrySegments.join('/')}${query}`
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -678,16 +689,30 @@ export class ExtensionRegistry {
       persistGrants ? saveGrantsMap(this.grants) : Promise.resolve(),
     ])
     // Power-tier extensions may not have been activated on first scan (catalog
-    // default-off). Load the main script now that it's enabled.
+    // or workspace default-off). Load the main script now that the user has
+    // explicitly enabled it — this is the explicit user opt-in for untrusted scope.
     const m = ext.manifest
     if (m.tier === 'power' && m.main && !ext.deactivate && m._path) {
+      // Determine scope for audit log.  isCatalogExtension is already computed
+      // above; workspace extensions are not under any catalogDir but were loaded
+      // with untrustedScope so their path is not under bundledDirs or the global dir.
+      const scope: ExtensionScope = isCatalog
+        ? 'catalog'
+        : this.bundledDirs.some(d => m._path && resolve(m._path).startsWith(resolve(d)))
+          ? 'bundled'
+          : m._path && resolve(m._path).startsWith(resolve(join(CONTEX_HOME, EXTENSIONS_DIRNAME)))
+            ? 'global'
+            : 'workspace'
+      console.warn(
+        `[Security] User explicitly enabled power extension "${m.name}" (${m.id}) ` +
+        `from scope "${scope}" — runs with full main-process privileges.`,
+      )
       try {
         const ctx = new ExtensionContext(m, bus, this)
-        const deactivate = await loadPowerExtension(m, ctx)
+        const deactivate = await loadPowerExtension(m, ctx, scope)
         ext.deactivate = deactivate ?? undefined
-        for (const tool of ctx.getRegisteredTools()) {
-          this.extraMCPTools.push({ ...tool, extId: m.id })
-        }
+        // NOTE: tools are registered directly via registerMCPTool during activate();
+        // do not push ctx.getRegisteredTools() here to avoid double-registration.
       } catch (err) {
         console.error(`[Extensions] enable() failed to load power ext ${m.id}:`, err)
       }

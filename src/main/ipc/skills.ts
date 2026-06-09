@@ -20,6 +20,7 @@ import { promises as fs } from 'fs'
 import { homedir } from 'os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { assertSafePathSegment, resolveInside } from '../security/pathSegments'
 
 // Default install location for Claude-format skills on macOS. Users can
 // override this via the renderer by passing an explicit `targetDir` to
@@ -87,6 +88,63 @@ async function listZipEntries(zipPath: string): Promise<string[]> {
   return stdout.split('\n').map(l => l.trim()).filter(Boolean)
 }
 
+// `unzip -Z <file>` (zipinfo default long listing) produces lines like:
+//   -rw-r--r--  3.0 unx     123 bx defN  …  path/to/file
+//   drwxr-xr-x  3.0 unx       0 bx stor  …  dir/
+//   lrwxrwxrwx  3.0 unx      12 bx stor  …  dir/link -> target
+//
+// The first character is '-' for file, 'd' for directory, 'l' for symlink.
+// We use this to reject any symlink entries before we hand the archive to unzip.
+async function listZipVerbose(zipPath: string): Promise<Array<{ name: string; isSymlink: boolean }>> {
+  // -Z without -1 gives the default zipinfo listing with permissions + filename.
+  // The last field (after all fixed-width fields) is the filename; we split on
+  // whitespace and take the last token. This is reliable for all well-formed
+  // entries that don't contain spaces — and for traversal-attack entries the
+  // name itself is the threat (we validate it separately), so precision here
+  // is on the permissions column, not the name.
+  const { stdout } = await runCmd('/usr/bin/unzip', ['-Z', zipPath])
+  const results: Array<{ name: string; isSymlink: boolean }> = []
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('Archive:') || trimmed.startsWith('Zip file size:') || trimmed.startsWith('End-of-central-directory')) continue
+    // Lines starting with a file-type character then permission bits: [-dls]rwx…
+    if (!/^[-dls]/.test(trimmed)) continue
+    const isSymlink = trimmed.startsWith('l')
+    // Name is the last whitespace-separated token on the line.
+    const parts = trimmed.split(/\s+/)
+    const name = parts[parts.length - 1]
+    if (name) results.push({ name, isSymlink })
+  }
+  return results
+}
+
+/**
+ * Validate all entries in the archive before extraction.
+ * Rejects:
+ *   - entries whose paths are absolute
+ *   - entries containing `..` path segments
+ *   - entries that are symlinks (first permission char `l`)
+ * Throws with a descriptive message on the first offending entry.
+ */
+async function assertSafeZipEntries(zipPath: string): Promise<void> {
+  const verbose = await listZipVerbose(zipPath)
+  for (const { name, isSymlink } of verbose) {
+    if (isSymlink) {
+      throw new Error(`Archive entry is a symlink: ${name}`)
+    }
+    if (path.isAbsolute(name)) {
+      throw new Error(`Archive entry has absolute path: ${name}`)
+    }
+    // Reject any segment that is `..`
+    const segments = name.split('/')
+    for (const seg of segments) {
+      if (seg === '..') {
+        throw new Error(`Archive entry contains path traversal: ${name}`)
+      }
+    }
+  }
+}
+
 // Print a single archive member to stdout without touching disk.
 async function readZipEntry(zipPath: string, entryName: string): Promise<string> {
   const { stdout } = await runCmd('/usr/bin/unzip', ['-p', zipPath, entryName])
@@ -149,13 +207,25 @@ async function extractSkill(
   targetDir: string,
   opts: { overwrite: boolean },
 ): Promise<{ installedPath: string; entries: string[] }> {
+  // Validate all archive entries before touching disk: reject traversal, absolute
+  // paths, and symlinks.
+  await assertSafeZipEntries(zipPath)
+
   await ensureDir(targetDir)
   const manifest = await readSkillManifest(zipPath)
-  const installedPath = path.join(targetDir, manifest.topFolder)
+
+  // Validate the top-level folder name derived from archive contents.
+  const safeTopFolder = assertSafePathSegment(manifest.topFolder, 'skill folder name')
+
+  // Resolve the installation path and assert it stays inside targetDir.
+  const installedPath = resolveInside(targetDir, safeTopFolder)
+
   if (await pathExists(installedPath)) {
     if (!opts.overwrite) {
       throw new Error(`Skill already installed at ${installedPath}. Pass overwrite=true to replace.`)
     }
+    // Safety: re-assert the resolved path is inside targetDir before recursive delete.
+    resolveInside(targetDir, safeTopFolder)
     await fs.rm(installedPath, { recursive: true, force: true })
   }
   // `-o` = overwrite without prompt; `-d` = target directory. The archive
@@ -184,9 +254,15 @@ export function registerSkillsIPC(): void {
     if (typeof zipPath !== 'string' || !zipPath.toLowerCase().endsWith('.skill')) {
       throw new Error('skills:install requires args.zipPath pointing at a .skill file')
     }
-    const targetDir = typeof args?.targetDir === 'string' && args.targetDir.trim()
+
+    // Constrain targetDir to DEFAULT_SKILLS_DIR or a subdirectory of it.
+    // resolveInside throws if rawTargetDir resolves outside the skills root,
+    // preventing arbitrary filesystem writes via renderer-supplied paths.
+    const rawTargetDir = typeof args?.targetDir === 'string' && args.targetDir.trim()
       ? args.targetDir.trim()
       : DEFAULT_SKILLS_DIR
+    const targetDir = resolveInside(DEFAULT_SKILLS_DIR, rawTargetDir)
+
     const { installedPath, entries } = await extractSkill(zipPath, targetDir, { overwrite: !!args?.overwrite })
     return { installedPath, entries, targetDir }
   })

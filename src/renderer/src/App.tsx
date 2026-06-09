@@ -344,6 +344,9 @@ function App(): JSX.Element {
     undoCanvas,
     redoCanvas,
     flushDeferredCanvasPersist,
+    clearHistory,
+    flushPendingSave,
+    markCanvasLoaded,
   } = canvasEngine
 
   const panelTileIdsRef = useRef<Set<string>>(new Set())
@@ -421,6 +424,9 @@ function App(): JSX.Element {
     setExpandedCanvasGroupId,
     restoreViewport,
     resetViewportState,
+    clearHistory,
+    flushPendingSave,
+    markCanvasLoaded,
   })
 
   // ─── Load workspace + canvas state on mount ───────────────────────────────
@@ -880,7 +886,16 @@ function App(): JSX.Element {
         void resolveFileTileType(data.path).then(type => addTile(type, data.path))
       }
       if (event === 'canvas_pan_to') {
-        setViewport(prev => ({ ...prev, tx: data.x, ty: data.y }))
+        // Centre world-point (data.x, data.y) on screen.
+        // tx = screenCenterX - worldX * zoom;  ty = screenCenterY - worldY * zoom
+        const rect = canvasRef.current?.getBoundingClientRect()
+        const cx = rect ? rect.width / 2 : 600
+        const cy = rect ? rect.height / 2 : 400
+        setViewport(prev => ({
+          ...prev,
+          tx: cx - (data.x ?? 0) * prev.zoom,
+          ty: cy - (data.y ?? 0) * prev.zoom,
+        }))
       }
       if (event === 'canvas_list_tiles') {
         const tileList = tiles.map(t => ({ id: t.id, type: t.type, filePath: t.filePath, x: t.x, y: t.y }))
@@ -926,7 +941,11 @@ function App(): JSX.Element {
     const nz = nextZIndex
     setTiles(prev => {
       const tile = prev.find(t => t.id === id)
-      pasteTargetGroupIdRef.current = tile?.groupId
+      if (!tile) return prev
+      // Already at the top — skip the state update and the disk write it triggers
+      const maxZ = prev.reduce((m, t) => Math.max(m, t.zIndex ?? 0), 0)
+      if ((tile.zIndex ?? 0) >= maxZ && maxZ > 0) return prev
+      pasteTargetGroupIdRef.current = tile.groupId
       return prev.map(t => t.id === id ? { ...t, zIndex: nz } : t)
     })
     setNextZIndex(n => n + 1)

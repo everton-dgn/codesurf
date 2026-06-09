@@ -43,6 +43,19 @@ export type UseAppWorkspaceOrchestrationParams = {
   setExpandedCanvasGroupId: React.Dispatch<React.SetStateAction<string | null>>
   restoreViewport: (viewport: CanvasState['viewport']) => void
   resetViewportState: () => void
+  /** Clear undo/redo history stacks on workspace switch (H-3 fix). */
+  clearHistory: () => void
+  /**
+   * Immediately flush any pending debounced save for the given workspace id.
+   * Call before setWorkspace() so the outgoing workspace's last edits are not
+   * dropped. Provided by useCanvasEngine.
+   */
+  flushPendingSave: (workspaceId: string) => void
+  /**
+   * Record that the canvas state for the given workspace id is now loaded.
+   * Provided by useCanvasEngine — unblocks the auto-save effect after switch.
+   */
+  markCanvasLoaded: (id: string) => void
 }
 
 export function useAppWorkspaceOrchestration(params: UseAppWorkspaceOrchestrationParams) {
@@ -77,6 +90,9 @@ export function useAppWorkspaceOrchestration(params: UseAppWorkspaceOrchestratio
     setExpandedCanvasGroupId,
     restoreViewport,
     resetViewportState,
+    clearHistory,
+    flushPendingSave,
+    markCanvasLoaded,
   } = params
 
   const buildCanvasLoadAppliers = useCallback((includeLockedConnections = false) => ({
@@ -110,6 +126,7 @@ export function useAppWorkspaceOrchestration(params: UseAppWorkspaceOrchestratio
   const showEmptyLayoutPage = useCallback((options?: { preserveOpenTabs?: boolean }) => {
     const preserveOpenTabs = options?.preserveOpenTabs ?? false
     const emptyPanel = createLeaf([])
+    clearHistory()
     setShowWorkspacePickerTab(true)
     setWorkspacePickerReturnWorkspaceId(preserveOpenTabs ? currentWorkspaceIdRef.current : null)
     setWorkspace(null)
@@ -123,6 +140,7 @@ export function useAppWorkspaceOrchestration(params: UseAppWorkspaceOrchestratio
     setActivePanelId(emptyPanel.id)
     setExpandedTileId(null)
   }, [
+    clearHistory,
     currentWorkspaceIdRef,
     resetViewportState,
     savedLayoutRef,
@@ -151,23 +169,44 @@ export function useAppWorkspaceOrchestration(params: UseAppWorkspaceOrchestratio
         ws = refreshed.find(candidate => candidate.id === targetWorkspaceId) ?? null
       }
     }
+
+    // Flush any pending debounced save for the OUTGOING workspace BEFORE
+    // calling setWorkspace(). currentWorkspaceIdRef still holds the old id here
+    // so the write goes to the correct canvas.json. This prevents the last
+    // ≤500ms of edits from being dropped when the timer is cleared by the
+    // incoming workspace's first schedulePersistWrite call.
+    const outgoingId = currentWorkspaceIdRef.current
+    if (outgoingId) flushPendingSave(outgoingId)
+
     await window.electron.workspace.setActive(targetWorkspaceId)
     setWorkspace(ws)
     setShowWorkspacePickerTab(false)
     setWorkspacePickerReturnWorkspaceId(null)
     if (!ws) return
 
+    // Between setWorkspace(B) above and markCanvasLoaded(B) below, the
+    // canvasLoadedForWorkspaceIdRef inside useCanvasEngine does NOT equal
+    // workspace.id (still A or null), so the auto-save effect is gated off —
+    // preventing A's tiles from being written into B's canvas.json.
     const saved = await window.electron.canvas.load(targetWorkspaceId)
     const savedTiles = saved?.tiles ?? []
     void window.electron.collab.pruneOrphanedTileDirs(ws.path, savedTiles.map(tile => tile.id))
     if (saved) {
+      clearHistory()
       applySavedCanvasState(saved, buildCanvasLoadAppliers())
+      markCanvasLoaded(targetWorkspaceId)
       return
     }
 
+    clearHistory()
     applyEmptyCanvasWorkspaceState(buildCanvasLoadAppliers(), resetViewportState)
+    markCanvasLoaded(targetWorkspaceId)
   }, [
     buildCanvasLoadAppliers,
+    clearHistory,
+    currentWorkspaceIdRef,
+    flushPendingSave,
+    markCanvasLoaded,
     resetViewportState,
     setShowWorkspacePickerTab,
     setWorkspace,
@@ -363,7 +402,8 @@ export function useAppWorkspaceOrchestration(params: UseAppWorkspaceOrchestratio
     handleOpenFolder,
     handleLaunchTemplate,
     applySavedCanvasState: useCallback((saved: CanvasState) => {
+      clearHistory()
       applySavedCanvasState(saved, buildCanvasLoadAppliers(true))
-    }, [buildCanvasLoadAppliers]),
+    }, [buildCanvasLoadAppliers, clearHistory]),
   }
 }

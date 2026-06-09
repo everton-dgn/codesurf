@@ -137,9 +137,14 @@ class EventBus {
         dropped++
       }
     }
-    // also drop subscriptions pinned to those channels (non-wildcard only)
+    // also drop subscriptions pinned to those channels:
+    // - exact-channel subs whose channel starts with the dropped prefix
+    // - wildcard subs whose own prefix starts with the dropped prefix
+    //   (e.g. dropping 'tile:123:' also removes 'tile:123:*' subscriptions)
     for (const [id, sub] of this.subscriptions) {
       if (!sub.isWildcard && sub.channel.startsWith(prefix)) {
+        this.subscriptions.delete(id)
+      } else if (sub.isWildcard && sub.prefix.startsWith(prefix)) {
         this.subscriptions.delete(id)
       }
     }

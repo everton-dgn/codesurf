@@ -148,7 +148,6 @@ function forwardRequest(
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
       })
 
       // Write message_start
@@ -240,7 +239,6 @@ function forwardRequest(
         clientRes.writeHead(200, {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(responseBody),
-          'Access-Control-Allow-Origin': '*',
         })
         clientRes.end(responseBody)
         onDone(true)
@@ -266,13 +264,12 @@ function forwardRequest(
 
 function createProxyServer(_port: number): http.Server {
   const server = http.createServer(async (req, clientRes) => {
-    // CORS preflight
+    // CORS preflight — this server is loopback-only and called from the main
+    // process (Node http.request) or via Electron IPC; no browser cross-origin
+    // fetch should be reaching it.  Reject preflight requests outright rather
+    // than advertising a wildcard origin that any local web page could exploit.
     if (req.method === 'OPTIONS') {
-      clientRes.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, anthropic-version',
-        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-      })
+      clientRes.writeHead(405)
       clientRes.end()
       return
     }

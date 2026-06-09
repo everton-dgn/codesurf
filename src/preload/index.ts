@@ -386,7 +386,15 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_: any, evt: { tileId: string; currentUrl: string; canGoBack: boolean; canGoForward: boolean; isLoading: boolean; mode: 'desktop' | 'mobile' }) => cb(evt)
       ipcRenderer.on('browserTile:event', handler)
       return () => { ipcRenderer.removeListener('browserTile:event', handler) }
-    }
+    },
+    // Forwarded from the main process — fires when a guest webview calls window.open
+    // or follows a target=_blank link. The `new-window` DOM event was removed in
+    // Electron 22; this IPC path replaces it.
+    onNewWindow: (cb: (event: { url: string }) => void) => {
+      const handler = (_: any, evt: { url: string }) => cb(evt)
+      ipcRenderer.on('webview:new-window', handler)
+      return () => { ipcRenderer.removeListener('webview:new-window', handler) }
+    },
   },
 
   owl: {

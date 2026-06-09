@@ -169,10 +169,13 @@ async function ttsVoiceLab(text: string, voice: string | undefined, model: strin
 // ─── macOS `say` fallback ────────────────────────────────────────────────
 async function ttsSay(text: string, voice: string | undefined): Promise<TtsResult> {
   if (process.platform !== 'darwin') return { ok: false, error: 'say is macOS-only' }
+  // Reject voice names that start with '-' to prevent flag injection
+  if (voice && voice.startsWith('-')) return { ok: false, error: 'Invalid voice name' }
   return new Promise<TtsResult>((resolve) => {
     const args = ['-o', '/dev/stdout', '--data-format=LEF32@22050']
     if (voice) args.push('-v', voice)
-    args.push(text)
+    // Pass text after '--' so it cannot be mistaken for a flag
+    args.push('--', text)
     const child = spawn('say', args)
     const chunks: Buffer[] = []
     child.stdout.on('data', (c: Buffer) => chunks.push(c))

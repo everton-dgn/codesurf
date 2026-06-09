@@ -327,10 +327,11 @@ export function chatCodex(req: ChatRequest): void {
   const shellPath = getShellEnvPath()
   const peerPrompt = buildPeerSystemPrompt(req.peers)
   const runtimeMessages = cloneChatMessages(req.messages)
+  const resumeThreadId = req.sessionId ?? sessionIds.get(req.cardId) ?? null
   const runtimeSession: RuntimeChatSessionState = {
     provider: req.provider,
     model: req.model,
-    sessionId: req.sessionId ?? sessionIds.get(req.cardId) ?? null,
+    sessionId: resumeThreadId,
     jobId: req.jobId ?? null,
     jobSequence: typeof req.jobSequence === 'number' ? req.jobSequence : 0,
     executionTarget: req.executionTarget === 'cloud' ? 'cloud' : 'local',
@@ -339,15 +340,25 @@ export function chatCodex(req: ChatRequest): void {
     messages: runtimeMessages,
   }
   void upsertRuntimeSessionState(req, runtimeSession)
-  const args = [
-    'exec',
-    '--json',
-    '--model',
-    req.model,
-  ]
+
   const codexMode = req.mode === 'default' || req.mode === 'auto' || req.mode === 'read-only' || req.mode === 'full-access'
     ? req.mode
     : 'default'
+
+  // Build the arg list. When we have a thread ID to resume we use the
+  // `codex exec resume <threadId> [flags] <prompt>` subcommand so that
+  // multi-turn context is preserved. The flags (`--json`, `--model`,
+  // sandbox, `--ignore-user-config`, `-C`) are identical for both paths
+  // and are accepted by the `resume` subcommand too.
+  const promptText = buildCodexPrompt(lastUserMsg.content, req.asyncExecution, peerPrompt, req.memoryPrompt, req.skillsPrompt)
+
+  const args: string[] = ['exec']
+  if (resumeThreadId) {
+    // Use `exec resume <threadId>` to continue the existing conversation
+    args.push('resume', resumeThreadId)
+  }
+  args.push('--json', '--model', req.model)
+
   if (codexMode === 'full-access') {
     args.push('--dangerously-bypass-approvals-and-sandbox')
   } else if (codexMode === 'auto') {
@@ -372,7 +383,7 @@ export function chatCodex(req: ChatRequest): void {
   } else {
     args.push('--skip-git-repo-check')
   }
-  args.push(buildCodexPrompt(lastUserMsg.content, req.asyncExecution, peerPrompt, req.memoryPrompt, req.skillsPrompt))
+  args.push(promptText)
 
   if (req.workspaceDir) {
     void writeMCPConfigToWorkspace(req.workspaceDir).catch(() => {})
@@ -393,11 +404,24 @@ export function chatCodex(req: ChatRequest): void {
   let assistantText = ''
   let editsStarted = false
   let exploreStarted = false
+  let commandSeq = 0
   let pendingStdout = ''
   let stdoutChain = Promise.resolve()
+  // Set to true after a fatal event (checkpoint failure, turn.failed, error)
+  // so buffered stdout chunks are not streamed after the error chip.
+  let aborted = false
 
   const handleCodexJsonEvent = async (evt: any): Promise<void> => {
     if (!evt || typeof evt !== 'object') return
+    if (aborted) return
+
+    // Surface turn.failed / top-level error events as explicit error chips
+    if (evt.type === 'turn.failed' || evt.type === 'error') {
+      const msg = evt.error?.message ?? evt.message ?? `Codex event: ${evt.type}`
+      aborted = true
+      sendStream(req.cardId, { type: 'error', error: String(msg) })
+      return
+    }
 
     if (evt.type === 'thread.started' && typeof evt.thread_id === 'string') {
       sessionIds.set(req.cardId, evt.thread_id)
@@ -433,6 +457,7 @@ export function chatCodex(req: ChatRequest): void {
           changeKinds: item.changes.map((change: { kind?: unknown }) => String(change?.kind ?? 'update')),
         })
         if (!checkpoint.ok) {
+          aborted = true
           proc.kill('SIGTERM')
           sendStream(req.cardId, { type: 'error', error: `Checkpoint creation failed before Codex file changes: ${checkpoint.error ?? 'unknown error'}` })
           return
@@ -454,22 +479,32 @@ export function chatCodex(req: ChatRequest): void {
     if (item.type === 'command_execution' && typeof item.command === 'string') {
       const command = normalizeCodexShellCommand(item.command)
       const kind = classifyCodexCommand(command)
+      const output = sanitizeToolOutputText(typeof item.aggregated_output === 'string' ? item.aggregated_output : '')
       if (kind === 'search' || kind === 'read') {
         if (!exploreStarted) {
           sendStream(req.cardId, { type: 'tool_start', toolId: 'codex-explore', toolName: 'Exploring workspace' })
           exploreStarted = true
         }
-        exploreEntries.push({
-          label: command,
-          command,
-          output: sanitizeToolOutputText(typeof item.aggregated_output === 'string' ? item.aggregated_output : ''),
-          kind,
-        })
+        exploreEntries.push({ label: command, command, output, kind })
         sendStream(req.cardId, {
           type: 'tool_summary',
           toolId: 'codex-explore',
           toolName: buildExploreToolName(exploreEntries),
           commandEntries: [...exploreEntries],
+        })
+      } else {
+        // kind === 'command' — surface as its own tool block instead of
+        // dropping it, so build/test/publish/dev-server steps appear inline
+        // between the assistant's narration text in chronological order.
+        // Each command gets a unique toolId so blocks interleave with text
+        // rather than collapsing into a single aggregate chip.
+        const toolId = `codex-cmd-${commandSeq++}`
+        sendStream(req.cardId, { type: 'tool_start', toolId, toolName: 'exec_command' })
+        sendStream(req.cardId, {
+          type: 'tool_summary',
+          toolId,
+          toolName: 'exec_command',
+          commandEntries: [{ label: command, command, output, kind: 'command' }],
         })
       }
       return
@@ -496,29 +531,53 @@ export function chatCodex(req: ChatRequest): void {
     }
   }
 
+  const BACKPRESSURE_THRESHOLD = 1024 * 1024 // 1 MB of buffered unprocessed stdout
   proc.stdout?.on('data', (chunk: Buffer) => {
     pendingStdout += chunk.toString()
     const lines = pendingStdout.split(/\r?\n/)
     pendingStdout = lines.pop() ?? ''
 
+    // Backpressure: pause stdout when the async chain has a large backlog
+    if (pendingStdout.length > BACKPRESSURE_THRESHOLD) {
+      proc.stdout?.pause()
+    }
+
     stdoutChain = stdoutChain.then(async () => {
       for (const line of lines) {
+        if (aborted) break
         const trimmed = line.trim()
         if (!trimmed) continue
         try {
           const evt = JSON.parse(trimmed)
           await handleCodexJsonEvent(evt)
         } catch {
-          sendStream(req.cardId, { type: 'text', text: `${line}\n` })
+          if (!aborted) sendStream(req.cardId, { type: 'text', text: `${line}\n` })
         }
       }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => {
+      // Resume reading after the chain drains below threshold
+      if (pendingStdout.length <= BACKPRESSURE_THRESHOLD) {
+        proc.stdout?.resume()
+      }
+    })
   })
 
+  const MAX_STDERR = 64 * 1024 // 64 KB cap
   let stderrBuf = ''
-  proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString() })
+  proc.stderr?.on('data', (chunk: Buffer) => {
+    stderrBuf += chunk.toString()
+    if (stderrBuf.length > MAX_STDERR) stderrBuf = stderrBuf.slice(-MAX_STDERR)
+  })
+
+  // H-9: identity-guard — only clean up and emit done/error if this proc is
+  // still the active one. A rapid re-send replaces activeProcesses[cardId]
+  // before the old proc's close handler fires; without this guard the old
+  // handler would delete the new proc's entry and inject stale done/error
+  // events into the new turn.
+  const isCurrent = (): boolean => activeProcesses.get(req.cardId) === proc
 
   proc.on('close', (code) => {
+    if (!isCurrent()) return // superseded — new turn owns the slot
     activeProcesses.delete(req.cardId)
     stdoutChain = stdoutChain.then(async () => {
       if (pendingStdout.trim()) {
@@ -560,6 +619,7 @@ export function chatCodex(req: ChatRequest): void {
   })
 
   proc.on('error', (err) => {
+    if (!isCurrent()) return // superseded — new turn owns the slot
     activeProcesses.delete(req.cardId)
     runtimeSession.isStreaming = false
     void upsertRuntimeSessionState(req, runtimeSession)

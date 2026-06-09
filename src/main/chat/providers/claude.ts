@@ -43,6 +43,14 @@ import {
 // propagate into the running canUseTool closure. Keyed by cardId.
 export const cardPermissionModes = new Map<string, string>()
 
+// Per-card AbortController so chat:stop can cancel the SDK request alongside q.close()
+export const cardAbortControllers = new Map<string, AbortController>()
+
+function clearActiveClaudeQuery(cardId: string, q: Query): void {
+  clearActiveQuery(cardId, q)
+  cardAbortControllers.delete(cardId)
+}
+
 const intentionallyClosedQueries = new WeakSet<Query>()
 
 export function markClaudeQueryIntentionallyClosed(query: Query): void {
@@ -499,6 +507,7 @@ export function chatClaude(req: ChatRequest): void {
   })
 
   const abortController = new AbortController()
+  cardAbortControllers.set(req.cardId, abortController)
   let claudeStderr = ''
 
   // Map mode from UI to SDK permission mode
@@ -686,7 +695,10 @@ export function chatClaude(req: ChatRequest): void {
     ...(disallowedPeerBridgeTools.length > 0 && { disallowedTools: disallowedPeerBridgeTools }),
     // Use detected system binary, not the SDK's bundled cli.js
     ...(claudePath && { pathToClaudeCodeExecutable: claudePath }),
-    stderr: (data: string) => { claudeStderr += data },
+    stderr: (data: string) => {
+      claudeStderr += data
+      if (claudeStderr.length > 64 * 1024) claudeStderr = claudeStderr.slice(-64 * 1024)
+    },
   }
 
   // Resume existing session for multi-turn
@@ -854,7 +866,7 @@ export function chatClaude(req: ChatRequest): void {
               resultText: result.result,
               sessionId: result.session_id,
             })
-            clearActiveQuery(req.cardId, q)
+            clearActiveClaudeQuery(req.cardId, q)
             // Also capture from result if we missed earlier
             if (result.session_id && !sessionIds.has(req.cardId)) {
               sessionIds.set(req.cardId, result.session_id)

@@ -140,6 +140,10 @@ class OpenCodeServerManager {
         }
         this.server = null
         this.port = null
+        // H-10: clear startPromise so the next ensureRunning() call triggers
+        // a fresh startServer() rather than returning the stale resolved
+        // promise that still points at the now-dead port.
+        this.startPromise = null
       })
     })
   }
@@ -429,17 +433,32 @@ export function chatOpencode(req: ChatRequest): void {
         }
       })
 
-      // 4. Consume SSE stream for real-time updates
-      const streamTimeout = setTimeout(() => {
-        if (!isDone) {
-          log('opencode SSE stream timeout (5min)')
-          isDone = true
-          sendStream(req.cardId, { type: 'done' })
-        }
-      }, 5 * 60_000)
+      // Medium: inactivity timeout — restart the 5-min clock each time we
+      // receive any SSE event so a long-running but active session is not
+      // aborted. If the stream goes silent for 5 min we abort and close.
+      const INACTIVITY_MS = 5 * 60_000
+      let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null
+
+      const resetStreamTimeout = (): void => {
+        if (streamTimeoutHandle !== null) clearTimeout(streamTimeoutHandle)
+        streamTimeoutHandle = setTimeout(() => {
+          if (!isDone) {
+            log('opencode SSE inactivity timeout (5min)')
+            isDone = true
+            // Best-effort server-side abort before closing the iterator.
+            void abortOpenCodeSession(req.cardId).catch(() => {})
+            sendStream(req.cardId, { type: 'done' })
+          }
+        }, INACTIVITY_MS)
+      }
+      resetStreamTimeout()
+
+      // Keep a reference so the finally block can cancel it.
+      const streamTimeout = { clear: () => { if (streamTimeoutHandle !== null) clearTimeout(streamTimeoutHandle) } }
 
       try {
         for await (const event of stream) {
+          resetStreamTimeout()
           if (isDone) break
           const evt = event as any
           const evtType: string = evt?.type ?? ''
@@ -691,7 +710,7 @@ export function chatOpencode(req: ChatRequest): void {
           }
         }
       } finally {
-        clearTimeout(streamTimeout)
+        streamTimeout.clear()
       }
 
       await promptPromise

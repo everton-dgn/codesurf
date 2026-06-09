@@ -786,7 +786,19 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
   }
 
   async function writeJobMetadata(job) {
-    await fs.writeFile(jobMetaPath(job.id), `${JSON.stringify(job, null, 2)}\n`, 'utf8')
+    // Atomic write: a crash/SIGKILL mid-write must not leave a truncated
+    // {jobId}.json — a corrupt record is invisible to the dashboard AND
+    // un-prunable by retention sweep (it skips on parse error), leaking the
+    // file and its timeline forever. Write to a unique temp file then rename.
+    const finalPath = jobMetaPath(job.id)
+    const tmpPath = `${finalPath}.tmp-${randomUUID()}`
+    try {
+      await fs.writeFile(tmpPath, `${JSON.stringify(job, null, 2)}\n`, 'utf8')
+      await fs.rename(tmpPath, finalPath)
+    } catch (err) {
+      try { await fs.unlink(tmpPath) } catch {}
+      throw err
+    }
   }
 
   function clearMetadataFlush(jobId) {
@@ -1257,16 +1269,20 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     const proc = spawn('codex', codexArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      detached: true,
     })
 
     job.proc = proc
-    job.cancel = () => proc.kill('SIGTERM')
+    job.cancel = () => {
+      try { process.kill(-proc.pid, 'SIGTERM') } catch { proc.kill('SIGTERM') }
+    }
 
     const pendingSnapshots = new Map()
     const aggregatedFileChanges = new Map()
     const exploreEntries = []
     let editsStarted = false
     let exploreStarted = false
+    let commandSeq = 0
     let checkpointFailure = null
     let pendingStdout = ''
     let stdoutChain = Promise.resolve()
@@ -1335,22 +1351,36 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       if (item.type === 'command_execution' && typeof item.command === 'string') {
         const command = normalizeCodexShellCommand(item.command)
         const kind = classifyCodexCommand(command)
+        const MAX_CMD_OUTPUT = 64 * 1024
+        const rawOutput = sanitizeToolOutputText(typeof item.aggregated_output === 'string' ? item.aggregated_output : '')
+        const output = rawOutput.length > MAX_CMD_OUTPUT
+          ? rawOutput.slice(0, MAX_CMD_OUTPUT) + '\n…[truncated]'
+          : rawOutput
         if (kind === 'search' || kind === 'read') {
           if (!exploreStarted) {
             await appendEvent(job.id, { type: 'tool_start', toolId: 'codex-explore', toolName: 'Exploring workspace' })
             exploreStarted = true
           }
-          exploreEntries.push({
-            label: command,
-            command,
-            output: sanitizeToolOutputText(typeof item.aggregated_output === 'string' ? item.aggregated_output : ''),
-            kind,
-          })
+          exploreEntries.push({ label: command, command, output, kind })
           await appendEvent(job.id, {
             type: 'tool_summary',
             toolId: 'codex-explore',
             toolName: buildExploreToolName(exploreEntries),
             commandEntries: [...exploreEntries],
+          })
+        } else {
+          // kind === 'command' — surface as its own tool block instead of
+          // dropping it, so build/test/publish/dev-server steps appear inline
+          // between the assistant's narration text in chronological order.
+          // Each command gets a unique toolId so blocks interleave with text
+          // rather than collapsing into a single aggregate chip.
+          const toolId = `codex-cmd-${commandSeq++}`
+          await appendEvent(job.id, { type: 'tool_start', toolId, toolName: 'exec_command' })
+          await appendEvent(job.id, {
+            type: 'tool_summary',
+            toolId,
+            toolName: 'exec_command',
+            commandEntries: [{ label: command, command, output, kind: 'command' }],
           })
         }
         return
@@ -1467,11 +1497,14 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     }), {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      detached: true,
       ...(workspaceDir ? { cwd: workspaceDir } : {}),
     })
 
     job.proc = proc
-    job.cancel = () => proc.kill('SIGTERM')
+    job.cancel = () => {
+      try { process.kill(-proc.pid, 'SIGTERM') } catch { proc.kill('SIGTERM') }
+    }
 
     let stdoutBuf = ''
     let stderrBuf = ''
@@ -1536,10 +1569,13 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     }), {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
+      detached: true,
     })
 
     job.proc = proc
-    job.cancel = () => proc.kill('SIGTERM')
+    job.cancel = () => {
+      try { process.kill(-proc.pid, 'SIGTERM') } catch { proc.kill('SIGTERM') }
+    }
 
     const emittedSessionIds = new Set()
     const fallbackTextParts = []
@@ -1680,6 +1716,16 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         await appendEvent(job.id, { type: 'error', error: `Daemon execution is only implemented for Claude, Codex, OpenCode, and Hermes right now. Requested: ${request.provider}` })
         await appendEvent(job.id, { type: 'done' })
       }
+    } catch (err) {
+      // Contain the failure to this job: emit terminal events so the client is
+      // not left hanging, then let the finally block free the concurrency slot.
+      console.error(`[chat-jobs] runJob error for job ${job.id}:`, err)
+      try {
+        await appendEvent(job.id, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+        await appendEvent(job.id, { type: 'done' })
+      } catch (appendErr) {
+        console.error(`[chat-jobs] failed to emit terminal events for job ${job.id}:`, appendErr)
+      }
     } finally {
       liveJobs.delete(job.id)
       clearMetadataFlush(job.id)
@@ -1795,7 +1841,17 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     // Emit a terminal pair and close instead.
     const statusActive = metadata.status === 'running' || metadata.status === 'queued'
     if (statusActive && !liveJobs.has(jobId)) {
-      const baseSeq = Number(metadata.lastSequence ?? 0)
+      // Derive baseSeq from the actual max sequence in the timeline file to avoid
+      // duplicate sequence numbers when metadata.lastSequence is stale after a crash.
+      let baseSeq = Number(metadata.lastSequence ?? 0)
+      for (const line of raw.split('\n')) {
+        const t = line.trim()
+        if (!t) continue
+        try {
+          const seq = Number(JSON.parse(t).sequence ?? 0)
+          if (seq > baseSeq) baseSeq = seq
+        } catch { /* ignore */ }
+      }
       writeSseEvent(res, { jobId, sequence: baseSeq + 1, timestamp: Date.now(), type: 'error', error: 'Job was interrupted (the daemon restarted)' })
       writeSseEvent(res, { jobId, sequence: baseSeq + 2, timestamp: Date.now(), type: 'done' })
       return false
@@ -1874,14 +1930,35 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     for (const timer of metadataFlushTimers.values()) clearTimeout(timer)
     metadataFlushTimers.clear()
     const jobs = Array.from(liveJobs.values())
+    const procsWithPid = []
     for (const live of jobs) {
       try { live.cancel?.() } catch { /* already gone */ }
-      try { live.proc?.kill('SIGTERM') } catch { /* already gone */ }
+      const proc = live.proc
+      if (!proc) continue
+      // Attempt to kill the entire process group (detached spawn)
+      try { process.kill(-proc.pid, 'SIGTERM') } catch {
+        try { proc.kill('SIGTERM') } catch { /* already gone */ }
+      }
+      procsWithPid.push(proc)
     }
-    if (jobs.some((j) => j.proc)) {
-      await new Promise((r) => setTimeout(r, 500))
-      for (const live of jobs) {
-        try { if (live.proc && !live.proc.killed) live.proc.kill('SIGKILL') } catch { /* already gone */ }
+    if (procsWithPid.length > 0) {
+      // Wait for each process to exit (up to 3s total) before escalating to SIGKILL
+      const exitPromises = procsWithPid.map(proc =>
+        new Promise((resolve) => {
+          if (proc.exitCode !== null) { resolve(undefined); return }
+          proc.once('exit', resolve)
+          proc.once('error', resolve)
+        })
+      )
+      await Promise.race([
+        Promise.all(exitPromises),
+        new Promise((r) => setTimeout(r, 3000)),
+      ])
+      for (const proc of procsWithPid) {
+        if (proc.exitCode !== null || proc.killed) continue
+        try { process.kill(-proc.pid, 'SIGKILL') } catch {
+          try { proc.kill('SIGKILL') } catch { /* already gone */ }
+        }
       }
     }
   }

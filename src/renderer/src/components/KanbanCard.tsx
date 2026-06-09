@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useDetectedAgents } from '../hooks/useDetectedAgents'
 import { useMCPServers } from '../hooks/useMCPServers'
 import { useAppFonts } from '../FontContext'
@@ -158,7 +158,7 @@ interface Props {
   onDragEnd: () => void
 }
 
-export function KanbanCard({
+function KanbanCardInner({
   card, workspaceDir, active, dragging, isRunning: _isRunning, allCards,
   onUpdate, onRemove, onLaunch, onPause, onSave, onFocus, onDragStart, onDragEnd
 }: Props): JSX.Element {
@@ -180,38 +180,47 @@ export function KanbanCard({
   const launchCmd = card.agent !== 'shell' ? buildLaunchCmd(card, card.briefPath, agentInfo?.path) : undefined
 
   // All available tools = built-ins + every enabled MCP server
-  const toolSuggestions = [
-    ...BUILTIN_TOOLS,
-    ...mcpServers.map(s => s.name)
-  ]
-  const cardSuggestions = allCards.filter(c => c.id !== card.id).map(c => c.title)
-  const cardPalette = theme.mode === 'light'
-    ? [
-        'rgba(59, 130, 246, 0.22)',
-        'rgba(16, 185, 129, 0.22)',
-        'rgba(168, 85, 247, 0.20)',
-        'rgba(245, 158, 11, 0.22)',
-        'rgba(236, 72, 153, 0.20)',
-        'rgba(14, 165, 233, 0.20)',
-        'rgba(20, 184, 166, 0.20)',
-        'rgba(239, 68, 68, 0.18)',
-      ]
-    : [
-        'rgba(88, 166, 255, 0.16)',
-        'rgba(52, 211, 153, 0.16)',
-        'rgba(192, 132, 252, 0.16)',
-        'rgba(251, 191, 36, 0.16)',
-        'rgba(244, 114, 182, 0.16)',
-        'rgba(96, 165, 250, 0.14)',
-        'rgba(45, 212, 191, 0.15)',
-        'rgba(248, 113, 113, 0.15)',
-      ]
+  const toolSuggestions = useMemo(
+    () => [...BUILTIN_TOOLS, ...mcpServers.map(s => s.name)],
+    [mcpServers],
+  )
+  const cardSuggestions = useMemo(
+    () => allCards.filter(c => c.id !== card.id).map(c => c.title),
+    [allCards, card.id],
+  )
+  const cardPalette = useMemo(
+    () => theme.mode === 'light'
+      ? [
+          'rgba(59, 130, 246, 0.22)',
+          'rgba(16, 185, 129, 0.22)',
+          'rgba(168, 85, 247, 0.20)',
+          'rgba(245, 158, 11, 0.22)',
+          'rgba(236, 72, 153, 0.20)',
+          'rgba(14, 165, 233, 0.20)',
+          'rgba(20, 184, 166, 0.20)',
+          'rgba(239, 68, 68, 0.18)',
+        ]
+      : [
+          'rgba(88, 166, 255, 0.16)',
+          'rgba(52, 211, 153, 0.16)',
+          'rgba(192, 132, 252, 0.16)',
+          'rgba(251, 191, 36, 0.16)',
+          'rgba(244, 114, 182, 0.16)',
+          'rgba(96, 165, 250, 0.14)',
+          'rgba(45, 212, 191, 0.15)',
+          'rgba(248, 113, 113, 0.15)',
+        ],
+    [theme.mode],
+  )
   const instructionPreview = card.instructions.trim() || card.description.trim()
   const headerActionColor = theme.text.primary
-  const unresolvedStartAfter = card.cardRefs
-    .map(ref => allCards.find(c => c.id === ref || c.title === ref))
-    .filter((c): c is KanbanCardData => !!c)
-    .filter(c => c.columnId !== 'done')
+  const unresolvedStartAfter = useMemo(
+    () => card.cardRefs
+      .map(ref => allCards.find(c => c.id === ref || c.title === ref))
+      .filter((c): c is KanbanCardData => !!c)
+      .filter(c => c.columnId !== 'done'),
+    [card.cardRefs, allCards],
+  )
   const canStart = card.agent !== 'shell' && unresolvedStartAfter.length === 0
 
   useEffect(() => {
@@ -731,6 +740,8 @@ export function KanbanCard({
     </div>
   )
 }
+
+export const KanbanCard = React.memo(KanbanCardInner)
 
 // ─── Chip input ───────────────────────────────────────────────────────────────
 

@@ -5,6 +5,24 @@ import { canvasStatePath, ensureWorkspaceStorageMigrated } from '../../storage/w
 import { getNodeToolSchemaByName, getPeerBridgeNodeTools } from '../../../shared/nodeTools'
 import type { TileState } from '../../../shared/types'
 import { asString, type McpToolContext } from '../types'
+import { requestToolPermission } from '../../permissions'
+import { assertSafePathSegment } from '../../security/pathSegments'
+
+// SECURITY: terminal_send_input writes arbitrary text (+ Enter) directly into
+// a terminal tile, giving any MCP caller that holds the bearer token from
+// .mcp.json the ability to execute arbitrary shell commands in the user's
+// running terminal. The token is per-session and is protected by 0o600 on
+// .mcp.json, but compromise of that file (or a rogue MCP server entry added
+// to .mcp.json) yields full command execution. This tool is therefore
+// gated behind the existing user-permission-prompt flow so the user can
+// approve/deny/block it, rather than auto-approving every call.
+//
+// What's still needed for a fuller fix:
+//   - Per-tile token scoping: each terminal tile should have its own token so
+//     a leaked token for tile A cannot drive terminal on tile B.
+//   - Audit log: log terminal_send_input calls to ~/.codesurf/audit.log.
+//   - UI surface for per-tile grant management in the permissions panel.
+let _terminalSendInputWarningEmitted = false
 
 function asBoolean(value: unknown): boolean {
   return value === true
@@ -77,6 +95,9 @@ async function readCanvasStateTiles(workspaceId: string): Promise<TileState[]> {
 }
 
 async function findNoteTileBackingFile(tileId: string): Promise<string | null> {
+  // Validate before using tileId as a path segment: prevents traversal via
+  // MCP-supplied tile_id values like '../../../etc/passwd'.
+  assertSafePathSegment(tileId, 'tile_id')
   const workspaces = await readWorkspaceRefsFromUserConfig()
   for (const ws of workspaces) {
     try {
@@ -122,6 +143,26 @@ export async function handlePeerBridgeTool(
   if (name === 'terminal_send_input') {
     const input = asString(args.input)
     if (!input) return 'Missing input'
+
+    // Emit a one-time startup warning so the risk is visible in logs.
+    if (!_terminalSendInputWarningEmitted) {
+      _terminalSendInputWarningEmitted = true
+      console.warn(
+        '[MCP][SECURITY] terminal_send_input is a high-risk tool: it executes arbitrary ' +
+        'commands in a live terminal tile. Calls are gated by user permission prompt. ' +
+        'Any MCP client holding a valid bearer token can invoke this tool.',
+      )
+    }
+
+    const permissionRequest = {
+      provider: 'mcp',
+      toolName: 'terminal_send_input',
+      title: 'Terminal input from MCP agent',
+      description: `An MCP agent wants to type into terminal tile "${tileId}":\n${input.slice(0, 200)}${input.length > 200 ? '...' : ''}`,
+    }
+    const allowed = await requestToolPermission(permissionRequest, /* interactive */ true)
+    if (!allowed) return 'Permission denied: terminal_send_input was not approved'
+
     return publishPeerCommand(tileId, name, { input, enter: asBoolean(args.enter) }, ctx)
   }
 

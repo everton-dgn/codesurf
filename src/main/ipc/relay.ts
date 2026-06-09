@@ -75,6 +75,12 @@ export function registerRelayIPC(): void {
   })
 
   ipcMain.handle('relay:sendDirectMessage', async (_, workspacePath: string, from: string, draft: any) => {
+    if (
+      typeof workspacePath !== 'string' || typeof from !== 'string' ||
+      !draft || typeof draft !== 'object' || typeof draft.toParticipantId !== 'string'
+    ) {
+      return { ok: false, error: 'Invalid sendDirectMessage payload' }
+    }
     return sendWorkspaceDirectRelayMessage(workspacePath, from, draft)
   })
 
@@ -99,6 +105,12 @@ export function registerRelayIPC(): void {
   })
 
   ipcMain.handle('relay:spawnAgent', async (_, workspacePath: string, request: any) => {
+    if (
+      typeof workspacePath !== 'string' ||
+      !request || typeof request !== 'object' || typeof request.participantId !== 'string'
+    ) {
+      return { ok: false, error: 'Invalid spawnAgent payload' }
+    }
     return spawnWorkspaceRelayAgent(workspacePath, request)
   })
 

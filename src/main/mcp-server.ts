@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto'
 import type { ExtensionRegistry } from './extensions/registry'
 import { getAllNodeTools } from '../shared/nodeTools'
 import { CONTEX_HOME } from './paths'
+import { assertSafePathSegment } from './security/pathSegments'
 import { dispatchTool, getAllStaticTools } from './mcp/registry'
 import { executeImageEditTool as executeImageEditToolImpl } from './mcp/tools/generation'
 import type { McpToolContext, McpToolSchema } from './mcp/types'
@@ -288,7 +289,9 @@ async function handleLocalTool(name: string, args: Record<string, unknown>): Pro
   }
 
   if (name === 'reload_objective') {
-    const tileId = args.tile_id as string
+    let tileId: string
+    try { tileId = assertSafePathSegment(args.tile_id as string, 'tile_id') }
+    catch { return 'Invalid tile_id' }
     try {
       const workspaces = await readWorkspaceRefsFromUserConfig()
       for (const ws of workspaces) {
@@ -313,7 +316,9 @@ async function handleLocalTool(name: string, args: Record<string, unknown>): Pro
   }
 
   if (name === 'get_context') {
-    const tileId = args.tile_id as string
+    let tileId: string
+    try { tileId = assertSafePathSegment(args.tile_id as string, 'tile_id') }
+    catch { return 'Invalid tile_id' }
     try {
       const workspaces = await readWorkspaceRefsFromUserConfig()
       for (const ws of workspaces) {
@@ -430,9 +435,10 @@ function isLoopbackHost(req: IncomingMessage): boolean {
   return name === '127.0.0.1' || name === 'localhost' || name === '[::1]' || name === '::1'
 }
 
-function isSensitiveMcpRoute(method: string | undefined, isEvents: boolean): boolean {
-  if (isEvents) return true
-  return method === 'POST'
+// Every non-OPTIONS request requires auth. This is a blanket fail-closed policy:
+// adding a new route never accidentally becomes unauthenticated.
+function isSensitiveMcpRoute(_method: string | undefined, _isEvents: boolean): boolean {
+  return true
 }
 
 function readBearerToken(req: IncomingMessage): string | null {
@@ -532,7 +538,11 @@ export async function startMCPServer(): Promise<number> {
 
         req.on('close', () => {
           clearInterval(ping)
-          sseClients.get(cardId)?.delete(res)
+          const set = sseClients.get(cardId)
+          if (set) {
+            set.delete(res)
+            if (set.size === 0) sseClients.delete(cardId)
+          }
         })
         return
       }

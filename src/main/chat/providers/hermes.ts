@@ -99,6 +99,11 @@ export function chatHermes(req: ChatRequest): void {
 
   activeProcesses.set(req.cardId, proc)
 
+  // H-9: identity-guard — only clean up / emit done|error if this proc is
+  // still the active one for this card. A rapid re-send replaces the map
+  // entry before the old proc's close handler fires, so we must check first.
+  const isCurrent = (): boolean => activeProcesses.get(req.cardId) === proc
+
   // NDJSON line dispatcher. Hermes' --stream-json mode emits one JSON event
   // per line on stdout, mapping directly to CodeSurf's existing stream event
   // schema (type: text | thinking | tool_start | tool_input | tool_summary
@@ -202,6 +207,7 @@ export function chatHermes(req: ChatRequest): void {
   proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString() })
 
   proc.on('close', (code) => {
+    if (!isCurrent()) return // superseded by a new turn — suppress stale done/error
     dispatchHermesEvents('', true)
     activeProcesses.delete(req.cardId)
     if (code !== 0 && stderrBuf.trim()) {
@@ -211,6 +217,7 @@ export function chatHermes(req: ChatRequest): void {
   })
 
   proc.on('error', (err) => {
+    if (!isCurrent()) return // superseded — new turn owns the slot
     activeProcesses.delete(req.cardId)
     sendStream(req.cardId, {
       type: 'error',

@@ -1,4 +1,4 @@
-import { copyFileSync, unlinkSync, mkdirSync, existsSync } from 'fs'
+import { copyFileSync, unlinkSync, mkdirSync, existsSync, chmodSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { pbkdf2Sync, createDecipheriv } from 'crypto'
 import { session } from 'electron'
@@ -70,22 +70,38 @@ function chromeTimeToUnix(chromeTime: number): number {
 export async function syncCookiesToPartition(
   profileDir: string,
   partition: string,
-  options: { approvedDomains?: string[] } = {},
+  options: { approvedDomains?: string[]; allowUnscoped?: boolean } = {},
 ): Promise<{ count: number; errors: string[] }> {
   const errors: string[] = []
 
-  // risk-06: when an approved-domains allowlist is configured, inject only
-  // cookies for those domains. An empty/unset list means "not yet scoped" —
-  // preserve the existing inject-all behavior but warn, so sync is never
-  // silently killed before the approval UI lands.
+  // risk-06: cookie injection copies decrypted Chrome session cookies into a
+  // browser-tile partition that subsequently loads agent-controlled URLs.
+  // Default-DENY: with no approved-domains allowlist we inject NOTHING, rather
+  // than copying the user's entire cookie jar (auth/session cookies for banks,
+  // email, cloud consoles). An explicit allowUnscoped:true is the only way to
+  // opt into the old inject-all behavior.
   const approvedDomains = (options.approvedDomains ?? []).filter(d => typeof d === 'string' && d.trim())
   const filtering = approvedDomains.length > 0
-  if (!filtering) {
-    console.warn('[chrome-sync] cookie injection is UNSCOPED — every site cookie is being copied into the browser-tile partition. Configure approved domains to limit exposure.')
+  if (!filtering && !options.allowUnscoped) {
+    console.warn('[chrome-sync] cookie injection skipped — no approved domains configured. Configure approved domains (or pass allowUnscoped) to enable sync.')
+    return { count: 0, errors: ['No approved domains configured; cookie sync skipped (default-deny).'] }
+  }
+  if (!filtering && options.allowUnscoped) {
+    console.warn('[chrome-sync] cookie injection is UNSCOPED — every site cookie is being copied into the browser-tile partition. This was explicitly opted into via allowUnscoped.')
   }
 
-  // Ensure temp dir exists
-  if (!existsSync(TEMP_DIR)) mkdirSync(TEMP_DIR, { recursive: true })
+  // Ensure temp dir exists and sweep any leftover temp files from prior crashes
+  if (!existsSync(TEMP_DIR)) {
+    mkdirSync(TEMP_DIR, { recursive: true })
+  } else {
+    try {
+      for (const f of readdirSync(TEMP_DIR)) {
+        if (f.endsWith('.sqlite')) {
+          try { unlinkSync(join(TEMP_DIR, f)) } catch { /* best-effort */ }
+        }
+      }
+    } catch { /* best-effort */ }
+  }
 
   const srcDb = join(profilePath(profileDir), 'Cookies')
   if (!existsSync(srcDb)) {
@@ -95,8 +111,9 @@ export async function syncCookiesToPartition(
   const tempDb = join(TEMP_DIR, `cookies-${Date.now()}.sqlite`)
 
   try {
-    // Copy to avoid Chrome's file lock
+    // Copy to avoid Chrome's file lock; restrict to owner-read-only (0o600)
     copyFileSync(srcDb, tempDb)
+    chmodSync(tempDb, 0o600)
 
     // Get decryption key
     const password = await getChromeKeychainPassword()

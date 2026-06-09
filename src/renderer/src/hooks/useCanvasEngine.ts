@@ -64,7 +64,14 @@ export type PersistCanvasStateFn = (
   grps?: GroupState[],
 ) => void
 
-export type SaveCanvasFn = PersistCanvasStateFn
+export type SaveCanvasFn = (
+  tileList: TileState[],
+  vp: CanvasViewport,
+  nz: number,
+  grps?: GroupState[],
+  /** Pre-drag snapshot — pass when tilesRef already holds final positions (H-11 fix). */
+  beforeTiles?: TileState[],
+) => void
 
 export type CanvasEnginePersistRefs = {
   tilesRef: MutableRefObject<TileState[]>
@@ -276,6 +283,20 @@ export type UseCanvasEngineReturn = {
   undoCanvas: () => void
   redoCanvas: () => void
   flushDeferredCanvasPersist: () => void
+  /** Clear both undo and redo stacks (call on workspace switch / canvas load). */
+  clearHistory: () => void
+  /**
+   * Immediately fire any pending debounced save for the given workspace id,
+   * cancelling the scheduled timer. Call this BEFORE switching workspace so
+   * the last edits for the outgoing workspace are not dropped or mis-attributed.
+   */
+  flushPendingSave: (workspaceId: string) => void
+  /**
+   * Record that the canvas state now belongs to the given workspace id.
+   * The auto-save effect is gated on this matching workspace.id so that A's
+   * tiles cannot be written into B's canvas.json during the switch window.
+   */
+  markCanvasLoaded: (id: string) => void
 }
 
 export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngineReturn {
@@ -313,6 +334,8 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
   const expandedCanvasPriorViewportRef = useRef<CanvasViewport | null>(null)
   const persistCanvasStateRef = useRef<PersistCanvasStateFn | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Dedicated timer for resetting skipHistory — must never be cleared by the persist path. */
+  const skipHistoryResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPersistRef = useRef<{
     tileList: TileState[]
     vp: CanvasViewport
@@ -321,6 +344,22 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
   } | null>(null)
   const persistRefsRef = useRef(persistRefs)
   persistRefsRef.current = persistRefs
+
+  /**
+   * Ref-based workspace id so schedulePersistWrite can read the current id
+   * without closing over the `workspace` state value. This keeps the function
+   * identity stable across workspace changes (avoids identity churn in deps).
+   */
+  const workspaceIdRef = useRef<string | null>(workspace?.id ?? null)
+  workspaceIdRef.current = workspace?.id ?? null
+
+  /**
+   * Tracks which workspace id the currently-loaded canvas state belongs to.
+   * Set to null while a switch is in progress; set to the new id once the load
+   * completes. The auto-save effect is gated on this matching workspace.id to
+   * prevent A's tiles being written into B's canvas.json during the switch window.
+   */
+  const canvasLoadedForWorkspaceIdRef = useRef<string | null>(workspace?.id ?? null)
 
   // Keep viewport / z-index refs in sync with state
   viewportRef.current = viewport
@@ -342,6 +381,7 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
       viewportAnimationFrameRef.current = null
     }
     if (saveTimer.current) clearTimeout(saveTimer.current)
+    if (skipHistoryResetTimer.current) clearTimeout(skipHistoryResetTimer.current)
   }, [])
 
   const cancelPanInertia = useCallback(() => {
@@ -369,8 +409,12 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     nz: number,
     resolvedGroups: GroupState[],
   ) => {
-    if (!workspace) return
+    // Use ref so this function has a stable identity (no `workspace` dep).
+    // The workspace id is captured at call-time via the ref, not via closure.
+    const wsId = workspaceIdRef.current
+    if (!wsId) return
     const refs = persistRefsRef.current
+    const priorViewport = expandedCanvasPriorViewportRef.current
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
       const state = buildCanvasStatePayload(
@@ -379,14 +423,14 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
         nz,
         resolvedGroups,
         refs,
-        expandedCanvasPriorViewportRef.current,
+        priorViewport,
       )
-      window.electron.canvas.save(workspace.id, state)
+      window.electron.canvas.save(wsId, state)
     }, CANVAS_SAVE_DEBOUNCE_MS)
-  }, [workspace])
+  }, [])  // stable — reads workspace id and refs via refs, never via closure
 
   const persistCanvasState = useCallback<PersistCanvasStateFn>((tileList, vp, nz, grps) => {
-    if (!workspace) return
+    if (!workspaceIdRef.current) return
     const refs = persistRefsRef.current
     const resolvedGroups = grps ?? refs.groupsRef.current
 
@@ -396,7 +440,7 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     }
 
     schedulePersistWrite(tileList, vp, nz, resolvedGroups)
-  }, [workspace, schedulePersistWrite])
+  }, [schedulePersistWrite])  // stable — workspace id read from ref
 
   const flushDeferredCanvasPersist = useCallback(() => {
     const pending = pendingPersistRef.current
@@ -405,14 +449,66 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     schedulePersistWrite(pending.tileList, pending.vp, pending.nz, pending.grps)
   }, [schedulePersistWrite])
 
-  const saveCanvas = useCallback<SaveCanvasFn>((tileList, vp, nz, grps) => {
-    if (!workspace) return
+  /**
+   * Immediately fire any pending debounced save, writing it under the given
+   * workspace id. Must be called BEFORE setWorkspace() so the old id is used.
+   * Cancels the pending timer so the delayed callback never fires.
+   * Also drains pendingPersistRef (drag-suspend path) for the same reason.
+   */
+  const flushPendingSave = useCallback((oldWorkspaceId: string) => {
+    if (!oldWorkspaceId) return
+    // Only write if there is actually a pending save (either debounced timer or
+    // drag-suspended pending). Avoid spurious writes on clean-state switches.
+    const hasPendingTimer = saveTimer.current !== null
+    const hasPendingDragSave = pendingPersistRef.current !== null
+    if (!hasPendingTimer && !hasPendingDragSave) return
+
+    // Cancel the debounced timer (prevent double-write after flush).
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
+    }
+    // Drain drag-suspended pending write.
+    pendingPersistRef.current = null
+
+    // Build and write immediately using authoritative ref values.
+    const refs = persistRefsRef.current
+    const tileList = refs.tilesRef.current
+    const resolvedGroups = refs.groupsRef.current
+    const vp = viewportRef.current
+    const nz = nextZIndexRef.current
+    const state = buildCanvasStatePayload(
+      tileList,
+      vp,
+      nz,
+      resolvedGroups,
+      refs,
+      expandedCanvasPriorViewportRef.current,
+    )
+    window.electron.canvas.save(oldWorkspaceId, state)
+  }, [])  // stable — all reads go through refs
+
+  /**
+   * Mark that canvas state for the given workspace id has been loaded and
+   * applied to React state. The auto-save effect is gated on this matching
+   * workspace.id; call this after applying loaded state so saves resume.
+   */
+  const markCanvasLoaded = useCallback((id: string) => {
+    canvasLoadedForWorkspaceIdRef.current = id
+  }, [])
+
+  const saveCanvas = useCallback<SaveCanvasFn>((tileList, vp, nz, grps, beforeTiles) => {
+    if (!workspaceIdRef.current) return
     const refs = persistRefsRef.current
     const resolvedGroups = grps ?? refs.groupsRef.current
 
     if (!skipHistory.current) {
+      // Use the explicit pre-drag snapshot when provided so that the diff is
+      // computed against the state BEFORE movement, not the (already-updated)
+      // tilesRef (H-11 fix).
+      const historyBefore = beforeTiles ?? refs.tilesRef.current
       const entry = buildCanvasHistoryEntry(
-        refs.tilesRef.current,
+        historyBefore,
         tileList,
         refs.groupsRef.current,
         resolvedGroups,
@@ -425,13 +521,15 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     }
 
     persistCanvasState(tileList, vp, nz, resolvedGroups)
-  }, [workspace, persistCanvasState])
+  }, [persistCanvasState])  // stable — workspace id read from ref
 
+  // Read viewportRef (not viewport state) so this function's identity is stable
+  // across pan frames — prevents CanvasTileItem memo from busting on every pan (medium fix).
   const screenToWorld = useCallback((sx: number, sy: number) => {
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return { x: 0, y: 0 }
-    return screenToWorldPoint(sx, sy, rect, viewport)
-  }, [canvasRef, viewport])
+    return screenToWorldPoint(sx, sy, rect, viewportRef.current)
+  }, [canvasRef, viewportRef])
 
   const viewportCenter = useCallback(() => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -517,9 +615,15 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
 
   const handleWheel = useCallback((_e: ReactWheelEvent) => {}, [])
 
-  // Auto-save when layout metadata changes
+  // Auto-save when layout metadata changes.
+  // Guard: only persist when the loaded canvas state actually belongs to the
+  // current workspace. During a workspace switch, canvasLoadedForWorkspaceIdRef
+  // is null (cleared by flushPendingSave caller before setWorkspace) until
+  // markCanvasLoaded() is called after canvas.load() completes — preventing
+  // A's tiles from being written into B's canvas.json in the switch window.
   useEffect(() => {
     if (!workspace) return
+    if (canvasLoadedForWorkspaceIdRef.current !== workspace.id) return
     persistCanvasState(tiles, viewport, nextZIndex, groups)
   }, [workspace, panelLayout, activePanelId, expandedTileId, persistCanvasState, tiles, viewport, nextZIndex, groups])
 
@@ -573,7 +677,13 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
       : applyCanvasHistoryRedo(currentTiles, currentGroups, entry)
     setTiles(tiles)
     setGroups(groups)
+
+    // Reset skipHistory on a dedicated timer — never share saveTimer so
+    // schedulePersistWrite cannot cancel the reset (H-12 fix).
+    if (skipHistoryResetTimer.current) clearTimeout(skipHistoryResetTimer.current)
+
     if (workspace) {
+      // Persist via the normal save path (which reads saveTimer only).
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
         const state: CanvasState = {
@@ -583,11 +693,15 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
           nextZIndex: nextZIndexRef.current,
         }
         window.electron.canvas.save(workspace.id, state)
-        skipHistory.current = false
       }, CANVAS_SAVE_DEBOUNCE_MS)
-    } else {
-      skipHistory.current = false
     }
+
+    // Reset the skip flag after state has flushed — use a separate timer that
+    // the persist path (clearTimeout(saveTimer)) can never touch.
+    skipHistoryResetTimer.current = setTimeout(() => {
+      skipHistoryResetTimer.current = null
+      skipHistory.current = false
+    }, 0)
   }, [workspace, setTiles, setGroups])
 
   const undoCanvas = useCallback(() => {
@@ -604,6 +718,12 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     if (historyBack.current.length > HISTORY_MAX_ENTRIES) historyBack.current.shift()
     applyHistoryEntry(entry, 'redo')
   }, [applyHistoryEntry])
+
+  /** Clear both stacks when a new canvas is loaded to prevent cross-workspace replay (H-3). */
+  const clearHistory = useCallback(() => {
+    historyBack.current = []
+    historyForward.current = []
+  }, [])
 
   persistCanvasStateRef.current = persistCanvasState
 
@@ -644,6 +764,9 @@ export function useCanvasEngine(options: UseCanvasEngineOptions): UseCanvasEngin
     undoCanvas,
     redoCanvas,
     flushDeferredCanvasPersist,
+    clearHistory,
+    flushPendingSave,
+    markCanvasLoaded,
   }
 }
 

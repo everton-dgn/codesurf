@@ -300,4 +300,47 @@ everything-is-a-tile, the 5 chat providers + permission UX, peer/relay, daemon/d
 jobs, MCP server + node bridge, Chrome sync/voice/generation/dreaming/local-proxy, and
 the foreign-format adapters all keep working and get **better** by gaining the new slot,
 store, capability, and UI systems.
-```
+
+---
+
+## 14. Security — current trust posture and roadmap
+
+### Current posture (as of this writing)
+
+`power`/`node` extensions are loaded via `require()` directly into the Electron
+**main process** and their `activate(ctx)` is called with a full `ExtensionContext`.
+This grants unrestricted access to all of Node.js — `fs`, `child_process`, `net`,
+arbitrary `require()`, etc.  It is equivalent to installing a native application.
+
+The **capability system** (§6, P1) gates the **iframe bridge** only.  It does not
+constrain power extensions.
+
+**Activation gates** (the current mitigations):
+
+| Scope | Default | Requires explicit user opt-in? |
+|---|---|---|
+| bundled (shipped with the app) | enabled | no |
+| global (`~/.contex/extensions/`) | enabled | no |
+| catalog (gallery entries) | **disabled** | yes — gallery "Add" / enable |
+| workspace (`.contex/extensions/` in a cloned repo) | **disabled** | yes — explicit enable, persisted |
+
+The workspace default-off is the critical protection: any project a user clones can
+ship `.contex/extensions/` but none of those power scripts will execute unless the
+user explicitly enables each one.  Opt-ins are persisted to
+`~/.contex/enabled-catalog-extensions.json`.
+
+A `[Security]` warning is emitted to the main-process log at `require()` time naming
+the extension, its scope, and the full entry path.  A separate `[Security]` warning is
+emitted at `enable()` time when the user opts in.
+
+### Planned improvement — broker / utilityProcess isolation
+
+`§6` specifies the intended end state: _"`node` execution flows through the broker
+rather than raw `require()` into main"_.  The plan is a `worker`/`utilityProcess` tier
+that receives a scoped capability handle (not ambient Node) and communicates with main
+over a structured channel.  This would reduce a compromised power extension from
+"full main process" to "the capabilities the user consented to".
+
+This is a substantial rearchitecture tracked for a future phase.  Until it lands, the
+raw `require()` path persists and the workspace/catalog default-off gates remain the
+primary defence.

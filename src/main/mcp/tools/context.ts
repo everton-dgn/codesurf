@@ -195,7 +195,11 @@ export async function handleContextTool(
     if (!tileId) return 'Missing tile_id'
     const state = peerState.setState(tileId, {
       tileType: asString(args.tile_type) ?? undefined,
-      status: (asString(args.status) as any) ?? undefined,
+      status: (() => {
+        const s = asString(args.status)
+        if (s === 'idle' || s === 'working' || s === 'blocked' || s === 'waiting' || s === 'done') return s
+        return undefined
+      })(),
       task: asString(args.task) ?? undefined,
       files: Array.isArray(args.files) ? args.files.filter(f => typeof f === 'string') as string[] : undefined,
     })

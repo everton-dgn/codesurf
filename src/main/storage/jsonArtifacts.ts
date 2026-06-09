@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
-import { dirname } from 'path'
+import { dirname, join } from 'path'
 
 type ParsedJsonArtifact<T> = {
   value: T
@@ -78,8 +78,27 @@ export async function readJsonArtifact<T>(filePath: string): Promise<ParsedJsonA
 }
 
 export async function writeJsonArtifactAtomic(filePath: string, value: unknown): Promise<void> {
-  await fs.mkdir(dirname(filePath), { recursive: true })
+  const dir = dirname(filePath)
+  await fs.mkdir(dir, { recursive: true })
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
   await fs.rename(tempPath, filePath)
+}
+
+/**
+ * Sweep a directory for orphaned `*.tmp` sibling files left by crashed/killed
+ * processes (e.g. from `writeJsonArtifactAtomic`). Called once at startup.
+ */
+export async function sweepOrphanedTmpFiles(dir: string): Promise<void> {
+  let names: string[]
+  try {
+    names = await fs.readdir(dir)
+  } catch {
+    return // directory doesn't exist yet — nothing to sweep
+  }
+  await Promise.all(
+    names
+      .filter(n => n.endsWith('.tmp'))
+      .map(n => fs.unlink(join(dir, n)).catch(() => {})),
+  )
 }

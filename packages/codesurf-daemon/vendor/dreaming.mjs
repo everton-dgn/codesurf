@@ -332,10 +332,12 @@ async function runClaudeDream({ model, workspaceDir, systemPrompt, userPrompt, a
       cwd: workspaceDir || undefined,
       abortController,
       includePartialMessages: true,
-      // SDK 0.2.118+ requires allowDangerouslySkipPermissions alongside permissionMode for bypass.
-      // Dreaming is read-only and denies all tool calls via canUseTool below; bypass is safe.
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
+      // 'plan' mode is structurally read-only: the SDK never executes any tool,
+      // regardless of canUseTool callback ordering.  This is a stronger safety
+      // guarantee than bypassPermissions+canUseTool-deny, which relied on the
+      // callback being invoked (not guaranteed under bypass).  The canUseTool
+      // deny below is kept as a secondary defence-in-depth guard.
+      permissionMode: 'plan',
       stderr: (chunk) => {
         if (stderrBuf.length >= MAX_CLAUDE_STDERR_CHARS) return
         stderrBuf += String(chunk ?? '')

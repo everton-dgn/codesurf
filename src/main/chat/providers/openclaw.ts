@@ -183,6 +183,11 @@ export function chatOpenclaw(req: ChatRequest): void {
 
   activeProcesses.set(req.cardId, proc)
 
+  // H-9: identity-guard — only clean up / emit done|error if this proc is
+  // still the active one for this card. A rapid re-send replaces the map
+  // entry before the old proc's close handler fires, so we must check first.
+  const isCurrent = (): boolean => activeProcesses.get(req.cardId) === proc
+
   let stdoutBuf = ''
   proc.stdout?.on('data', (chunk: Buffer) => { stdoutBuf += chunk.toString() })
 
@@ -190,6 +195,7 @@ export function chatOpenclaw(req: ChatRequest): void {
   proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString() })
 
   proc.on('close', (code) => {
+    if (!isCurrent()) return // superseded by a new turn — suppress stale done/error
     activeProcesses.delete(req.cardId)
     if (code !== 0) {
       sendStream(req.cardId, { type: 'error', error: stderrBuf.trim() || stdoutBuf.trim() || `OpenClaw exited with ${code}` })
@@ -230,6 +236,7 @@ export function chatOpenclaw(req: ChatRequest): void {
   })
 
   proc.on('error', (err) => {
+    if (!isCurrent()) return // superseded — new turn owns the slot
     activeProcesses.delete(req.cardId)
     sendStream(req.cardId, {
       type: 'error',

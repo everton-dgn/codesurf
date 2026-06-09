@@ -25,6 +25,9 @@ export function buildProviderContextPolicy(args: {
 
   if (remoteBoundary) {
     return {
+      // Strip local paths from remote context by default — but allow workspaceDir
+      // as a fallback when there is no git remote URL to identify the repo.
+      // The fallback is applied in applyProjectContextPolicy, not here.
       includeWorkspaceDir: false,
       includeGitRemoteUrl: true,
       includeGitBranch: true,
@@ -46,9 +49,12 @@ export function applyProjectContextPolicy(
   context: ProjectContextEnvelope,
   policy: ProviderContextPolicy,
 ): ProjectContextEnvelope {
-  const workspaceDir = policy.includeWorkspaceDir || !context.gitRemoteUrl
+  // When policy strips workspaceDir (remote boundary) but there is no git
+  // remote URL to identify the repo, preserve workspaceDir as a fallback so
+  // the agent can still locate its working directory.
+  const workspaceDir = policy.includeWorkspaceDir
     ? context.workspaceDir
-    : null
+    : !context.gitRemoteUrl ? context.workspaceDir : null
 
   return {
     workspaceDir,

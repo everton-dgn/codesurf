@@ -3,7 +3,7 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, basename, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { findSessionEntryById, getExternalSessionChatState, invalidateExternalSessionCache, listExternalSessionEntries } from './session-index.mjs'
@@ -16,6 +16,7 @@ import { createDreamingManager, DREAMING_DEFAULTS } from '../vendor/dreaming.mjs
 
 const HOME = process.env.CODESURF_HOME || join(homedir(), '.codesurf')
 const PID_PATH = process.env.CODESURF_DAEMON_PID_PATH || join(HOME, 'daemon', 'pid.json')
+const LOCK_PATH = join(HOME, 'daemon', 'daemon.lock')
 const PROTOCOL_VERSION = 1
 const APP_VERSION = String(process.env.CODESURF_APP_VERSION ?? '').trim() || null
 const STARTED_AT = new Date().toISOString()
@@ -51,8 +52,8 @@ const skillsIndex = createSkillsIndex({
   userHomeDir: homedir(),
 })
 
-function ensureDir(dirPath) {
-  mkdirSync(dirPath, { recursive: true })
+function ensureDir(dirPath, mode) {
+  mkdirSync(dirPath, { recursive: true, mode: mode ?? 0o700 })
 }
 
 function normalizePath(value) {
@@ -63,10 +64,14 @@ function makeId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function atomicWriteJson(filePath, value) {
+function atomicWriteJson(filePath, value, mode) {
+  // Security: parent dir created with 0o700 so files are not world-readable.
+  // mode defaults to 0o600 (user-read/write only); callers may pass a wider
+  // mode for non-sensitive files if required.
+  const fileMode = mode ?? 0o600
   ensureDir(dirname(filePath))
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
-  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: fileMode })
   renameSync(tempPath, filePath)
 }
 
@@ -3798,6 +3803,41 @@ async function start() {
     process.exit(0)
     return
   }
+
+  // O_EXCL lock file prevents two daemons from racing through the TOCTOU
+  // window between health-check and listen(). If we can't create it exclusively
+  // the PID in the lock might be a live process — handle stale lock (dead pid).
+  let lockFd = -1
+  try {
+    lockFd = openSync(LOCK_PATH, 'ax', 0o600) // O_CREAT | O_EXCL
+  } catch (lockErr) {
+    // Lock already exists — check if the owning pid is still alive
+    let staleLock = false
+    try {
+      const lockPid = Number(readFileSync(LOCK_PATH, 'utf8').trim())
+      if (!isProcessAlive(lockPid)) {
+        // Stale lock — take it over
+        writeFileSync(LOCK_PATH, String(process.pid), 'utf8')
+        staleLock = true
+      }
+    } catch { staleLock = true }
+    if (!staleLock) {
+      console.error('[codesurfd] Another daemon is starting up (lock file held); exiting.')
+      process.exit(0)
+      return
+    }
+    if (lockFd < 0) {
+      try { lockFd = openSync(LOCK_PATH, 'w', 0o600) } catch { /* best-effort */ }
+    }
+  }
+  if (lockFd >= 0) {
+    try {
+      const { closeSync, writeSync } = await import('node:fs')
+      writeSync(lockFd, String(process.pid))
+      closeSync(lockFd)
+    } catch { /* best-effort */ }
+  }
+
   await new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(0, '127.0.0.1', () => resolve())
@@ -3848,6 +3888,13 @@ function removeOwnedPidFile() {
       rmSync(PID_PATH, { force: true })
     }
   } catch {}
+  // Release the O_EXCL lock
+  try {
+    const lockContent = readFileSync(LOCK_PATH, 'utf8').trim()
+    if (Number(lockContent) === process.pid) {
+      rmSync(LOCK_PATH, { force: true })
+    }
+  } catch {}
 }
 
 async function shutdown() {
@@ -3879,9 +3926,11 @@ process.on('uncaughtException', (error) => {
   console.error('[codesurfd] uncaught exception', error)
   shutdown().finally(() => process.exit(1))
 })
-process.on('unhandledRejection', (error) => {
-  console.error('[codesurfd] unhandled rejection', error)
-  shutdown().finally(() => process.exit(1))
+// Unhandled promise rejections are most often job-level async errors that escaped
+// their catch block.  They should not kill the daemon and all in-flight jobs.
+// Log and continue; the job's own error path (or the client timeout) handles cleanup.
+process.on('unhandledRejection', (reason) => {
+  console.error('[codesurfd] unhandled rejection (job-isolated, daemon continues):', reason)
 })
 
 await start()

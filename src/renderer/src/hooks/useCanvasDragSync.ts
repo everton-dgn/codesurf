@@ -36,7 +36,7 @@ type CanvasDragEngine = {
   panLastPos: MutableRefObject<{ x: number, y: number, t: number }>
   startPanInertia: () => void
   screenToWorld: (sx: number, sy: number) => { x: number, y: number }
-  saveCanvas: (tileList: TileState[], vp: CanvasViewport, nz: number, grps?: GroupState[]) => void
+  saveCanvas: (tileList: TileState[], vp: CanvasViewport, nz: number, grps?: GroupState[], beforeTiles?: TileState[]) => void
   nextZIndex: number
 }
 
@@ -124,8 +124,24 @@ export function useCanvasDragSync(options: UseCanvasDragSyncOptions): void {
     width: number
     height: number
   } | null>(null)
+  /**
+   * Snapshot of tile positions captured at drag START, before any setTiles
+   * calls have updated tilesRef.  Passed to saveCanvas as `beforeTiles` so
+   * the history diff is computed against pre-drag state (H-11 fix).
+   */
+  const preDragSnapshotRef = useRef<TileState[] | null>(null)
 
   useEffect(() => {
+    // Capture the pre-drag snapshot exactly once per drag gesture (H-11 fix).
+    // The effect re-runs when dragState changes; on the first non-null type the
+    // snapshot is empty, so we grab tilesRef before any setTiles has fired.
+    if (dragState.type !== null && preDragSnapshotRef.current === null) {
+      preDragSnapshotRef.current = tilesRef.current.map(t => ({ ...t }))
+    }
+    if (dragState.type === null) {
+      preDragSnapshotRef.current = null
+    }
+
     const onMove = (e: MouseEvent) => {
       if (dragState.type === null) return
       if (dragState.type === 'select') {
@@ -306,6 +322,9 @@ export function useCanvasDragSync(options: UseCanvasDragSyncOptions): void {
     }
 
     const onUp = () => {
+      // Grab the pre-drag snapshot before any async state setters fire (H-11 fix).
+      const beforeTiles = preDragSnapshotRef.current ?? undefined
+
       if (dragState.type === 'tile') flushPendingTileDrag()
       if (dragState.type === 'connection') {
         if (dragState.targetTileId) {
@@ -314,7 +333,7 @@ export function useCanvasDragSync(options: UseCanvasDragSyncOptions): void {
       } else if (dragState.type === 'tile') {
         setTiles(prev => {
           const tile = prev.find(t => t.id === dragState.tileId)
-          if (!tile) { saveCanvas(prev, viewport, nextZIndex); return prev }
+          if (!tile) { saveCanvas(prev, viewport, nextZIndex, undefined, beforeTiles); return prev }
 
           const didMove = tile.x !== dragState.initX || tile.y !== dragState.initY
           if (didMove && suppressedConnectionsRef.current.size > 0) {
@@ -326,7 +345,7 @@ export function useCanvasDragSync(options: UseCanvasDragSyncOptions): void {
               return next.size === prev.size ? prev : next
             })
           }
-          if (!didMove) { saveCanvas(prev, viewport, nextZIndex); return prev }
+          if (!didMove) { saveCanvas(prev, viewport, nextZIndex, undefined, beforeTiles); return prev }
 
           const tileCx = tile.x + tile.width / 2
           const tileCy = tile.y + tile.height / 2
@@ -343,16 +362,16 @@ export function useCanvasDragSync(options: UseCanvasDragSyncOptions): void {
 
           if (newGroupId !== tile.groupId) {
             const updated = prev.map(t => t.id === tile.id ? { ...t, groupId: newGroupId } : t)
-            saveCanvas(updated, viewport, nextZIndex)
+            saveCanvas(updated, viewport, nextZIndex, undefined, beforeTiles)
             window.setTimeout(() => triggerDiscoveryPulse(tile.id, updated), 40)
             return updated
           }
-          saveCanvas(prev, viewport, nextZIndex)
+          saveCanvas(prev, viewport, nextZIndex, undefined, beforeTiles)
           window.setTimeout(() => triggerDiscoveryPulse(tile.id, prev), 40)
           return prev
         })
       } else if (dragState.type === 'resize' || dragState.type === 'group' || dragState.type === 'group-resize') {
-        setTiles(prev => { saveCanvas(prev, viewport, nextZIndex, groupsRef.current); return prev })
+        setTiles(prev => { saveCanvas(prev, viewport, nextZIndex, groupsRef.current, beforeTiles); return prev })
       }
       if (dragState.type === 'select') {
         const minX = Math.min(dragState.startWx, dragState.curWx)

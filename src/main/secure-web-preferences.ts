@@ -48,4 +48,18 @@ export function attachGuestWebviewSecurityHandlers(contents: WebContents): void 
     applyGuestWebviewWebPreferences(webPreferences)
     ;(params as { allowpopups?: boolean }).allowpopups = false
   })
+
+  // The `new-window` DOM webview event was removed in Electron 22.
+  // Handle window.open / target=_blank in the main process instead: intercept
+  // via setWindowOpenHandler on the guest WebContents once attached, forward
+  // the URL to the renderer via IPC, and deny the popup.
+  contents.on('did-attach-webview', (_event, guestContents) => {
+    guestContents.setWindowOpenHandler(details => {
+      // Forward to the parent renderer so BrowserTile can route through dispatchOpenLink
+      if (!contents.isDestroyed()) {
+        contents.send('webview:new-window', { url: details.url })
+      }
+      return { action: 'deny' }
+    })
+  })
 }

@@ -1,6 +1,5 @@
 node_modules
 dist-electron
-node_modules
 autoresearch.sh
 autoresearch.md
 autoresearch.ideas.md
@@ -18,3 +17,5 @@ opensrc/morph-labs--morph-typescript-sdk/
 # Stale committed esbuild bundle — not the runtime entrypoint (package.json main
 # points at dist-electron/main/index.js). Keep build artifacts out of VCS.
 /index.js
+.mcp.json
+.codesurf/mcp-server.json

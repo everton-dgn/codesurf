@@ -244,8 +244,12 @@ export function registerFsIPC(): void {
         return a.name.localeCompare(b.name)
       })
       return result
-    } catch {
-      return []
+    } catch (error) {
+      // Return empty array only for directories that don't exist yet; all
+      // other errors (permission denied, I/O errors) propagate so callers
+      // know something went wrong rather than silently seeing an empty list.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
     }
   })
 
@@ -254,9 +258,11 @@ export function registerFsIPC(): void {
       return await fs.readFile(await validateFsPathForHandler(filePath, workspaceId), 'utf8')
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      if (code === 'ENOENT' || code === 'EPERM' || code === 'EACCES') {
-        return ''
-      }
+      // Access-denied errors must propagate: returning '' would let a
+      // subsequent save overwrite a real file with empty content.
+      if (code === 'EACCES' || code === 'EPERM') throw error
+      // File simply doesn't exist — treat as empty (common for optional config files).
+      if (code === 'ENOENT') return ''
       throw error
     }
   })

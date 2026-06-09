@@ -297,6 +297,7 @@ interface ElectronAPI {
     command(payload: { tileId: string; command: 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'navigate' | 'mode'; url?: string; mode?: 'desktop' | 'mobile' }): Promise<unknown>
     destroy(tileId: string): Promise<void>
     onEvent(cb: (event: { tileId: string; currentUrl: string; canGoBack: boolean; canGoForward: boolean; isLoading: boolean; mode: 'desktop' | 'mobile' }) => void): () => void
+    onNewWindow(cb: (event: { url: string }) => void): () => void
   }
   owl: {
     health(): Promise<{ ok: true; runtime: 'electron'; pid: number }>

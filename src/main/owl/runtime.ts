@@ -70,6 +70,21 @@ function assertString(value: unknown, name: string): string {
   return value
 }
 
+const ALLOWED_URL_PROTOCOLS = new Set(['http:', 'https:', 'about:'])
+
+function assertAllowedUrl(raw: string, field: string): string {
+  let protocol: string
+  try {
+    protocol = new URL(raw).protocol
+  } catch {
+    throw new Error(`${field}: invalid URL`)
+  }
+  if (!ALLOWED_URL_PROTOCOLS.has(protocol)) {
+    throw new Error(`${field}: URL scheme '${protocol}' is not allowed (only http, https, about)`)
+  }
+  return raw
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -78,17 +93,18 @@ function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-function translateOwlInputToElectron(event: OwlInputEvent): KeyboardInputEvent | MouseInputEvent {
+function translateOwlInputToElectron(event: OwlInputEvent): Array<KeyboardInputEvent | MouseInputEvent> {
   switch (event.type) {
     case 'mouseDown':
     case 'mouseUp':
     case 'mouseMove':
-      return { type: event.type, x: event.x, y: event.y, button: event.button ?? 'left' }
+      return [{ type: event.type, x: event.x, y: event.y, button: event.button ?? 'left' }]
     case 'keyDown':
     case 'keyUp':
-      return { type: event.type, keyCode: event.key, modifiers: event.modifiers as KeyboardInputEvent['modifiers'] ?? [] }
+      return [{ type: event.type, keyCode: event.key, modifiers: event.modifiers as KeyboardInputEvent['modifiers'] ?? [] }]
     case 'text':
-      return { type: 'char', keyCode: event.text }
+      // One `char` event per Unicode code point so multi-char strings are not truncated
+      return Array.from(event.text).map(ch => ({ type: 'char' as const, keyCode: ch }))
   }
 }
 
@@ -252,10 +268,12 @@ class ElectronOwlHost {
 
   private async createWebView(params: JsonObject): Promise<OwlWebViewRecord> {
     const profile = this.profile(params.profileId)
+    const rawUrl = optionalString(params.initialUrl)
+    const checkedUrl = rawUrl ? assertAllowedUrl(rawUrl, 'initialUrl') : null
     const record: OwlWebViewRecord = {
       id: id('webview'),
       profileId: profile.id,
-      url: optionalString(params.initialUrl) ?? null,
+      url: checkedUrl,
       width: numberOr(params.width, 1280),
       height: numberOr(params.height, 800),
       deviceScaleFactor: numberOr(params.deviceScaleFactor, 1),
@@ -286,7 +304,7 @@ class ElectronOwlHost {
 
   private async navigate(params: JsonObject): Promise<OwlWebViewRecord> {
     const hosted = this.webView(params.webViewId)
-    const url = assertString(params.url, 'url')
+    const url = assertAllowedUrl(assertString(params.url, 'url'), 'url')
     await hosted.window.loadURL(url)
     hosted.record = { ...hosted.record, url }
     return hosted.record
@@ -307,7 +325,9 @@ class ElectronOwlHost {
     if (params.route === 'browser') return { accepted: false, returnedToClient: true }
     const event = params.event
     if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('event must be an object')
-    hosted.window.webContents.sendInputEvent(translateOwlInputToElectron(event as OwlInputEvent))
+    for (const inputEvent of translateOwlInputToElectron(event as OwlInputEvent)) {
+      hosted.window.webContents.sendInputEvent(inputEvent)
+    }
     return { accepted: true, returnedToClient: false }
   }
 
@@ -366,14 +386,28 @@ export async function runOwlHostProcess(): Promise<void> {
   })
 }
 
+const OWL_RESTART_BACKOFF_BASE_MS = 250
+const OWL_RESTART_BACKOFF_MAX_MS = 5_000
+
 export class StdioOwlHostSupervisor {
   private child: ChildProcessWithoutNullStreams | null = null
   private peer: JsonRpcPeer | null = null
   private stderr = ''
+  /** Single in-flight start promise prevents concurrent double-starts. */
+  private starting: Promise<void> | null = null
+  /** Set to true on unexpected child exit; next call() rejects with a clear error then clears. */
+  private restartedSinceLastCall = false
+  private restartBackoffMs = OWL_RESTART_BACKOFF_BASE_MS
 
   async start(): Promise<void> {
     if (this.child && this.peer) return
+    // Deduplicate concurrent start() calls
+    if (this.starting) return this.starting
+    this.starting = this._doStart().finally(() => { this.starting = null })
+    return this.starting
+  }
 
+  private async _doStart(): Promise<void> {
     const args = process.defaultApp ? [app.getAppPath(), '--codesurf-owl-host'] : ['--codesurf-owl-host']
     const child = spawn(process.execPath, args, {
       cwd: app.getAppPath(),
@@ -398,18 +432,33 @@ export class StdioOwlHostSupervisor {
       peer.close(`OWL host process error: ${error.message}`)
       this.child = null
       this.peer = null
+      this.restartedSinceLastCall = true
     })
     child.once('exit', (code, signal) => {
       peer.close(`OWL host process exited: code=${code ?? 'null'} signal=${signal ?? 'null'} stderr=${this.stderr.slice(-1000)}`)
       this.child = null
       this.peer = null
+      this.restartedSinceLastCall = true
     })
 
     await peer.call('health', {}, 5000)
+    // Successful start — reset backoff
+    this.restartBackoffMs = OWL_RESTART_BACKOFF_BASE_MS
   }
 
   async call(method: string, params: JsonObject = {}): Promise<JsonValue> {
-    await this.start()
+    if (this.restartedSinceLastCall) {
+      this.restartedSinceLastCall = false
+      throw new Error('OWL host restarted; session state lost. Please reinitialise the session.')
+    }
+    try {
+      await this.start()
+    } catch (err) {
+      // Back off before the next restart attempt
+      await new Promise<void>(res => setTimeout(res, this.restartBackoffMs))
+      this.restartBackoffMs = Math.min(this.restartBackoffMs * 2, OWL_RESTART_BACKOFF_MAX_MS)
+      throw err
+    }
     if (!this.peer) throw new Error('OWL host is not started')
     return this.peer.call(method, params)
   }
@@ -419,6 +468,7 @@ export class StdioOwlHostSupervisor {
     this.child = null
     this.peer?.close('OWL host supervisor stopped')
     this.peer = null
+    this.starting = null
     if (!child) return
     child.stdin.end()
     child.kill('SIGTERM')

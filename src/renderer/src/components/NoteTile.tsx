@@ -31,7 +31,19 @@ export function renderMarkdown(md: string): string {
     .replace(/__(.+?)__/g, '<strong>$1</strong>')
     .replace(/_(.+?)_/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, url: string) => {
+      // Only allow http/https links — strip javascript:, file://, data: etc.
+      let safe = ''
+      try {
+        const p = new URL(url)
+        if (p.protocol === 'http:' || p.protocol === 'https:') safe = url
+      } catch {
+        // relative paths are fine for intra-note anchors
+        if (!url.includes(':')) safe = url
+      }
+      if (!safe) return label // render label as plain text when scheme is disallowed
+      return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    })
     .replace(/^---+$/gm, '<hr/>')
     .replace(/^\s*[-*+] (.+)$/gm, '<li>$1</li>')
     .replace(/^\s*\d+\. (.+)$/gm, '<li>$1</li>')

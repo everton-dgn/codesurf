@@ -448,7 +448,10 @@ async function runScan(): Promise<void> {
         const lastActivityAtMs = summary.lastEventAtMs ?? extracted.requestedAtMs ?? null
 
         upsertJob.run({
-          id: prev ? undefined : randomUUID(),
+          // Always bind a valid id: better-sqlite3 rejects `undefined` named
+          // params, and on the ON CONFLICT(job_id) update path `id` is never
+          // in the SET list, so the bound value is ignored for existing rows.
+          id: randomUUID(),
           device_id: deviceId,
           job_id: extracted.jobId,
           file_path: jobPath,

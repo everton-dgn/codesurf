@@ -4,6 +4,7 @@ import {
   syncCookiesToPartition,
   getBookmarks,
   searchHistory,
+  clearCachedPassword,
 } from '../chrome-sync'
 import { readSettingsSync } from './workspace'
 
@@ -24,19 +25,38 @@ export function registerChromeSyncIPC(): void {
   })
 
   ipcMain.handle('chromeSync:syncCookies', async (_event, profileDir: string, partition: string) => {
-    // risk-06: scope cookie injection to the user-approved domains (empty =
-    // inject all + warn, until the approval UI populates the list).
-    const approvedDomains = readSettingsSync().chromeSyncApprovedDomains ?? []
-    const result = await syncCookiesToPartition(profileDir, partition, { approvedDomains })
-    if (result.errors.length === 0) lastSync = Date.now()
-    return result
+    // risk-06: cookie injection is default-DENY. Without an approved-domains
+    // allowlist syncCookiesToPartition injects nothing (no allowUnscoped here).
+    // The target partition must be a real session partition string.
+    if (typeof partition !== 'string' || !/^(persist:)?[\w.:-]+$/.test(partition)) {
+      return { count: 0, errors: ['Invalid session partition.'] }
+    }
+    try {
+      const approvedDomains = readSettingsSync().chromeSyncApprovedDomains ?? []
+      const result = await syncCookiesToPartition(profileDir, partition, { approvedDomains })
+      if (result.errors.length === 0) lastSync = Date.now()
+      return result
+    } catch (e: any) {
+      return { count: 0, errors: [e?.message || String(e)] }
+    } finally {
+      // Don't hold the decryption key in memory longer than the sync duration
+      clearCachedPassword()
+    }
   })
 
   ipcMain.handle('chromeSync:getBookmarks', (_event, profileDir: string) => {
-    return getBookmarks(profileDir)
+    try {
+      return getBookmarks(profileDir)
+    } catch {
+      return []
+    }
   })
 
   ipcMain.handle('chromeSync:searchHistory', async (_event, profileDir: string, query: string, limit?: number) => {
-    return searchHistory(profileDir, query, limit)
+    try {
+      return await searchHistory(profileDir, query, limit)
+    } catch {
+      return []
+    }
   })
 }

@@ -1008,6 +1008,15 @@ function processEvent(evt: { type: string; payload: Record<string, unknown>; id:
 function areTileChromePropsEqual(prev: Props, next: Props): boolean {
   if (prev.isSelected !== next.isSelected) return false
   if (prev.isInteracting !== next.isInteracting) return false
+  if (prev.discoveryConnected !== next.discoveryConnected) return false
+  if (prev.busUnreadCount !== next.busUnreadCount) return false
+  if (prev.forceExpanded !== next.forceExpanded) return false
+  if (prev.allowOverflow !== next.allowOverflow) return false
+  if (prev.children !== next.children) return false
+  // connectedPeers: compare content (parent rebuilds the array each render)
+  const pp = prev.connectedPeers ?? []
+  const np = next.connectedPeers ?? []
+  if (pp.length !== np.length || pp.some((p, i) => p !== np[i])) return false
   const prevTile = prev.tile
   const nextTile = next.tile
   return (
@@ -1017,7 +1026,10 @@ function areTileChromePropsEqual(prev: Props, next: Props): boolean {
     prevTile.width === nextTile.width &&
     prevTile.height === nextTile.height &&
     prevTile.zIndex === nextTile.zIndex &&
-    prevTile.type === nextTile.type
+    prevTile.type === nextTile.type &&
+    prevTile.label === nextTile.label &&
+    prevTile.hideTitlebar === nextTile.hideTitlebar &&
+    prevTile.borderRadius === nextTile.borderRadius
   )
 }
 

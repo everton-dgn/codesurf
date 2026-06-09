@@ -1033,27 +1033,31 @@ export function Sidebar({
     savePinnedSessionKeys(pinnedSessionKeys)
   }, [pinnedSessionKeys])
 
+  // Consolidated reconciliation effect: prune promotions, seed watermarks, and
+  // auto-mark active sessions as read — all in one pass to avoid fan-out renders.
   useEffect(() => {
-    const validIds = new Set(sessions.map(session => session.id))
+    if (sessions.length === 0) return
+
+    const validIds = new Set(sessions.map(s => s.id))
     setSessionPromotions(prev => {
       let changed = false
       const next: Record<string, number> = {}
       for (const [sessionId, promotedAt] of Object.entries(prev)) {
-        if (!validIds.has(sessionId)) {
-          changed = true
-          continue
-        }
+        if (!validIds.has(sessionId)) { changed = true; continue }
         next[sessionId] = promotedAt
       }
       return changed ? next : prev
     })
-  }, [sessions])
 
-  useEffect(() => {
-    if (sessions.length === 0) return
+    const activeSessions = sessions.filter(session => isSessionActive(session, {
+      activeChatTileId,
+      activeChatSessionId,
+      activeChatSessionEntryId,
+    }))
     setSessionReadWatermarks(prev => {
       let changed = false
       const next: SessionReadWatermarks = { ...prev }
+      // Seed new sessions
       for (const session of sessions) {
         const key = getSessionActivityKey(session)
         if (Object.prototype.hasOwnProperty.call(next, key)) continue
@@ -1064,20 +1068,7 @@ export function Sidebar({
       for (const session of sessions) {
         readSeededWorkspaceIdsRef.current.add(session.workspaceId)
       }
-      return changed ? next : prev
-    })
-  }, [sessions])
-
-  useEffect(() => {
-    const activeSessions = sessions.filter(session => isSessionActive(session, {
-      activeChatTileId,
-      activeChatSessionId,
-      activeChatSessionEntryId,
-    }))
-    if (activeSessions.length === 0) return
-    setSessionReadWatermarks(prev => {
-      let changed = false
-      const next: SessionReadWatermarks = { ...prev }
+      // Auto-mark active sessions as read
       for (const session of activeSessions) {
         const key = getSessionActivityKey(session)
         const current = next[key] ?? 0

@@ -899,10 +899,15 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
   const browserPageStateRef = useRef({ url: startUrl, title: '', isLoading: false, mode: 'desktop' as BrowserMode })
   browserPageStateRef.current = { url: currentUrl, title: pageTitle, isLoading, mode }
 
+  // Stable ref so getCurrentViewport doesn't close over changing width/height state —
+  // prevents the webview-mount effect from re-running on every resize step.
+  const sizeRef = useRef({ width, height })
+  sizeRef.current = { width, height }
+
   const getCurrentViewport = useCallback((): BrowserEvidenceViewport | undefined => {
     const rect = wvContainerRef.current?.getBoundingClientRect()
-    const viewportWidth = rect && rect.width > 0 ? rect.width : width
-    const viewportHeight = rect && rect.height > 0 ? rect.height : height
+    const viewportWidth = rect && rect.width > 0 ? rect.width : sizeRef.current.width
+    const viewportHeight = rect && rect.height > 0 ? rect.height : sizeRef.current.height
     const roundedWidth = Math.max(1, Math.round(viewportWidth))
     const roundedHeight = Math.max(1, Math.round(viewportHeight))
     return {
@@ -910,7 +915,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       height: roundedHeight,
       deviceScaleFactor: window.devicePixelRatio || 1,
     }
-  }, [height, width])
+  }, []) // stable — reads size via sizeRef
 
   const createCurrentEvidenceSnapshot = useCallback((events = browserEvidenceRef.current) => {
     const page = browserPageStateRef.current
@@ -1324,13 +1329,10 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       void webview.loadURL(HOMEPAGE)
     }
 
-    const onNewWindow = (e: Event) => {
-      const ev = e as Event & { url?: string }
-      if (ev.url) {
-        e.preventDefault()
-        void dispatchOpenLink(ev.url)
-      }
-    }
+    // The `new-window` DOM webview event was removed in Electron 22.
+    // window.open / target=_blank is now intercepted in the main process via
+    // setWindowOpenHandler and forwarded here as an IPC event (webview:new-window).
+    // The subscription is set up outside this effect (see onNewWindowCleanup below).
 
     // ---- console message handler (bus bridge + cluso) -------------------
     const onConsoleMessage = (e: Electron.ConsoleMessageEvent) => {
@@ -1425,7 +1427,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
     webview.addEventListener('will-navigate', onWillNavigate)
     webview.addEventListener('did-navigate', onNavigate)
     webview.addEventListener('did-navigate-in-page', onNavigateInPage)
-    webview.addEventListener('new-window', onNewWindow)
+    // NOTE: 'new-window' DOM event is removed in Electron 22+; handled via IPC below.
     webview.addEventListener('console-message', onConsoleMessage)
 
     // Sync Chrome cookies into this tile's session before the webview starts loading.
@@ -1493,7 +1495,7 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       webview.removeEventListener('will-navigate', onWillNavigate)
       webview.removeEventListener('did-navigate', onNavigate)
       webview.removeEventListener('did-navigate-in-page', onNavigateInPage)
-      webview.removeEventListener('new-window', onNewWindow)
+      // 'new-window' DOM listener was removed — cleanup handled by onNewWindowCleanup effect
       webview.removeEventListener('console-message', onConsoleMessage)
       // Park the live webview offscreen instead of detaching it outright.
       // Reusing a parked guest preserves page/session state across view switches.
@@ -1506,6 +1508,17 @@ export function BrowserTile({ tileId, workspaceId, initialUrl, width, height, zI
       scheduleManagedWebviewDisposal(tileId, webview)
     }
   }, [tileId, injectCluso, recordBrowserEvidence, stateLoaded])
+
+  // Handle window.open / target=_blank from the guest webview.
+  // The `new-window` DOM event was removed in Electron 22; the main process now
+  // intercepts via setWindowOpenHandler and forwards via 'webview:new-window' IPC.
+  // This effect is stable (no resize deps) so it never triggers a webview remount.
+  useEffect(() => {
+    const unsubscribe = window.electron?.browserTile?.onNewWindow?.((evt: { url: string }) => {
+      if (evt.url) void dispatchOpenLink(evt.url)
+    })
+    return () => { unsubscribe?.() }
+  }, [])
 
   // Keep webview background in sync with theme (avoids white flash on theme change)
   useEffect(() => {

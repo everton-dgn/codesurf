@@ -808,12 +808,25 @@ export default function FileExplorerTile({
 
   useEffect(() => { loadGit() }, [loadGit])
 
+  // Debounced reload to avoid hammering the tree on every watch tick
+  const reloadDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const debouncedReloadAll = useCallback(() => {
+    if (reloadDebounceTimer.current) clearTimeout(reloadDebounceTimer.current)
+    reloadDebounceTimer.current = setTimeout(() => {
+      reloadDebounceTimer.current = null
+      void reloadAll()
+    }, 250)
+  }, [reloadAll])
+
   // Watch filesystem for changes
   useEffect(() => {
     if (!rootPath) return
-    const unsub = window.electron.fs.watch(rootPath, () => { void reloadAll() })
-    return () => unsub?.()
-  }, [rootPath, reloadAll])
+    const unsub = window.electron.fs.watch(rootPath, debouncedReloadAll)
+    return () => {
+      unsub?.()
+      if (reloadDebounceTimer.current) clearTimeout(reloadDebounceTimer.current)
+    }
+  }, [rootPath, debouncedReloadAll])
 
   // Auto-expand to selected path
   useEffect(() => {

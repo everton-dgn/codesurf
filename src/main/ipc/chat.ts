@@ -49,6 +49,7 @@ import {
 import {
   buildClaudeTextInput,
   cancelPendingAskUserQuestionsForCard,
+  cardAbortControllers,
   cardPermissionModes,
   chatClaude,
   markClaudeQueryIntentionallyClosed,
@@ -865,6 +866,12 @@ export function registerChatIPC(): void {
       }
 
       await cancelChatDaemonJob(req.cardId)
+
+      // Medium: abort any live OpenCode SSE session so the old turn's stream
+      // does not keep running on the server and interleave events into the new
+      // turn's stream. Must happen before chatOpencode() establishes the next
+      // session subscription.
+      await abortOpenCodeSession(req.cardId)
     }
 
     let daemonHost: ExecutionHostRecord | null = null
@@ -1031,6 +1038,12 @@ export function registerChatIPC(): void {
   })
 
   ipcMain.handle('chat:stop', async (_, cardId: string) => {
+    // Abort the in-flight SDK HTTP request (claude.ts) before closing the query
+    const ac = cardAbortControllers.get(cardId)
+    if (ac) {
+      ac.abort()
+      cardAbortControllers.delete(cardId)
+    }
     const q = activeQueries.get(cardId)
     if (q) {
       markClaudeQueryIntentionallyClosed(q)

@@ -596,12 +596,28 @@ export function useModifierPathOpenHandler(ref: React.RefObject<HTMLElement | nu
 
 // --- ChatMarkdown component -------------------------------------------------------
 // Renders markdown content with Streamdown, applying theme patches for code blocks and tables.
+// Only http(s) and mailto links are allowed through from AI-controlled content.
+// Everything else (javascript:, file://, data:, …) is silently stripped.
+function isSafeHref(href: string | undefined): boolean {
+  if (!href) return false
+  // Relative URLs (no scheme) are fine — they resolve to the same origin
+  if (href.startsWith('/') || href.startsWith('#') || href.startsWith('.')) return true
+  try {
+    const url = new URL(href)
+    return url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:'
+  } catch {
+    // Not a parseable absolute URL — treat as relative/safe
+    return true
+  }
+}
+
 const ThemedMarkdownLink = React.memo(function ThemedMarkdownLink({
   children,
   node: _node,
   onMouseEnter,
   onMouseLeave,
   style,
+  href,
   ...props
 }: React.ComponentPropsWithoutRef<'a'> & { node?: unknown }): JSX.Element {
   const theme = useTheme()
@@ -616,9 +632,14 @@ const ThemedMarkdownLink = React.memo(function ThemedMarkdownLink({
     onMouseLeave?.(event)
   }
 
+  // Strip any href that isn't http/https/mailto/relative — second-layer defence
+  // after the urlTransform on the Streamdown component.
+  const safeHref = isSafeHref(href) ? href : undefined
+
   return (
     <a
       {...props}
+      href={safeHref}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       style={{
@@ -633,6 +654,21 @@ const ThemedMarkdownLink = React.memo(function ThemedMarkdownLink({
     </a>
   )
 })
+
+// First-layer URL sanitisation: strip any link whose scheme isn't http/https/mailto
+// or a relative reference. Applied at the markdown parse stage before rendering.
+function safeUrlTransform(url: string): string | null | undefined {
+  if (!url) return undefined
+  if (url.startsWith('/') || url.startsWith('#') || url.startsWith('.')) return url
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') return url
+    return undefined
+  } catch {
+    // Non-parseable → treat as relative, pass through
+    return url
+  }
+}
 
 function ChatStreamdown({ text, isStreaming, className }: {
   text: string
@@ -658,6 +694,7 @@ function ChatStreamdown({ text, isStreaming, className }: {
       shikiTheme={tokens.shikiTheme as ['github-light', 'github-light'] | ['github-dark', 'github-dark']}
       controls={{ code: { copy: true, download: false }, table: false, mermaid: false }}
       lineNumbers={false}
+      urlTransform={safeUrlTransform}
     >
       {text}
     </Streamdown>

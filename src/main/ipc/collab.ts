@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, type WebContents } from 'electron'
 import { promises as fs } from 'fs'
 import { join, basename } from 'path'
 import type {
@@ -277,6 +277,38 @@ function parseMailboxAndFilename(rootDir: string, changedPath: string): { mailbo
 
 const stateWatchers = new Map<string, { close: () => void }>()
 const messageWatchers = new Map<string, { close: () => void }>()
+
+// Per-sender teardown: when the renderer window closes without calling unwatch,
+// stop the watchers it registered (mirrors the pattern in ipc/fs.ts).
+type WatcherKey = string
+const senderWatcherKeys = new WeakMap<WebContents, Set<WatcherKey>>()
+const senderCleanupAttached = new WeakSet<WebContents>()
+
+function trackCollabWatchSender(
+  sender: WebContents,
+  key: WatcherKey,
+  type: 'state' | 'message',
+): void {
+  const existing = senderWatcherKeys.get(sender)
+  if (existing) existing.add(`${type}:${key}`)
+  else senderWatcherKeys.set(sender, new Set([`${type}:${key}`]))
+
+  if (senderCleanupAttached.has(sender)) return
+  senderCleanupAttached.add(sender)
+  sender.once('destroyed', () => {
+    const keys = senderWatcherKeys.get(sender)
+    if (!keys) return
+    for (const entry of keys) {
+      const sep = entry.indexOf(':')
+      const t = entry.slice(0, sep) as 'state' | 'message'
+      const k = entry.slice(sep + 1)
+      const [wp, tid] = k.split('\0')
+      if (t === 'state') stopStateWatcher(wp, tid)
+      else stopMessageWatcher(wp, tid)
+    }
+    senderWatcherKeys.delete(sender)
+  })
+}
 
 async function startStateWatcher(workspacePath: string, tileId: string): Promise<void> {
   const key = `${workspacePath}:${tileId}`
@@ -577,8 +609,9 @@ export function registerCollabIPC(): void {
     }
   })
 
-  ipcMain.handle('collab:watchMessages', async (_, workspacePath: string, tileId: string) => {
+  ipcMain.handle('collab:watchMessages', async (event, workspacePath: string, tileId: string) => {
     await startMessageWatcher(workspacePath, tileId)
+    trackCollabWatchSender(event.sender, `${workspacePath}\0${tileId}`, 'message')
     return true
   })
 
@@ -589,8 +622,9 @@ export function registerCollabIPC(): void {
 
   // ── Watchers ──────────────────────────────────────────────────────────────
 
-  ipcMain.handle('collab:watchState', async (_, workspacePath: string, tileId: string) => {
+  ipcMain.handle('collab:watchState', async (event, workspacePath: string, tileId: string) => {
     await startStateWatcher(workspacePath, tileId)
+    trackCollabWatchSender(event.sender, `${workspacePath}\0${tileId}`, 'state')
     return true
   })
 

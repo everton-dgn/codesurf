@@ -1,4 +1,4 @@
-import { copyFileSync, unlinkSync, mkdirSync, existsSync } from 'fs'
+import { copyFileSync, unlinkSync, mkdirSync, existsSync, chmodSync } from 'fs'
 import { join } from 'path'
 import { profilePath } from './profiles'
 import { CONTEX_HOME } from '../paths'
@@ -34,7 +34,9 @@ export async function searchHistory(
   const tempDb = join(TEMP_DIR, `history-${Date.now()}.sqlite`)
 
   try {
+    // Copy to avoid Chrome's file lock; restrict to owner-read-only (0o600)
     copyFileSync(srcDb, tempDb)
+    chmodSync(tempDb, 0o600)
 
     const Database = (await import('better-sqlite3')).default
     const db = new Database(tempDb, { readonly: true })

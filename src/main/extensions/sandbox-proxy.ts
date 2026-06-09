@@ -6,7 +6,7 @@
  * it at `SandboxConfig.url`. This module returns a fully self-contained HTML document
  * (no ES imports — it is served as a static string), served at:
  *
- *     contex-ext://extension/__runext_sandbox__/proxy.html
+ *     contex-ext://__runext_sandbox__/proxy.html
  *
  * CONTRACT (verified against @mcp-ui/client dist/index.mjs + @modelcontextprotocol/ext-apps):
  *
@@ -16,10 +16,14 @@
  *
  * Inner iframe: created by THIS proxy to hold untrusted guest HTML. It is sandboxed
  *   "allow-scripts" ONLY → opaque origin. This is the entire security point of the
- *   double-iframe: the proxy is served from contex-ext://extension, the SAME origin that
- *   serves every enabled extension's files. If the guest shared that origin it could reach
- *   into this relay window and tamper with it. NEVER add allow-same-origin to the inner
- *   frame here.
+ *   double-iframe.
+ *
+ * ORIGIN ISOLATION NOTE: The proxy is served from its own dedicated host
+ *   contex-ext://__runext_sandbox__, which is DIFFERENT from every extension's
+ *   origin (contex-ext://<extId>). The browser's same-origin policy therefore
+ *   prevents any extension from scripting or reading the proxy document. The inner
+ *   guest iframe uses "allow-scripts" only (opaque origin), so it cannot reach the
+ *   proxy either. NEVER add allow-same-origin to the inner frame.
  *
  * Handshake:
  *  1. On load, post {jsonrpc, method:'ui/notifications/sandbox-proxy-ready'} to parent.
@@ -36,6 +40,8 @@
  *     PostMessageTransport drops anything failing JSONRPCMessageSchema and ignores any
  *     message whose event.source !== its expected source, so we must NOT re-wrap envelopes
  *     and must post from windows whose identity matches the expected source on each side.
+ *     Both relay directions use targetOrigin:"*" — no hardcoded origin strings — so the
+ *     proxy works regardless of which host it is served from.
  */
 
 const PROXY_HTML = `<!doctype html>
@@ -55,7 +61,7 @@ const PROXY_HTML = `<!doctype html>
 
   // Build the inner sandboxed iframe and load guest HTML via srcdoc.
   // SECURITY: "allow-scripts" ONLY — opaque origin. Never add allow-same-origin here:
-  // this proxy is served from the shared contex-ext://extension origin.
+  // the proxy is served from contex-ext://__runext_sandbox__ (its own isolated host).
   function mountGuest(html, sandboxAttr) {
     if (inner && inner.parentNode) inner.parentNode.removeChild(inner);
     inner = document.createElement("iframe");

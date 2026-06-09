@@ -1844,7 +1844,9 @@ async function parseClaudeChatState(
 
     const headMessages = parseClaudeMessagesFromLines(parseJsonlLines(headRaw ?? ''), 0)
     const tailLines = parseJsonlLines(tailRaw ?? '')
-    const tailMessages = parseClaudeMessagesFromLines(tailLines, Math.max(0, tailLines.length * -1))
+    // Tail sample uses a disjoint id namespace so React keys don't collide with the head sample.
+    // Head uses offsets 0..N; tail uses offsets 100_000_000..100_000_000+N.
+    const tailMessages = parseClaudeMessagesFromLines(tailLines, 100_000_000)
     const firstMessage = headMessages.find(message => message.role !== 'system') ?? headMessages[0] ?? null
     const messages = dedupeImportedMessages([
       ...(firstMessage ? [firstMessage] : []),
@@ -1915,7 +1917,11 @@ function parseCodexChatStateFromLines(lines: string[], entry: AggregatedSessionE
       const payload = evt?.payload
 
       if (!model && typeof payload?.model === 'string') model = payload.model
-      if (!sessionId && typeof payload?.id === 'string') sessionId = payload.id
+      // Only accept UUID-shaped ids as resumable session ids;
+      // msg_… ids are message ids, not session ids.
+      if (!sessionId && typeof payload?.id === 'string' && /^[0-9a-f-]{36}$/i.test(payload.id)) {
+        sessionId = payload.id
+      }
 
       if (evt?.type !== 'response_item') return
 
@@ -1976,31 +1982,38 @@ function parseCodexChatStateFromLines(lines: string[], entry: AggregatedSessionE
   }
 }
 
-async function findLatestCodexPlanSnapshotMessage(filePath: string): Promise<ImportedChatMessage | null> {
+/**
+ * Find the last plan-snapshot tool call from a pre-read set of JSONL lines.
+ * When dealing with large files the caller passes only the tail sample lines so
+ * the whole file is never scanned just to recover a plan chip.
+ *
+ * NOTE: a plan snapshot that lives earlier in the file (before the tail window)
+ * will be missed on the fast path — this is an accepted tradeoff documented in
+ * the backlog plan (Phase 2c). Full-file access falls back to the slow path.
+ */
+function findLatestCodexPlanSnapshotMessageFromLines(
+  lines: string[],
+): ImportedChatMessage | null {
   let latest: { lineNumber: number; timestamp: number; call: PendingImportedToolCall } | null = null
 
-  try {
-    await scanJsonlFile(filePath, (line, lineNumber) => {
-      try {
-        const evt = JSON.parse(line)
-        const payload = evt?.payload
-        if (evt?.type !== 'response_item') return
-        if (payload?.type !== 'function_call' && payload?.type !== 'custom_tool_call') return
-        if (!isImportedPlanToolName(typeof payload?.name === 'string' ? payload.name : null)) return
-        const call = parseCodexToolCall(payload)
-        if (!call) return
-        const timestamp = Date.parse(evt?.timestamp ?? '') || Date.now() + lineNumber
-        latest = { lineNumber, timestamp, call }
-      } catch {
-        // ignore malformed lines while scanning for plan snapshots
-      }
-    })
-  } catch {
-    return null
-  }
+  lines.forEach((line, index) => {
+    try {
+      const evt = JSON.parse(line)
+      const payload = evt?.payload
+      if (evt?.type !== 'response_item') return
+      if (payload?.type !== 'function_call' && payload?.type !== 'custom_tool_call') return
+      if (!isImportedPlanToolName(typeof payload?.name === 'string' ? payload.name : null)) return
+      const call = parseCodexToolCall(payload)
+      if (!call) return
+      const timestamp = Date.parse(evt?.timestamp ?? '') || Date.now() + index
+      latest = { lineNumber: index, timestamp, call }
+    } catch {
+      // ignore malformed lines
+    }
+  })
 
-  const planSnapshot = latest as { lineNumber: number; timestamp: number; call: PendingImportedToolCall } | null
-  if (!planSnapshot) return null
+  if (!latest) return null
+  const planSnapshot = latest as { lineNumber: number; timestamp: number; call: PendingImportedToolCall }
 
   return makeImportedRichMessage({
     id: `codex-plan-${planSnapshot.lineNumber}`,
@@ -2020,13 +2033,15 @@ async function parseCodexChatState(
   if (!stat?.isFile()) return null
 
   if (!options?.full && stat.size > LARGE_EXTERNAL_SESSION_BYTES) {
-    const [headRaw, tailRaw, recoveredPlanMessage] = await Promise.all([
+    const [headRaw, tailRaw] = await Promise.all([
       readTextPreviewSafe(filePath, EXTERNAL_SESSION_HEAD_SAMPLE_BYTES),
       readTextTailSafe(filePath, EXTERNAL_SESSION_TAIL_SAMPLE_BYTES),
-      findLatestCodexPlanSnapshotMessage(filePath),
     ])
     const headLines = parseJsonlLines(headRaw ?? '')
     const tailLines = parseJsonlLines(tailRaw ?? '')
+    // Scan only the tail sample for the latest plan snapshot (tradeoff: a plan
+    // that appears before the tail window will be missed — see BACKLOG_PLAN.md 2c).
+    const recoveredPlanMessage = findLatestCodexPlanSnapshotMessageFromLines(tailLines)
     const firstChunk = parseCodexChatStateFromLines(headLines, entry, 0)
     const recentChunk = parseCodexChatStateFromLines(tailLines, entry, Math.max(10_000, tailLines.length))
     const firstMessage = firstChunk.messages.find(message => message.role === 'user') ?? firstChunk.messages[0] ?? null
@@ -2337,7 +2352,9 @@ async function loadLargeExternalSessionMessagesPageFromTail(
         provider: 'claude',
         model: entry.model,
         sessionId: entry.sessionId,
-        messages: parseClaudeMessagesFromLines(lines, Math.max(0, lines.length * -1)),
+        // This path reads only the tail, so use the same disjoint namespace as the
+        // tail sample path (100_000_000) to avoid duplicate React keys with any head.
+        messages: parseClaudeMessagesFromLines(lines, 100_000_000),
       }
     : parseCodexChatStateFromLines(lines, entry, Math.max(10_000, lines.length))
 

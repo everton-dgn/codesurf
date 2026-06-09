@@ -5,15 +5,16 @@
 
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { promises as fs } from 'fs'
-import { join, basename, extname } from 'path'
+import { join, isAbsolute } from 'path'
 
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import type { ExtensionRegistry } from '../extensions/registry'
 import { getBridgeScript } from '../extensions/bridge'
 import { CONTEX_HOME } from '../paths'
 import { readSettingsSync } from './workspace'
 import { getPluginState, setPluginState, replacePluginState } from '../extensions/plugin-store'
+import { assertSafePathSegment, resolveInside } from '../security/pathSegments'
 
 const execFileAsync = promisify(execFile)
 const EXTENSIONS_DIR = join(CONTEX_HOME, 'extensions')
@@ -26,41 +27,163 @@ interface InstallPluginResult {
   error?: string
 }
 
+// ---------------------------------------------------------------------------
+// Zip entry safety helpers
+// ---------------------------------------------------------------------------
+
+function runCmd(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8') })
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8') })
+    child.on('error', reject)
+    child.on('close', code => {
+      if (code === 0) resolve({ stdout, stderr })
+      else reject(new Error(`${cmd} ${args.join(' ')} failed (code ${code}): ${stderr || stdout}`))
+    })
+  })
+}
+
+/**
+ * Validate all archive entries before extraction.
+ * Rejects:
+ *   - entries with absolute paths
+ *   - entries containing `..` segments
+ *   - symlink entries (permissions starting with 'l' in zipinfo output)
+ *
+ * Uses `unzip -Z` (zipinfo mode) which lists permissions + filename per line.
+ * The first character of the permissions field is:
+ *   '-' regular file, 'd' directory, 'l' symlink.
+ */
+async function assertSafeZipEntries(archivePath: string): Promise<void> {
+  const { stdout } = await runCmd('/usr/bin/unzip', ['-Z', archivePath])
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('Archive:') || trimmed.startsWith('Zip file size:')) continue
+    // Only process lines that start with a Unix file-type character.
+    if (!/^[-dls]/.test(trimmed)) continue
+    if (trimmed.startsWith('l')) {
+      // Last whitespace-separated token is the filename.
+      const name = trimmed.split(/\s+/).pop() ?? ''
+      throw new Error(`Archive entry is a symlink: ${name}`)
+    }
+    // Extract filename (last token).
+    const name = trimmed.split(/\s+/).pop() ?? ''
+    if (!name) continue
+    if (isAbsolute(name)) {
+      throw new Error(`Archive entry has absolute path: ${name}`)
+    }
+    const segments = name.split('/')
+    for (const seg of segments) {
+      if (seg === '..') {
+        throw new Error(`Archive entry contains path traversal: ${name}`)
+      }
+    }
+  }
+}
+
+/**
+ * Parse and validate the plugin manifest from a directory.
+ * Returns the manifest object. Throws if the manifest is missing, unparseable,
+ * or lacks the required `id`, `name`, and `version` fields.
+ */
+async function readAndValidateManifest(dir: string): Promise<{ id: string; name: string; version: string }> {
+  const manifestPath = join(dir, 'package.json')
+  let raw: string
+  try {
+    raw = await fs.readFile(manifestPath, 'utf8')
+  } catch {
+    throw new Error('Plugin archive is missing package.json manifest')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error('Plugin manifest (package.json) is not valid JSON')
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('Plugin manifest must be a JSON object')
+  }
+  const manifest = parsed as Record<string, unknown>
+  if (typeof manifest.id !== 'string' || !manifest.id.trim()) {
+    throw new Error('Plugin manifest is missing required field: id')
+  }
+  if (typeof manifest.name !== 'string' || !manifest.name.trim()) {
+    throw new Error('Plugin manifest is missing required field: name')
+  }
+  if (typeof manifest.version !== 'string' || !manifest.version.trim()) {
+    throw new Error('Plugin manifest is missing required field: version')
+  }
+  return { id: manifest.id.trim(), name: manifest.name.trim(), version: manifest.version.trim() }
+}
+
 /**
  * Install a packaged plugin archive (.vsix or plain .zip) into ~/.codesurf/extensions
  * and rescan. vsix archives nest content under extension/; plain plugin zips put the
  * manifest at the root — both are handled. Shared by ext:install-vsix and the
  * marketplace's ext:install-from-file (file-picker) path.
+ *
+ * Security measures:
+ *   1. Validate all archive entries for traversal/absolute/symlink before extraction.
+ *   2. Extract into a scoped temp directory inside EXTENSIONS_DIR.
+ *   3. Read and validate the manifest (must have id/name/version) BEFORE moving into place.
+ *   4. Key the final install directory on the validated manifest `id`, not the archive filename.
  */
 async function installPluginArchive(registry: ExtensionRegistry, archivePath: string): Promise<InstallPluginResult> {
   try {
-    const name = basename(archivePath, extname(archivePath))
-    const destDir = join(EXTENSIONS_DIR, name)
     await fs.mkdir(EXTENSIONS_DIR, { recursive: true })
-    await fs.rm(destDir, { recursive: true, force: true }).catch(() => {})
-    await fs.mkdir(destDir, { recursive: true })
 
-    // .vsix and plugin .zip are both zip archives.
-    await execFileAsync('unzip', ['-o', archivePath, '-d', destDir])
+    // Step 1: validate all entries before touching the extensions directory.
+    await assertSafeZipEntries(archivePath)
 
-    // vsix archives nest everything under extension/ — flatten it up a level.
-    const extensionSubdir = join(destDir, 'extension')
-    const hasExtDir = await fs.stat(extensionSubdir).then(s => s.isDirectory()).catch(() => false)
-    if (hasExtDir) {
-      for (const item of await fs.readdir(extensionSubdir)) {
-        await fs.rename(join(extensionSubdir, item), join(destDir, item)).catch(() => {})
+    // Step 2: extract into a scoped temp dir inside EXTENSIONS_DIR.
+    // Using a fixed suffix makes it easy to clean up on failure.
+    const tempName = `__tmp_install_${Date.now()}_${Math.random().toString(36).slice(2)}`
+    const tempDir = resolveInside(EXTENSIONS_DIR, tempName)
+    await fs.mkdir(tempDir, { recursive: true })
+
+    try {
+      await execFileAsync('/usr/bin/unzip', ['-o', archivePath, '-d', tempDir])
+
+      // vsix archives nest everything under extension/ — flatten it up a level.
+      const extensionSubdir = join(tempDir, 'extension')
+      const hasExtDir = await fs.stat(extensionSubdir).then(s => s.isDirectory()).catch(() => false)
+      if (hasExtDir) {
+        for (const item of await fs.readdir(extensionSubdir)) {
+          // Validate each item name before renaming to avoid unexpected paths.
+          assertSafePathSegment(item, 'extension entry name')
+          await fs.rename(join(extensionSubdir, item), join(tempDir, item)).catch(() => {})
+        }
+        await fs.rm(extensionSubdir, { recursive: true, force: true }).catch(() => {})
       }
-      await fs.rm(extensionSubdir, { recursive: true, force: true }).catch(() => {})
-    }
-    // Strip vsix packaging junk.
-    for (const junk of ['[Content_Types].xml', '_rels']) {
-      await fs.rm(join(destDir, junk), { recursive: true, force: true }).catch(() => {})
-    }
+      // Strip vsix packaging junk.
+      for (const junk of ['[Content_Types].xml', '_rels']) {
+        await fs.rm(join(tempDir, junk), { recursive: true, force: true }).catch(() => {})
+      }
 
-    await registry.rescan(registry.getActiveWorkspacePath())
-    const all = registry.getAll()
-    const installed = all.find(m => m._path === destDir) || all.find(m => m._path?.startsWith(destDir))
-    return { ok: true, extId: installed?.id || name, name: installed?.name || name }
+      // Step 3: validate the manifest BEFORE moving into place.
+      const manifest = await readAndValidateManifest(tempDir)
+
+      // Step 4: key the final directory on the manifest id, not the archive filename.
+      // assertSafePathSegment ensures the id cannot be used to escape EXTENSIONS_DIR.
+      assertSafePathSegment(manifest.id, 'plugin id')
+      const destDir = resolveInside(EXTENSIONS_DIR, manifest.id)
+
+      // Remove any existing installation with this id (deterministic on collision).
+      await fs.rm(destDir, { recursive: true, force: true }).catch(() => {})
+
+      // Move the validated temp dir into its final location.
+      await fs.rename(tempDir, destDir)
+
+      await registry.rescan(registry.getActiveWorkspacePath())
+      return { ok: true, extId: manifest.id, name: manifest.name }
+    } catch (err) {
+      // Clean up temp dir on any failure.
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {})
+      throw err
+    }
   } catch (err) {
     console.error('[ext:install] Failed:', err)
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

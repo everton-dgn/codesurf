@@ -21,6 +21,11 @@ const MIME_TYPES: Record<string, string> = {
   '.ttf': 'font/ttf',
 }
 
+// ── Security: no wildcard CORS on extension assets ─────────────────────────
+// Each extension is served on its own origin (contex-ext://<extId>), so the
+// browser's same-origin policy already prevents cross-extension fetches.
+// We do NOT set Access-Control-Allow-Origin at all; if a future use-case needs
+// CORS within an extension's own assets, add it narrowly there.
 function serveFile(filePath: string): Promise<Response> {
   const ext = extname(filePath).toLowerCase()
   const mime = MIME_TYPES[ext] || 'application/octet-stream'
@@ -30,7 +35,6 @@ function serveFile(filePath: string): Promise<Response> {
       headers: {
         'content-type': mime,
         'Cache-Control': 'no-store, no-cache, must-revalidate',
-        'Access-Control-Allow-Origin': '*',
       },
     }),
     () => new Response('Not found', { status: 404 }),
@@ -71,48 +75,34 @@ function isPathInside(root: string, candidate: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
-function isExtensionResourcePath(registry: ExtensionRegistry, candidate: string): boolean {
-  return registry.getAll().some(ext => {
-    const root = ext._path
-    return Boolean(root && ext._enabled !== false && isPathInside(root, candidate))
-  })
+// ── Scoped resource-path check ─────────────────────────────────────────────
+// Only authorizes reads to files within the REQUESTING extension's own root.
+// Previously this checked all enabled extensions, allowing cross-plugin reads.
+function isExtensionResourcePath(registry: ExtensionRegistry, extId: string, candidate: string): boolean {
+  const ext = registry.get(extId)
+  const root = ext?.manifest._path
+  return Boolean(root && ext?.manifest._enabled !== false && isPathInside(root, candidate))
 }
 
 export function registerExtensionProtocol(registry: ExtensionRegistry): void {
   protocol.handle('contex-ext', async request => {
     try {
       const url = new URL(request.url)
-      const segments = url.pathname
-        .split('/')
-        .filter(Boolean)
-        .map(segment => decodeURIComponent(segment))
-
-      const [firstSegment, ...restSegments] = segments
-
-      // ── __runext_resource__ — serve absolute file paths from extension assets ──
-      if (firstSegment === '__runext_resource__') {
-        const absPath = resolve('/' + restSegments.join('/'))
-        if (!isExtensionResourcePath(registry, absPath)) {
-          return new Response('Forbidden', { status: 403 })
-        }
-        if (!existsSync(absPath)) {
-          return new Response('Resource not found', { status: 404 })
-        }
-        return serveFile(absPath)
-      }
-
-      // ── __runext_codicons__ — serve @vscode/codicons from node_modules ──
-      if (firstSegment === '__runext_codicons__') {
-        const codiconBase = join(__dirname, '..', '..', 'node_modules', '@vscode', 'codicons')
-        const candidate = join(codiconBase, ...restSegments)
-        if (existsSync(candidate)) {
-          return serveFile(candidate)
-        }
-        return new Response('Codicon resource not found', { status: 404 })
-      }
+      // Under the new per-extension origin scheme the URL authority IS the routing key:
+      //   contex-ext://<extId>/<file>          — extension assets
+      //   contex-ext://__runext_sandbox__/...   — MCP-UI double-iframe proxy (trusted host)
+      //   contex-ext://__runext_codicons__/...  — @vscode/codicons from node_modules
+      //   contex-ext://__runext_resource__/...  — absolute-path asset for extensions
+      //
+      // This gives every extension its own browser origin so the browser's built-in
+      // same-origin policy prevents plugin A from fetching plugin B's assets.
+      const host = url.hostname
 
       // ── __runext_sandbox__ — serve the MCP-UI double-iframe sandbox proxy ──
-      if (firstSegment === '__runext_sandbox__') {
+      // Served on its own dedicated host, distinct from every extension origin.
+      // The proxy's postMessage relay uses targetOrigin:"*" on both sides, so
+      // moving it off the shared "extension" host does not break the handshake.
+      if (host === '__runext_sandbox__') {
         return new Response(getSandboxProxyHtml(), {
           status: 200,
           headers: {
@@ -122,8 +112,45 @@ export function registerExtensionProtocol(registry: ExtensionRegistry): void {
         })
       }
 
-      const extId = firstSegment
-      const fileSegments = restSegments
+      // ── __runext_codicons__ — serve @vscode/codicons from node_modules ──
+      if (host === '__runext_codicons__') {
+        const segments = url.pathname.split('/').filter(Boolean).map(s => decodeURIComponent(s))
+        const codiconBase = join(__dirname, '..', '..', 'node_modules', '@vscode', 'codicons')
+        const candidate = join(codiconBase, ...segments)
+        if (existsSync(candidate)) {
+          return serveFile(candidate)
+        }
+        return new Response('Codicon resource not found', { status: 404 })
+      }
+
+      // ── __runext_resource__ — serve absolute file paths scoped to one extension ──
+      // URL format: contex-ext://__runext_resource__/<extId>/<abs-path-segments>
+      // The extId in the first path segment scopes the read to that extension's root,
+      // preventing one extension from using this route to read another extension's files.
+      if (host === '__runext_resource__') {
+        const segments = url.pathname.split('/').filter(Boolean).map(s => decodeURIComponent(s))
+        const [resourceExtId, ...pathSegments] = segments
+        if (!resourceExtId || pathSegments.length === 0) {
+          return new Response('Invalid resource URL', { status: 400 })
+        }
+        const absPath = resolve('/' + pathSegments.join('/'))
+        if (!isExtensionResourcePath(registry, resourceExtId, absPath)) {
+          return new Response('Forbidden', { status: 403 })
+        }
+        if (!existsSync(absPath)) {
+          return new Response('Resource not found', { status: 404 })
+        }
+        return serveFile(absPath)
+      }
+
+      // ── Extension assets ──────────────────────────────────────────────────
+      // host IS the extId (percent-decoded by new URL()).
+      const extId = decodeURIComponent(host)
+      const fileSegments = url.pathname
+        .split('/')
+        .filter(Boolean)
+        .map(segment => decodeURIComponent(segment))
+
       if (!extId || fileSegments.length === 0) {
         return new Response('Invalid extension URL', { status: 400 })
       }

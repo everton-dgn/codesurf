@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, Menu, nativeTheme, nativeImage, session, systemPreferences, desktopCapturer, screen } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, Menu, nativeTheme, nativeImage, session, systemPreferences, desktopCapturer, screen, webContents as electronWebContents, type WebContents } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
@@ -358,17 +358,37 @@ async function requestMacMediaAccess(kind: 'microphone' | 'camera'): Promise<boo
   }
 }
 
+/**
+ * Returns true if the given webContents belongs to a trusted main-app renderer
+ * (i.e. a BrowserWindow we own), not a guest <webview> tag loading arbitrary content.
+ * Webview webContents have getType() === 'webview' in Electron.
+ */
+function isTrustedAppRenderer(wc: WebContents | null | undefined): boolean {
+  if (!wc || wc.isDestroyed()) return false
+  return (wc.getType() as string) !== 'webview'
+}
+
 function installMediaPermissionHandlers(): void {
   const defaultSession = session.defaultSession
   if (!defaultSession) return
 
-  defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return permission === 'media' || (permission as string) === 'display-capture'
+  defaultSession.setPermissionCheckHandler((wc, permission) => {
+    // Display-capture is only allowed for the trusted app renderer, never
+    // for guest <webview> tiles that load arbitrary third-party content.
+    if ((permission as string) === 'display-capture') {
+      return isTrustedAppRenderer(wc)
+    }
+    return permission === 'media'
   })
 
-  defaultSession.setPermissionRequestHandler(async (_webContents, permission, callback) => {
+  defaultSession.setPermissionRequestHandler(async (wc, permission, callback) => {
     try {
       if (permission === 'media') {
+        // Allow mic/camera requests from the main renderer; deny from webviews.
+        if (!isTrustedAppRenderer(wc)) {
+          callback(false)
+          return
+        }
         const [micAllowed, camAllowed] = await Promise.all([
           requestMacMediaAccess('microphone'),
           requestMacMediaAccess('camera'),
@@ -378,7 +398,8 @@ function installMediaPermissionHandlers(): void {
       }
 
       if (permission === 'display-capture') {
-        callback(true)
+        // Only grant to trusted app renderer; deny to guest webviews.
+        callback(isTrustedAppRenderer(wc))
         return
       }
 
@@ -389,8 +410,17 @@ function installMediaPermissionHandlers(): void {
     }
   })
 
-  defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+  defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
+      // Resolve the requesting WebContents from the frame when available.
+      // Guard against guest webviews reaching this handler (belt-and-suspenders
+      // in addition to setPermissionCheckHandler/setPermissionRequestHandler).
+      const requestingWc = request.frame ? electronWebContents.fromFrame(request.frame) : null
+      if (!isTrustedAppRenderer(requestingWc)) {
+        console.warn('[Permissions] Display-capture denied for guest webview')
+        callback({})
+        return
+      }
       const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] })
       callback(
         sources[0]
