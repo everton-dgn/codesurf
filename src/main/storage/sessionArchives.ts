@@ -40,3 +40,38 @@ export async function writeArchivedSessionIds(path: string, archivedSessionIds: 
     archivedSessionIds: normalized,
   }, null, 2))
 }
+
+/** Per-write-path promise chains so read→modify→write cycles never interleave. */
+const archiveMutationQueues = new Map<string, Promise<unknown>>()
+
+/**
+ * Atomically mutate the archived-session set persisted at `writePath`.
+ *
+ * Concurrent callers targeting the same `writePath` are serialized through a
+ * promise queue — without this, parallel `canvas:setSessionArchived` IPC calls
+ * (e.g. the sidebar's bulk "Archive chats" action firing one call per session)
+ * each read the same initial file, apply one change, and overwrite each other,
+ * silently dropping all but the last archive flag.
+ *
+ * `readPaths` are merged into the working set before mutating (legacy storage
+ * locations). The mutator returns whether it changed the set; the file is only
+ * rewritten when it did.
+ */
+export async function mutateArchivedSessionIds(
+  readPaths: string[],
+  writePath: string,
+  mutate: (archivedIds: Set<string>) => boolean,
+): Promise<boolean> {
+  const previous = archiveMutationQueues.get(writePath) ?? Promise.resolve()
+  const task = previous.catch(() => {}).then(async () => {
+    const archivedIds = await readArchivedSessionIds(readPaths)
+    const changed = mutate(archivedIds)
+    if (changed) await writeArchivedSessionIds(writePath, archivedIds)
+    return changed
+  })
+  archiveMutationQueues.set(writePath, task)
+  void task.catch(() => {}).finally(() => {
+    if (archiveMutationQueues.get(writePath) === task) archiveMutationQueues.delete(writePath)
+  })
+  return task
+}
