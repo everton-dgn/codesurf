@@ -6,7 +6,6 @@ const { spawn } = require('child_process')
 
 const EXT_ID = 'local-models'
 const APP_HOME = path.join(os.homedir(), '.codesurf')
-const SETTINGS_PATH = path.join(APP_HOME, 'extension-settings', `${EXT_ID}.json`)
 
 const DEFAULT_CONFIG = {
   command: 'ollama',

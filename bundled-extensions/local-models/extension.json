@@ -11,6 +11,7 @@
     "tiles": [{
       "type": "local-models-browser",
       "label": "Local Models",
+      "icon": "cpu",
       "entry": "tiles/models/index.html",
       "defaultSize": { "w": 520, "h": 580 },
       "minSize": { "w": 400, "h": 400 }
