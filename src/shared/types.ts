@@ -1091,6 +1091,7 @@ export type BusEventType =
   | 'browser.evidence.snapshot'
   | 'browser.page_health'
   | 'browser.evidence'
+  | 'extension-crashed'   // broker: power extension child process crashed unexpectedly
 
 /** A single event on the bus */
 export interface BusEvent {

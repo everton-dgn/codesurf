@@ -1,0 +1,10 @@
+{
+  "id": "contex-relay-suite",
+  "name": "Contex Relay Suite (fixture)",
+  "version": "1.0.0",
+  "tier": "power",
+  "main": "main.js",
+  "capabilities": [
+    { "name": "relay" }
+  ]
+}

@@ -13,16 +13,18 @@
  *   - workspace-local extensions           → default-OFF (untrustedScope);
  *                                            require explicit user enable
  *
- * A broker-based approach (utilityProcess / worker) that would provide real
- * isolation is the intended end state documented in docs/plugins/00-architecture.md
- * §6 ("node execution flows through the broker rather than raw require() into
- * main").  That rearchitecture is tracked as future work; the raw require()
- * path persists in the meantime.
+ * Feature flag: CODESURF_POWER_BROKER=1 routes non-bundled power extensions
+ * through the utilityProcess broker (Phase 1b/1c). The raw require() path is
+ * never deleted; bundled extensions always run legacy until Phase 1d is proven.
+ *
+ * Per-manifest override: manifest.execution = 'worker' forces brokered mode
+ * for a single extension regardless of the global flag.
  */
 
 import { join } from 'path'
 import type { ExtensionManifest } from '../../shared/types'
 import type { ExtensionContext } from './context'
+import type { ExtensionRegistry } from './registry'
 
 /**
  * Scope categories used for activation gate decisions.  Keep in sync with the
@@ -118,4 +120,75 @@ export async function loadPowerExtension(
     console.error(`${prefix} Failed to load power extension:`, err)
     return null
   }
+}
+
+// ── Broker feature flag ───────────────────────────────────────────────────────
+
+/**
+ * Returns true when a power extension should run in the brokered
+ * utilityProcess tier rather than via the legacy raw require() path.
+ *
+ * Phase 1d status: proven green via test/broker-host-integration.test.mjs.
+ * The default is brokered for global/catalog/workspace extensions; bundled
+ * extensions remain legacy. CODESURF_POWER_BROKER=0 is the escape hatch.
+ *
+ * Rules (first match wins):
+ *  1. CODESURF_POWER_BROKER=0  → force legacy for ALL extensions.
+ *  2. manifest.execution==='worker'  → force broker for this extension.
+ *  3. bundled scope  → always legacy (safest default; no regression risk).
+ *  4. CODESURF_POWER_BROKER=1 OR default (non-bundled)  → broker.
+ *     contex-relay-suite is the first consumer; its relay grant is validated
+ *     in main before registerRelayIPC() runs.
+ *
+ * Legacy-scope exceptions:
+ *  - Bundled extensions: always legacy until 1d is fully proven in production.
+ */
+export function shouldBrokerExtension(
+  manifest: ExtensionManifest,
+  scope: ExtensionScope,
+): boolean {
+  // Escape hatch: opt-out of broker for all extensions
+  if (process.env.CODESURF_POWER_BROKER === '0') return false
+
+  // Per-manifest override: force broker regardless of scope
+  if ((manifest as { execution?: string }).execution === 'worker') return true
+
+  // Bundled extensions keep the legacy path for maximum stability
+  if (scope === 'bundled') return false
+
+  // Non-bundled: run brokered by default (opt-out via CODESURF_POWER_BROKER=0)
+  // CODESURF_POWER_BROKER=1 makes this explicit; absence is the same default.
+  return true
+}
+
+/**
+ * Activate a power extension via either the broker or the legacy require() path.
+ *
+ * Drop-in replacement for direct `loadPowerExtension` calls at the registry
+ * call sites. When the flag is off (default) the legacy body is called
+ * unchanged.
+ *
+ * Note: when brokered, `ctx` is still constructed by the CALLER (registry.ts)
+ * and passed in — the broker host also creates its own ctx internally.  For
+ * legacy mode the passed ctx is used directly.  For broker mode the registry's
+ * ctx is discarded (the host owns lifecycle) and a separate ctx is built inside
+ * ExtensionBrokerHost.activate().
+ */
+export async function activatePowerExtension(
+  manifest: ExtensionManifest,
+  ctx: ExtensionContext,
+  scope: ExtensionScope,
+  registry: ExtensionRegistry,
+): Promise<(() => void) | null> {
+  if (shouldBrokerExtension(manifest, scope)) {
+    // Lazy import to avoid loading electron utilityProcess in test environments
+    // where it's not available.
+    const { ExtensionBrokerHost } = await import('./broker/host')
+    const host = new ExtensionBrokerHost(manifest, registry, scope)
+    const ok = await host.activate()
+    if (!ok) return null
+    return host.buildCleanupFn()
+  }
+  // Legacy raw require() path — body unchanged
+  return loadPowerExtension(manifest, ctx, scope)
 }

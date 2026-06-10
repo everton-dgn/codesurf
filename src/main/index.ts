@@ -50,6 +50,7 @@ import {
   createMainWindowWebPreferences,
 } from './secure-web-preferences'
 import { getOwlSupervisor, isOwlHostProcess, runOwlHostProcess, stopOwlSupervisor } from './owl/runtime'
+import { isBrokerTestProcess, runBrokerTestHost } from './extensions/broker/test-harness'
 // browserTile BrowserView IPC was removed — renderer uses <webview> tag directly
 
 const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 8192
@@ -710,6 +711,11 @@ function registerOwlIPC(): void {
 if (isOwlHost) {
   void runOwlHostProcess().catch(error => {
     console.error('[owl-host] failed to start:', error)
+    app.quit()
+  })
+} else if (isBrokerTestProcess()) {
+  void runBrokerTestHost().catch(error => {
+    console.error('[broker-test] failed to start:', error)
     app.quit()
   })
 } else {

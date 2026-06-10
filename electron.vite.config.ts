@@ -28,7 +28,10 @@ export default defineConfig({
             outDir: 'dist-electron/main',
             minify: false,
             rollupOptions: {
-              input: resolve(__dirname, 'src/main/index.ts'),
+              input: {
+              index: resolve(__dirname, 'src/main/index.ts'),
+              'broker-child': resolve(__dirname, 'src/main/extensions/broker/child-entry.ts'),
+            },
               external: ['node-pty'],
               treeshake: false
             }
