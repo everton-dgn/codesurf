@@ -55,13 +55,7 @@ describe('isPowerActivationPermitted (security gate)', () => {
     )
   })
 
-  // NOTE: This test documents the CURRENT behaviour where the workspace-specific
-  // error message is dead code (Plan 003 fix was not fully applied — the workspace
-  // check at loader.ts:73 is unreachable because the _enabled check at line 63
-  // already returns false first).  When Plan 003 is correctly applied (the workspace
-  // check nested INSIDE the _enabled block, or restructured so it fires separately
-  // for workspace scope), this test should be updated to assert the workspace message.
-  test('logs _enabled-is-false error when disabled workspace extension is blocked (workspace message is dead code)', () => {
+  test('logs workspace-specific error when disabled workspace extension is blocked', () => {
     const logged: string[] = []
     const origError = console.error
     console.error = (...args: unknown[]) => logged.push(args.map(String).join(' '))
@@ -70,11 +64,9 @@ describe('isPowerActivationPermitted (security gate)', () => {
     } finally {
       console.error = origError
     }
-    // Current behaviour: first block fires with "_enabled is false" message.
-    // The workspace-specific "workspace-local power extensions" message is never reached.
     assert.ok(
-      logged.some(m => m.includes('_enabled is false')),
-      `Expected "_enabled is false" in logged errors; got: ${JSON.stringify(logged)}`,
+      logged.some(m => m.includes('workspace-local power extensions')),
+      `Expected "workspace-local power extensions" in logged errors; got: ${JSON.stringify(logged)}`,
     )
   })
 })
