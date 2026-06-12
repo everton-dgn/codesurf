@@ -269,3 +269,47 @@ test('Broker host: lifecycle + capability-deny + crash-recovery', { timeout: 120
     assert.ok(crashEvent.payload, 'crash event has payload')
   })
 })
+
+test('Broker host: IPC namespace enforcement — out-of-namespace channel is rejected', { timeout: 120_000 }, async t => {
+  preflight()
+  const client = spawnBrokerTestHost()
+  t.after(() => client.stop())
+
+  await t.test('health responds', async () => {
+    const health = await client.call('health', {}, 30_000)
+    assert.equal(health.ok, true, 'health.ok')
+  })
+
+  await t.test('ipc-namespace-escape-ext activates', async () => {
+    const result = await client.call('activateFixture', {
+      id: 'ipc-namespace-escape-ext',
+      name: 'IPC Namespace Escape Extension',
+      extDir: join(fixtureBase, 'ipc-namespace-escape-ext'),
+      capabilities: [{ name: 'ipc' }],
+    }, 30_000)
+    assert.equal(result.activated, true, 'fixture activated')
+  })
+
+  await t.test('host rejects out-of-namespace IPC channel registration', async () => {
+    // The fixture publishes broker-test:namespace-escape-result with escapeDenied=true
+    // when the host correctly rejects the unauthorized channel attempt.
+    const events = await collectEvents(client, 1500)
+    const resultEvent = events.find(
+      e => e.channel === 'broker-test' && e.type === 'namespace-escape-result'
+    )
+    assert.ok(
+      resultEvent,
+      `namespace-escape-result event not received (got ${events.length} events: ${JSON.stringify(events.map(e => e.type))})`,
+    )
+    assert.equal(
+      resultEvent.payload.escapeDenied,
+      true,
+      'host must reject cross-namespace IPC handler registration with "unauthorized channel" error',
+    )
+  })
+
+  await t.test('ipc-namespace-escape-ext deactivates cleanly', async () => {
+    const result = await client.call('deactivateFixture', { extId: 'ipc-namespace-escape-ext' }, 15_000)
+    assert.equal(result.ok, true, 'deactivated ok')
+  })
+})

@@ -301,6 +301,16 @@ export class ExtensionBrokerHost {
       case 'ipc': {
         if (method !== 'handle') throw new Error(`Unknown ipc method: ${method}`)
         const [fullChannel] = args as [string]
+        const expectedPrefix = `ext:${extId}:`
+        if (!fullChannel.startsWith(expectedPrefix)) {
+          throw Object.assign(
+            new Error(
+              `Extension "${extId}" attempted to register IPC handler on unauthorized channel ` +
+              `"${fullChannel}". Channels must start with "${expectedPrefix}".`,
+            ),
+            { code: BROKER_ERROR_CODES['capability-denied'] },
+          )
+        }
         // Register directly with ipcMain — ExtensionContext.ipc.handle namespaces
         // with ext:{id}:, but the child already sends the full channel.
         ipcMain.handle(fullChannel, async (_event, ...ipcArgs) => {
