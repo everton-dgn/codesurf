@@ -21,7 +21,7 @@
  * for a single extension regardless of the global flag.
  */
 
-import { join } from 'path'
+import { join, resolve, sep } from 'path'
 import type { ExtensionManifest } from '../../shared/types'
 import type { ExtensionContext } from './context'
 import type { ExtensionRegistry } from './registry'
@@ -31,6 +31,20 @@ import type { ExtensionRegistry } from './registry'
  * scopes understood by registry.ts / activation-policy.ts.
  */
 export type ExtensionScope = 'bundled' | 'global' | 'catalog' | 'workspace'
+
+/**
+ * Throws if `relativeMain` resolves outside `basePath`.
+ * Prevents path-traversal attacks via a malicious manifest.main (e.g. "../../evil.js").
+ */
+export function assertSafeExtensionEntry(basePath: string, relativeMain: string): void {
+  const resolvedBase = resolve(basePath)
+  const resolvedEntry = resolve(basePath, relativeMain)
+  if (resolvedEntry !== resolvedBase && !resolvedEntry.startsWith(resolvedBase + sep)) {
+    throw new Error(
+      `[Security] Extension manifest.main "${relativeMain}" escapes extension directory`,
+    )
+  }
+}
 
 /**
  * Guard called immediately before require() + activate().  Returns true when
@@ -74,23 +88,27 @@ export async function loadPowerExtension(
 ): Promise<(() => void) | null> {
   if (!manifest.main || !manifest._path) return null
 
-  const entryPath = join(manifest._path, manifest.main)
-  const prefix = `[Ext:${manifest.name}]`
-
   // Defense-in-depth gate: block if the extension should not be active.
   if (!isPowerActivationPermitted(manifest, scope)) {
     return null
   }
 
-  // Emit a conspicuous warning so any audit of the process log can identify
-  // which extensions are running with full main-process privileges.
-  console.warn(
-    `[Security] Loading power extension "${manifest.name}" (${manifest.id}) ` +
-    `from ${entryPath} — runs with FULL main-process privileges (Node.js, fs, ` +
-    `child_process, network). Scope: ${scope}.`,
-  )
+  const prefix = `[Ext:${manifest.name}]`
 
   try {
+    // Guard against path traversal before computing entryPath or logging it.
+    assertSafeExtensionEntry(manifest._path, manifest.main)
+
+    const entryPath = join(manifest._path, manifest.main)
+
+    // Emit a conspicuous warning so any audit of the process log can identify
+    // which extensions are running with full main-process privileges.
+    console.warn(
+      `[Security] Loading power extension "${manifest.name}" (${manifest.id}) ` +
+      `from ${entryPath} — runs with FULL main-process privileges (Node.js, fs, ` +
+      `child_process, network). Scope: ${scope}.`,
+    )
+
     // Clear require cache so extensions can be hot-reloaded
     delete require.cache[require.resolve(entryPath)]
     const mod = require(entryPath)

@@ -13,7 +13,7 @@
  *   await host.deactivate()
  */
 
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { ipcMain } from 'electron'
 import { bus } from '../../event-bus'
@@ -52,6 +52,17 @@ export class ExtensionBrokerHost {
 
     const manifest = this.manifest
     if (!manifest.main || !manifest._path) return false
+
+    // Block path traversal: ensure manifest.main stays within the extension directory
+    const resolvedBase = resolve(manifest._path)
+    const resolvedEntry = resolve(manifest._path, manifest.main)
+    if (resolvedEntry !== resolvedBase && !resolvedEntry.startsWith(resolvedBase + sep)) {
+      console.error(
+        `[Security] Blocked activation of extension "${manifest.id}": ` +
+        `manifest.main "${manifest.main}" escapes extension directory`,
+      )
+      return false
+    }
 
     const entryPath = join(manifest._path, manifest.main)
     const extId = manifest.id
