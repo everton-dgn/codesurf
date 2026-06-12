@@ -59,22 +59,21 @@ export function isPowerActivationPermitted(
   manifest: ExtensionManifest,
   scope: ExtensionScope,
 ): boolean {
-  // An extension that did not pass resolveExtensionEnabled must never execute.
   if (!manifest._enabled) {
-    console.error(
-      `[Security] Blocked activation of power extension "${manifest.name}" (${manifest.id}): ` +
-      `_enabled is false — this extension must be explicitly enabled by the user before it can run.`,
-    )
-    return false
-  }
-
-  // Workspace extensions are attacker-controllable (any cloned repo can ship
-  // .contex/extensions/).  Enforce that they passed the untrustedScope gate.
-  if (scope === 'workspace' && !manifest._enabled) {
-    console.error(
-      `[Security] Blocked activation of workspace power extension "${manifest.name}" (${manifest.id}): ` +
-      `workspace-local power extensions require explicit user opt-in.`,
-    )
+    if (scope === 'workspace') {
+      // Workspace extensions are attacker-controllable (any cloned repo can ship
+      // .contex/extensions/).  Enforce that they passed the untrustedScope gate.
+      console.error(
+        `[Security] Blocked activation of workspace power extension "${manifest.name}" (${manifest.id}): ` +
+        `workspace-local power extensions require explicit user opt-in.`,
+      )
+    } else {
+      // An extension that did not pass resolveExtensionEnabled must never execute.
+      console.error(
+        `[Security] Blocked activation of power extension "${manifest.name}" (${manifest.id}): ` +
+        `_enabled is false — this extension must be explicitly enabled by the user before it can run.`,
+      )
+    }
     return false
   }
 
