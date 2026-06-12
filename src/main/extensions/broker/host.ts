@@ -34,6 +34,7 @@ export class ExtensionBrokerHost {
   private ctx: ExtensionContext | null = null
   private deliberateExit = false
   private active = false
+  private ipcChannels: string[] = []
 
   constructor(
     private manifest: ExtensionManifest,
@@ -177,6 +178,11 @@ export class ExtensionBrokerHost {
       child.kill()
     }
 
+    for (const ch of this.ipcChannels) {
+      ipcMain.removeHandler(ch)
+    }
+    this.ipcChannels = []
+
     ctx?.dispose()
   }
 
@@ -293,6 +299,7 @@ export class ExtensionBrokerHost {
           }, 30_000)
           return result.returnValue
         })
+        this.ipcChannels.push(fullChannel)
         return { ok: true }
       }
 
@@ -376,6 +383,10 @@ export class ExtensionBrokerHost {
       this.child.kill()
       this.child = null
     }
+    for (const ch of this.ipcChannels) {
+      ipcMain.removeHandler(ch)
+    }
+    this.ipcChannels = []
     this.ctx?.dispose()
     this.ctx = null
     this.active = false
