@@ -23,8 +23,8 @@
     ],
     "settings": [
       { "key": "serverUrl", "label": "Server URL", "type": "string", "default": "ws://localhost:7880" },
-      { "key": "apiKey", "label": "API Key", "type": "string", "default": "devkey" },
-      { "key": "apiSecret", "label": "API Secret", "type": "string", "default": "secret" },
+      { "key": "apiKey", "label": "API Key", "type": "string", "default": "" },
+      { "key": "apiSecret", "label": "API Secret", "type": "string", "default": "" },
       { "key": "defaultIdentity", "label": "Default Identity", "type": "string", "default": "" }
     ],
     "context": {
