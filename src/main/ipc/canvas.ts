@@ -29,7 +29,7 @@ import { syncWorkspaceRelayParticipants } from '../relay/service'
 import { daemonClient } from '../daemon/client'
 import { getIndexerStatus, indexAllSources, listThreadsFromDb, renameIndexedThread } from '../db/thread-indexer'
 import { getExternalSessionChatState } from '../session-sources'
-import { readArchivedSessionIds, writeArchivedSessionIds } from '../storage/sessionArchives'
+import { mutateArchivedSessionIds, readArchivedSessionIds } from '../storage/sessionArchives'
 import { getAgentPath } from '../agent-paths'
 import {
   GENERATED_TITLE_MAX_CHARS,
@@ -573,23 +573,29 @@ async function setWorkspaceSessionArchived(
   const storageIds = await ensureWorkspaceStorageMigrated(workspaceId)
   const primaryStorageId = storageIds[0] ?? workspaceId
   const archivePath = sessionArchiveStatePath(primaryStorageId)
-  const archivedIds = await readArchivedSessionIds(storageIds.map(storageId => sessionArchiveStatePath(storageId)))
   // Prefer the stable identity key; fall back to the raw entry id when the
   // session has no provider sessionId (key is null/empty).
   const stableKey = String(identityKey ?? '').trim() || sessionEntryId
-  if (archived) {
-    if (archivedIds.has(stableKey)) return false
-    archivedIds.add(stableKey)
-  } else {
-    // Clear both the stable key and any legacy raw-id entry so unarchiving a
-    // session archived under the old id-based scheme also sticks.
-    const hadEntry = archivedIds.has(stableKey) || archivedIds.has(sessionEntryId)
-    if (!hadEntry) return false
-    archivedIds.delete(stableKey)
-    archivedIds.delete(sessionEntryId)
-  }
-  await writeArchivedSessionIds(archivePath, Array.from(archivedIds))
-  return true
+  // Serialized read→modify→write: concurrent archive calls (bulk "Archive
+  // chats" fires one IPC call per session) must not overwrite each other.
+  return await mutateArchivedSessionIds(
+    storageIds.map(storageId => sessionArchiveStatePath(storageId)),
+    archivePath,
+    archivedIds => {
+      if (archived) {
+        if (archivedIds.has(stableKey)) return false
+        archivedIds.add(stableKey)
+        return true
+      }
+      // Clear both the stable key and any legacy raw-id entry so unarchiving a
+      // session archived under the old id-based scheme also sticks.
+      const hadEntry = archivedIds.has(stableKey) || archivedIds.has(sessionEntryId)
+      if (!hadEntry) return false
+      archivedIds.delete(stableKey)
+      archivedIds.delete(sessionEntryId)
+      return true
+    },
+  )
 }
 
 function applyArchivedSessionState(sessions: AggregatedSessionEntry[], archivedIds: Set<string>): AggregatedSessionEntry[] {

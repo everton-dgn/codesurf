@@ -1,0 +1,7 @@
+{
+  "id": "traversal-ext",
+  "name": "Traversal Test",
+  "version": "1.0.0",
+  "tier": "power",
+  "main": "../../evil.js"
+}

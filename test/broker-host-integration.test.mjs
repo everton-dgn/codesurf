@@ -131,6 +131,51 @@ async function collectEvents(client, waitMs = 500) {
   return res.events ?? []
 }
 
+test('Broker host: IPC handler cleanup on deactivate (re-activate does not throw)', { timeout: 120_000 }, async t => {
+  preflight()
+  const client = spawnBrokerTestHost()
+  t.after(() => client.stop())
+
+  await t.test('health responds', async () => {
+    const health = await client.call('health', {}, 30_000)
+    assert.equal(health.ok, true, 'health.ok')
+  })
+
+  // ── Activate ipc-ext (first time) ──────────────────────────────────────
+  await t.test('ipc-ext activates on first attempt', async () => {
+    const result = await client.call('activateFixture', {
+      id: 'ipc-ext',
+      name: 'IPC Extension',
+      extDir: join(fixtureBase, 'ipc-ext'),
+      capabilities: [{ name: 'ipc' }],
+    }, 30_000)
+    assert.equal(result.activated, true, 'first activate returned true')
+  })
+
+  // ── Deactivate ────────────────────────────────────────────────────────
+  await t.test('ipc-ext deactivates cleanly', async () => {
+    const result = await client.call('deactivateFixture', { extId: 'ipc-ext' }, 15_000)
+    assert.equal(result.ok, true, 'deactivated ok')
+  })
+
+  // ── Re-activate: must not throw "second handler" ─────────────────────
+  await t.test('ipc-ext re-activates without "second handler" error', async () => {
+    const result = await client.call('activateFixture', {
+      id: 'ipc-ext',
+      name: 'IPC Extension',
+      extDir: join(fixtureBase, 'ipc-ext'),
+      capabilities: [{ name: 'ipc' }],
+    }, 30_000)
+    assert.equal(result.activated, true, 'second activate returned true — no duplicate handler error')
+  })
+
+  // ── Cleanup ───────────────────────────────────────────────────────────
+  await t.test('ipc-ext deactivates cleanly after re-activation', async () => {
+    const result = await client.call('deactivateFixture', { extId: 'ipc-ext' }, 15_000)
+    assert.equal(result.ok, true, 'final deactivate ok')
+  })
+})
+
 test('Broker host: lifecycle + capability-deny + crash-recovery', { timeout: 120_000 }, async t => {
   preflight()
   const client = spawnBrokerTestHost()
@@ -222,5 +267,49 @@ test('Broker host: lifecycle + capability-deny + crash-recovery', { timeout: 120
     const crashEvent = events.find(e => e.type === 'extension-crashed')
     assert.ok(crashEvent, 'extension-crashed event emitted on crash')
     assert.ok(crashEvent.payload, 'crash event has payload')
+  })
+})
+
+test('Broker host: IPC namespace enforcement — out-of-namespace channel is rejected', { timeout: 120_000 }, async t => {
+  preflight()
+  const client = spawnBrokerTestHost()
+  t.after(() => client.stop())
+
+  await t.test('health responds', async () => {
+    const health = await client.call('health', {}, 30_000)
+    assert.equal(health.ok, true, 'health.ok')
+  })
+
+  await t.test('ipc-namespace-escape-ext activates', async () => {
+    const result = await client.call('activateFixture', {
+      id: 'ipc-namespace-escape-ext',
+      name: 'IPC Namespace Escape Extension',
+      extDir: join(fixtureBase, 'ipc-namespace-escape-ext'),
+      capabilities: [{ name: 'ipc' }],
+    }, 30_000)
+    assert.equal(result.activated, true, 'fixture activated')
+  })
+
+  await t.test('host rejects out-of-namespace IPC channel registration', async () => {
+    // The fixture publishes broker-test:namespace-escape-result with escapeDenied=true
+    // when the host correctly rejects the unauthorized channel attempt.
+    const events = await collectEvents(client, 1500)
+    const resultEvent = events.find(
+      e => e.channel === 'broker-test' && e.type === 'namespace-escape-result'
+    )
+    assert.ok(
+      resultEvent,
+      `namespace-escape-result event not received (got ${events.length} events: ${JSON.stringify(events.map(e => e.type))})`,
+    )
+    assert.equal(
+      resultEvent.payload.escapeDenied,
+      true,
+      'host must reject cross-namespace IPC handler registration with "unauthorized channel" error',
+    )
+  })
+
+  await t.test('ipc-namespace-escape-ext deactivates cleanly', async () => {
+    const result = await client.call('deactivateFixture', { extId: 'ipc-namespace-escape-ext' }, 15_000)
+    assert.equal(result.ok, true, 'deactivated ok')
   })
 })

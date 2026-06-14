@@ -13,7 +13,7 @@
  *   await host.deactivate()
  */
 
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { ipcMain } from 'electron'
 import { bus } from '../../event-bus'
@@ -34,6 +34,7 @@ export class ExtensionBrokerHost {
   private ctx: ExtensionContext | null = null
   private deliberateExit = false
   private active = false
+  private ipcChannels: string[] = []
 
   constructor(
     private manifest: ExtensionManifest,
@@ -51,6 +52,17 @@ export class ExtensionBrokerHost {
 
     const manifest = this.manifest
     if (!manifest.main || !manifest._path) return false
+
+    // Block path traversal: ensure manifest.main stays within the extension directory
+    const resolvedBase = resolve(manifest._path)
+    const resolvedEntry = resolve(manifest._path, manifest.main)
+    if (resolvedEntry !== resolvedBase && !resolvedEntry.startsWith(resolvedBase + sep)) {
+      console.error(
+        `[Security] Blocked activation of extension "${manifest.id}": ` +
+        `manifest.main "${manifest.main}" escapes extension directory`,
+      )
+      return false
+    }
 
     const entryPath = join(manifest._path, manifest.main)
     const extId = manifest.id
@@ -113,6 +125,15 @@ export class ExtensionBrokerHost {
       if (!this.deliberateExit) {
         console.error(`${prefix} Crashed unexpectedly (exit code: ${code}). Main process unaffected.`)
         this.ctx?.dispose()
+        // Remove broker-registered ipcMain handlers — they are tracked only in
+        // this.ipcChannels (registered directly via ipcMain.handle, not through
+        // ctx), so ctx.dispose() does NOT clean them. Without this, a child that
+        // registers an IPC handler then crashes leaks the ext:{id}:* channel and
+        // re-activation throws Electron's "second handler" error.
+        for (const ch of this.ipcChannels) {
+          ipcMain.removeHandler(ch)
+        }
+        this.ipcChannels = []
         this.ctx = null
         this.peer = null
         this.child = null
@@ -176,6 +197,11 @@ export class ExtensionBrokerHost {
     if (child) {
       child.kill()
     }
+
+    for (const ch of this.ipcChannels) {
+      ipcMain.removeHandler(ch)
+    }
+    this.ipcChannels = []
 
     ctx?.dispose()
   }
@@ -284,6 +310,16 @@ export class ExtensionBrokerHost {
       case 'ipc': {
         if (method !== 'handle') throw new Error(`Unknown ipc method: ${method}`)
         const [fullChannel] = args as [string]
+        const expectedPrefix = `ext:${extId}:`
+        if (!fullChannel.startsWith(expectedPrefix)) {
+          throw Object.assign(
+            new Error(
+              `Extension "${extId}" attempted to register IPC handler on unauthorized channel ` +
+              `"${fullChannel}". Channels must start with "${expectedPrefix}".`,
+            ),
+            { code: BROKER_ERROR_CODES['capability-denied'] },
+          )
+        }
         // Register directly with ipcMain — ExtensionContext.ipc.handle namespaces
         // with ext:{id}:, but the child already sends the full channel.
         ipcMain.handle(fullChannel, async (_event, ...ipcArgs) => {
@@ -293,6 +329,7 @@ export class ExtensionBrokerHost {
           }, 30_000)
           return result.returnValue
         })
+        this.ipcChannels.push(fullChannel)
         return { ok: true }
       }
 
@@ -376,6 +413,10 @@ export class ExtensionBrokerHost {
       this.child.kill()
       this.child = null
     }
+    for (const ch of this.ipcChannels) {
+      ipcMain.removeHandler(ch)
+    }
+    this.ipcChannels = []
     this.ctx?.dispose()
     this.ctx = null
     this.active = false

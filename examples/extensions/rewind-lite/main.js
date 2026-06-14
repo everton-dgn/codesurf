@@ -209,7 +209,7 @@ module.exports = {
     })
 
     ctx.mcp.registerTool({
-      name: 'workspace_digest',
+      name: 'rewind_lite_digest',
       description: 'Generate a concise rewind digest for a CodeSurf workspace.',
       inputSchema: {
         type: 'object',

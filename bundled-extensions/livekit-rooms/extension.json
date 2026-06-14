@@ -12,7 +12,7 @@
       {
         "type": "lk",
         "label": "LiveKit",
-        "icon": "",
+        "icon": "video",
         "entry": "tiles/index.html",
         "defaultSize": { "w": 760, "h": 680 },
         "minSize": { "w": 520, "h": 420 }
@@ -25,7 +25,12 @@
       { "key": "serverUrl", "label": "Server URL", "type": "string", "default": "ws://localhost:7880" },
       { "key": "apiKey", "label": "API Key", "type": "string", "default": "devkey" },
       { "key": "apiSecret", "label": "API Secret", "type": "string", "default": "secret" },
-      { "key": "defaultIdentity", "label": "Default Identity", "type": "string", "default": "" }
+      { "key": "defaultIdentity", "label": "Default Identity", "type": "string", "default": "" },
+      { "key": "assistantEnabled", "label": "AI Assistant", "type": "boolean", "default": true },
+      { "key": "assistantProvider", "label": "Assistant Provider", "type": "string", "default": "claude" },
+      { "key": "assistantModel", "label": "Assistant Model", "type": "string", "default": "claude-sonnet-4-6" },
+      { "key": "assistantSpeakReplies", "label": "Speak Replies", "type": "boolean", "default": true },
+      { "key": "assistantUseCamera", "label": "Use Camera", "type": "boolean", "default": true }
     ],
     "context": {
       "produces": ["ctx:lk-server", "ctx:lk-room"],
@@ -84,6 +89,18 @@
             "room": { "type": "string", "description": "Optional room name filter" }
           },
           "required": ["text"]
+        }
+      },
+      {
+        "name": "lk_generate_token",
+        "description": "Generate a join token for a LiveKit room.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "identity": { "type": "string", "description": "Participant identity" },
+            "room": { "type": "string", "description": "Room name" }
+          },
+          "required": ["identity", "room"]
         }
       }
     ]
