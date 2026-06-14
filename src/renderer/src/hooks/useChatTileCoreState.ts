@@ -55,6 +55,8 @@ export interface UseChatTileCoreStateResult {
   setMode: Dispatch<SetStateAction<string>>
   thinking: string
   setThinking: Dispatch<SetStateAction<string>>
+  agentId: string | null
+  setAgentId: Dispatch<SetStateAction<string | null>>
   autoAgentMode: boolean
   setAutoAgentMode: Dispatch<SetStateAction<boolean>>
   attachments: PendingAttachment[]
@@ -160,6 +162,9 @@ export function useChatTileCoreState({
   const [mcpEnabled, setMcpEnabled] = useState(() => initialRuntimeStateRef.current?.mcpEnabled ?? true)
   const [mode, setMode] = useState(() => initialMode)
   const [thinking, setThinking] = useState(() => initialRuntimeStateRef.current?.thinking ?? 'adaptive')
+  const [agentId, setAgentId] = useState<string | null>(
+    () => initialRuntimeStateRef.current?.agentId ?? null,
+  )
   const [autoAgentMode, setAutoAgentMode] = useState(
     () => initialRuntimeStateRef.current?.autoAgentMode ?? false,
   )
@@ -222,6 +227,8 @@ export function useChatTileCoreState({
     setMode,
     thinking,
     setThinking,
+    agentId,
+    setAgentId,
     autoAgentMode,
     setAutoAgentMode,
     attachments,

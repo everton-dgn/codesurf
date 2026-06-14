@@ -40,6 +40,7 @@ export interface UseChatTilePersistenceOptions {
   mcpEnabled: boolean
   mode: string
   thinking: string
+  agentId: string | null
   effectiveAgentMode: boolean
   autoAgentMode: boolean
   preserveSessionSummary: boolean
@@ -64,6 +65,7 @@ export interface UseChatTilePersistenceOptions {
   setMcpEnabled: Dispatch<SetStateAction<boolean>>
   setMode: Dispatch<SetStateAction<string>>
   setThinking: Dispatch<SetStateAction<string>>
+  setAgentId: Dispatch<SetStateAction<string | null>>
   setAutoAgentMode: Dispatch<SetStateAction<boolean>>
   setPreserveSessionSummary: Dispatch<SetStateAction<boolean>>
   setLinkedSessionEntryId: Dispatch<SetStateAction<string | null>>
@@ -102,6 +104,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
     mcpEnabled,
     mode,
     thinking,
+    agentId,
     effectiveAgentMode,
     autoAgentMode,
     preserveSessionSummary,
@@ -125,6 +128,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
     setMcpEnabled,
     setMode,
     setThinking,
+    setAgentId,
     setAutoAgentMode,
     setPreserveSessionSummary,
     setLinkedSessionEntryId,
@@ -169,6 +173,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
       mcpEnabled,
       mode,
       thinking,
+      agentId,
       agentMode: effectiveAgentMode,
       autoAgentMode,
       preserveSessionSummary,
@@ -185,7 +190,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
       if (isChatTileRuntimeStateDisposed(tileId)) return
       setChatTileRuntimeState(tileId, latestStateRef.current)
     }
-  }, [tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming])
+  }, [tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, agentId, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming])
 
   useEffect(() => {
     reviveChatTileRuntimeState(tileId)
@@ -231,6 +236,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
       if (typeof saved.mcpEnabled === 'boolean') setMcpEnabled(saved.mcpEnabled)
       if (typeof saved.mode === 'string') setMode(resolveProviderModeId(savedProvider, saved.mode))
       if (typeof saved.thinking === 'string') setThinking(saved.thinking)
+      if (typeof saved.agentId === 'string' || saved.agentId === null) setAgentId(saved.agentId ?? null)
       if (typeof saved.autoAgentMode === 'boolean') setAutoAgentMode(saved.autoAgentMode)
       if (typeof saved.preserveSessionSummary === 'boolean') setPreserveSessionSummary(saved.preserveSessionSummary)
       if (typeof saved.linkedSessionEntryId === 'string' || saved.linkedSessionEntryId === null) setLinkedSessionEntryId(saved.linkedSessionEntryId ?? null)
@@ -329,7 +335,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
         persistTimerRef.current = null
       }
     }
-  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, persistLatestState])
+  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, agentId, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, persistLatestState])
 
   useEffect(() => {
     const handleBeforeUnload = (): void => {

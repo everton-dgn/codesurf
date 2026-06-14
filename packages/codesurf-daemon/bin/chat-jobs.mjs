@@ -566,15 +566,23 @@ function buildMemoryContextInput(contextBuckets, instructionPrompt) {
   return describeContextBucketsForTool(contextBuckets, instructionPrompt).input
 }
 
-function buildClaudeAgentPrompt(peers, asyncExecution, instructionPrompt, skillsPrompt) {
-  const peerPrompt = buildClaudeSystemPrompt(peers)
-  const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
-  return joinPromptSections(peerPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
+// The selected agent definition's persona prompt (AgentMode.systemPrompt). Sits
+// at the front of the assembled system prompt — ahead of memory/skills/async —
+// so the persona frames the turn the same way for every provider. Empty/missing
+// systemPrompt contributes nothing (joinPromptSections drops blank sections).
+function agentPersonaPrompt(request) {
+  return String(request?.agentMode?.systemPrompt ?? '').trim() || undefined
 }
 
-function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPrompt) {
+function buildClaudeAgentPrompt(peers, asyncExecution, instructionPrompt, skillsPrompt, agentPrompt) {
+  const peerPrompt = buildClaudeSystemPrompt(peers)
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
-  const preamble = joinPromptSections(instructionPrompt, skillsPrompt, asyncPrompt)
+  return joinPromptSections(peerPrompt, agentPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
+}
+
+function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPrompt, agentPrompt) {
+  const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
+  const preamble = joinPromptSections(agentPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
 }
 
@@ -1154,13 +1162,27 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       ...(request.sessionId ? { resume: request.sessionId } : {}),
     }
 
-    const systemPrompt = buildClaudeAgentPrompt(request.peers, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    // Agent-definition tools allow-list → restrict the built-in tools the model
+    // may use (null/absent = all default tools). AgentMode.tools names are
+    // already Claude-style (Read/Glob/Grep/…), so they pass through verbatim.
+    // Set it BOTH at the top level (governs when no custom agent is active) AND
+    // on the custom agent definition below — when `options.agent` is set, the
+    // active agent's own `tools` field governs its toolset (SDK AgentDefinition),
+    // so the allow-list must be applied there too or it would be a no-op for any
+    // agent definition that also carries a systemPrompt.
+    const agentToolAllowList = Array.isArray(request.agentMode?.tools) ? request.agentMode.tools : null
+    if (agentToolAllowList) {
+      options.tools = agentToolAllowList
+    }
+
+    const systemPrompt = buildClaudeAgentPrompt(request.peers, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request))
     if (systemPrompt) {
       options.agent = 'contex'
       options.agents = {
         contex: {
           description: 'CodeSurf canvas AI agent with peer context',
           prompt: systemPrompt,
+          ...(agentToolAllowList ? { tools: agentToolAllowList } : {}),
         },
       }
     }
@@ -1276,7 +1298,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     } else {
       codexArgs.push('--sandbox', 'workspace-write')
     }
-    codexArgs.push(buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt))
+    codexArgs.push(buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request)))
 
     const proc = spawn('codex', codexArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1497,14 +1519,14 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       return
     }
 
-    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request))
     const proc = spawn('hermes', buildHermesChatArgs({
       prompt,
       model: request.model,
       provider: request.providerId ?? request.modelProvider ?? request.providerName,
       toolsets: hermesToolsetsForRequest(request),
       resumeSessionId: request.sessionId,
-      ignoreRules: Boolean(instructionPrompt || request.skillsPrompt || request.contextBuckets || request.memoryPrompt),
+      ignoreRules: Boolean(instructionPrompt || request.skillsPrompt || request.contextBuckets || request.memoryPrompt || agentPersonaPrompt(request)),
       bypassPermissions: request.mode === 'bypassPermissions',
     }), {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1563,7 +1585,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       return
     }
 
-    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request))
     const agent = typeof request.agent === 'string'
       ? request.agent
       : typeof request.agentName === 'string'

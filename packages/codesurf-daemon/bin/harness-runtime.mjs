@@ -263,6 +263,22 @@ function promptFromMessage(message) {
 
 // Maps an AI SDK StreamTextResult.fullStream into the daemon event vocabulary.
 // Exported so the self-test can exercise it against a real run.
+// Normalize a tool name for allow-list comparison: lowercase + drop non-alnum.
+// AgentMode.tools uses Claude-style PascalCase (Read, WebSearch); harness
+// builtins are lowercase (read, webSearch). This makes both sides comparable.
+function normalizeToolName(name) {
+  return String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+// Is `toolName` permitted by the agent definition's allow-list? A null/empty
+// list means "no restriction" → everything allowed.
+export function isToolAllowedByAgent(toolName, allowList) {
+  if (!Array.isArray(allowList) || allowList.length === 0) return true
+  const wanted = normalizeToolName(toolName)
+  if (!wanted) return true
+  return allowList.some(entry => normalizeToolName(entry) === wanted)
+}
+
 export async function pumpHarnessStream(stream, jobId, appendEvent) {
   const toolNames = new Map()
   const pendingApprovals = []
@@ -404,21 +420,44 @@ export function createHarnessRunner({ homeDir, createAgent } = {}) {
     const bindTarget = worktree ? worktree.path : (hasWorkspace ? workspaceDir : null)
     if (bindTarget) bindWorkspace(sandboxBaseDir, harness.harnessId, sessionId, bindTarget)
 
+    // Agent-definition tools allow-list (AgentMode.tools; null/absent = all).
+    // The harness has no native built-in allow-list, so enforcement happens in
+    // the approval loop below (deny any tool not on the list). That only bites
+    // when a tool actually pauses for approval, so when a list is present we
+    // force a gated permission mode — otherwise allow-all never pauses and the
+    // list would be a no-op. NOTE (honest limitation): a tool in an auto-approved
+    // category for the active mode (e.g. reads under allow-reads) never pauses,
+    // so an allow-list that *excludes* such a category is not enforced on this
+    // path. Realistic restrictive lists (ask/plan) exclude write/edit/bash —
+    // exactly the tools that DO pause in a gated mode — so those are enforced.
+    const agentToolAllowList = Array.isArray(request.agentMode?.tools) ? request.agentMode.tools : null
+
     // Permission mode → harness gating. Interactive per-tool approval is now
     // wired (see the approval loop below), so gated modes raise real prompts the
     // user answers instead of stalling:
     //   bypassPermissions → allow-all   (no prompts)
     //   acceptEdits       → allow-edits (edits auto-approved; exec asks)
     //   default/plan/…    → allow-reads (reads auto; edits + exec ask)
-    const permissionMode = request.mode === 'bypassPermissions'
+    let permissionMode = request.mode === 'bypassPermissions'
       ? 'allow-all'
       : request.mode === 'acceptEdits'
         ? 'allow-edits'
         : 'allow-reads'
+    if (agentToolAllowList && permissionMode === 'allow-all') {
+      // Downgrade so disallowed tools surface for the approval-loop deny below.
+      permissionMode = 'allow-reads'
+    }
 
-    const instructions = bindTarget
+    // AgentMode.systemPrompt frames the turn for the harness runtime. Prepend it
+    // to the workdir instruction + memory prompt so the persona leads, matching
+    // how the Claude/Codex paths place it ahead of memory/skills.
+    const agentPrompt = String(request.agentMode?.systemPrompt ?? '').trim()
+    const baseInstructions = bindTarget
       ? `${workdirInstruction(bindTarget)}${instructionPrompt ? `\n\n${instructionPrompt}` : ''}`
-      : instructionPrompt
+      : (instructionPrompt || '')
+    const instructions = agentPrompt
+      ? `${agentPrompt}${baseInstructions ? `\n\n${baseInstructions}` : ''}`
+      : baseInstructions
     const agent = makeAgent({
       harness,
       sandbox: new LocalHostSandboxProvider({ baseDir: sandboxBaseDir }),
@@ -453,12 +492,23 @@ export function createHarnessRunner({ homeDir, createAgent } = {}) {
 
         const continuations = []
         for (const ap of pendingApprovals) {
+          const requestedTool = ap.toolCall?.toolName ?? 'tool'
           let decision = 'deny'
-          if (typeof awaitToolPermission === 'function') {
+          if (!isToolAllowedByAgent(requestedTool, agentToolAllowList)) {
+            // Tool is outside the agent definition's allow-list: deny without
+            // prompting the user. This is the real enforcement of AgentMode.tools.
+            decision = 'deny'
+            await appendEvent(job.id, {
+              type: 'tool_summary',
+              toolId: ap.approvalId,
+              toolName: requestedTool,
+              text: `Blocked by agent definition: "${requestedTool}" is not in the allowed tools list.`,
+            })
+          } else if (typeof awaitToolPermission === 'function') {
             try {
               decision = await awaitToolPermission(ap.approvalId, {
                 provider: request.provider,
-                toolName: ap.toolCall?.toolName ?? 'tool',
+                toolName: requestedTool,
                 title: null,
                 description: null,
                 blockedPath: null,

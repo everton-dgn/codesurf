@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
-import type { AppSettings } from '../../../shared/types'
+import type { AppSettings, AgentMode } from '../../../shared/types'
 import type { ChatMessage } from '../../../shared/chat-types'
 import type { SessionEntryHint } from '../../../shared/session-types'
 import { stripCapabilityPrefix } from '../../../shared/nodeTools'
@@ -43,6 +43,8 @@ export interface UseChatTileMessagingOptions {
   model: string
   mode: string
   thinking: string
+  agentId: string | null
+  resolvedAgentMode: AgentMode | null
   sessionId: string | null
   mcpEnabled: boolean
   executionTarget: 'local' | 'cloud'
@@ -129,6 +131,8 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     model,
     mode,
     thinking,
+    agentId,
+    resolvedAgentMode,
     sessionId,
     mcpEnabled,
     executionTarget,
@@ -260,6 +264,7 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
       mcpEnabled: activeMcpEnabled,
       mode: activeMode,
       thinking: activeThinking,
+      agentId: state?.agentId ?? agentId,
       agentMode: state?.agentMode ?? effectiveAgentMode,
       autoAgentMode: state?.autoAgentMode ?? autoAgentMode,
       preserveSessionSummary: linkedSessionEntryId ? true : false,
@@ -322,6 +327,8 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
         providerTransport: activeProviderEntry?.transport ?? null,
         mode: activeMode,
         thinking: activeThinking,
+        agentId: agentId ?? null,
+        agentMode: resolvedAgentMode ?? null,
         workspaceDir,
         mcpEnabled: activeMcpEnabled,
         executionTarget,
