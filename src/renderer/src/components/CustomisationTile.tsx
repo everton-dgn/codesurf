@@ -1247,7 +1247,10 @@ function AgentEditor({ item, modes, onSave, onCancel }: { item: AgentMode; modes
   const fonts = useAppFonts()
   const [draft, setDraft] = useState(item)
   const up = (patch: Partial<AgentMode>) => setDraft(prev => ({ ...prev, ...patch }))
-  const [restrictTools, setRestrictTools] = useState(item.tools !== null)
+  // tools semantics: null/undefined (unset) = unrestricted → checkbox off;
+  // [] = explicit deny-all and [names] = restricted → checkbox on. Loose `!=`
+  // so an absent (undefined) tools field reads as unrestricted, not restricted.
+  const [restrictTools, setRestrictTools] = useState(item.tools != null)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1288,7 +1291,14 @@ function AgentEditor({ item, modes, onSave, onCancel }: { item: AgentMode; modes
           </label>
         </div>
         {restrictTools && (
-          <Input value={(draft.tools ?? []).join(', ')} onChange={v => up({ tools: v.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="Read, Glob, Grep, WebSearch..." />
+          <>
+            <Input value={(draft.tools ?? []).join(', ')} onChange={v => up({ tools: v.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="Read, Glob, Grep, WebSearch..." />
+            {(draft.tools ?? []).length === 0 && (
+              <div style={{ marginTop: 6, fontSize: fonts.secondarySize, color: theme.text.muted }}>
+                Empty list = deny all tools. Uncheck &ldquo;Restrict tools&rdquo; to leave the toolset unrestricted instead.
+              </div>
+            )}
+          </>
         )}
       </Field>
 

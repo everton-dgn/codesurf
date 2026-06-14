@@ -14,6 +14,7 @@ import { CONTEX_HOME } from '../../paths'
 import { buildAsyncExecutionPrompt, buildPeerSystemPrompt } from '../prompt-builders'
 import { buildCodeSurfOutputConvention, joinPromptSections } from '../prompt-conventions'
 import { sanitizeToolOutputText } from '../output-sanitizers'
+import { resolveAgentToolAllowList, codexShouldForceReadOnly } from '../agent-mode-tools'
 import type { ChatRequest, RuntimeChatSessionState } from '../types'
 import {
   log,
@@ -57,10 +58,13 @@ function buildCodexPrompt(
   basePrompt?: string,
   memoryPrompt?: string,
   skillsPrompt?: string,
+  agentPersona?: string,
 ): string {
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
   const outputConvention = buildCodeSurfOutputConvention()
-  const preamble = joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
+  // Persona (AgentMode.systemPrompt) leads the preamble — Codex has no
+  // system-prompt flag, so it rides along ahead of memory/skills in the prompt.
+  const preamble = joinPromptSections(basePrompt, agentPersona, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
 }
 
@@ -350,7 +354,14 @@ export function chatCodex(req: ChatRequest): void {
   // multi-turn context is preserved. The flags (`--json`, `--model`,
   // sandbox, `--ignore-user-config`, `-C`) are identical for both paths
   // and are accepted by the `resume` subcommand too.
-  const promptText = buildCodexPrompt(lastUserMsg.content, req.asyncExecution, peerPrompt, req.memoryPrompt, req.skillsPrompt)
+  const agentPersona = req.agentMode?.systemPrompt?.trim() || undefined
+  const promptText = buildCodexPrompt(lastUserMsg.content, req.asyncExecution, peerPrompt, req.memoryPrompt, req.skillsPrompt, agentPersona)
+
+  // AgentMode.tools allow-list → Codex sandbox. Codex's CLI has no per-tool
+  // allow-list, so the sandbox (read-only vs workspace-write) is the only real
+  // toolset lever. When the allow-list grants no write-capable tool, force
+  // read-only so the agent definition's restriction is actually enforced.
+  const forceReadOnly = codexShouldForceReadOnly(resolveAgentToolAllowList(req.agentMode))
 
   const args: string[] = ['exec']
   if (resumeThreadId) {
@@ -359,7 +370,10 @@ export function chatCodex(req: ChatRequest): void {
   }
   args.push('--json', '--model', req.model)
 
-  if (codexMode === 'full-access') {
+  if (forceReadOnly) {
+    // Allow-list excludes all write/exec tools → read-only regardless of mode.
+    args.push('--sandbox', 'read-only')
+  } else if (codexMode === 'full-access') {
     args.push('--dangerously-bypass-approvals-and-sandbox')
   } else if (codexMode === 'auto') {
     args.push('--full-auto')

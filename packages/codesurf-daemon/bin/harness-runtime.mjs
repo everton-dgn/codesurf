@@ -29,6 +29,12 @@ import {
   applyPaths,
   removeWorktree,
 } from './harness-worktree.mjs'
+import { isToolAllowedByAgent, resolveAgentToolAllowList } from './agent-mode-tools.mjs'
+
+// Re-exported so existing importers (test/daemon/chat-jobs-agent-mode.test.mjs)
+// keep resolving `isToolAllowedByAgent` from here. Source of truth and the
+// null/[]/names semantics live in agent-mode-tools.mjs.
+export { isToolAllowedByAgent } from './agent-mode-tools.mjs'
 
 export const HARNESS_SUPPORTED_PROVIDERS = new Set(['claude', 'codex', 'pi'])
 
@@ -263,22 +269,6 @@ function promptFromMessage(message) {
 
 // Maps an AI SDK StreamTextResult.fullStream into the daemon event vocabulary.
 // Exported so the self-test can exercise it against a real run.
-// Normalize a tool name for allow-list comparison: lowercase + drop non-alnum.
-// AgentMode.tools uses Claude-style PascalCase (Read, WebSearch); harness
-// builtins are lowercase (read, webSearch). This makes both sides comparable.
-function normalizeToolName(name) {
-  return String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
-}
-
-// Is `toolName` permitted by the agent definition's allow-list? A null/empty
-// list means "no restriction" → everything allowed.
-export function isToolAllowedByAgent(toolName, allowList) {
-  if (!Array.isArray(allowList) || allowList.length === 0) return true
-  const wanted = normalizeToolName(toolName)
-  if (!wanted) return true
-  return allowList.some(entry => normalizeToolName(entry) === wanted)
-}
-
 export async function pumpHarnessStream(stream, jobId, appendEvent) {
   const toolNames = new Map()
   const pendingApprovals = []
@@ -420,21 +410,33 @@ export function createHarnessRunner({ homeDir, createAgent } = {}) {
     const bindTarget = worktree ? worktree.path : (hasWorkspace ? workspaceDir : null)
     if (bindTarget) bindWorkspace(sandboxBaseDir, harness.harnessId, sessionId, bindTarget)
 
-    // Agent-definition tools allow-list (AgentMode.tools; null/absent = all).
-    // The harness has no native built-in allow-list, so enforcement happens in
-    // the approval loop below (deny any tool not on the list). That only bites
-    // when a tool actually pauses for approval, so when a list is present we
-    // force a gated permission mode — otherwise allow-all never pauses and the
-    // list would be a no-op. NOTE (honest limitation): a tool in an auto-approved
-    // category for the active mode (e.g. reads under allow-reads) never pauses,
-    // so an allow-list that *excludes* such a category is not enforced on this
-    // path. Realistic restrictive lists (ask/plan) exclude write/edit/bash —
-    // exactly the tools that DO pause in a gated mode — so those are enforced.
-    const agentToolAllowList = Array.isArray(request.agentMode?.tools) ? request.agentMode.tools : null
+    // Agent-definition tools allow-list (AgentMode.tools).
+    //   null/absent → unrestricted     []  → deny-all     [names] → restricted
+    //
+    // ENFORCEMENT BOUNDARY (honest limitation, see PR #8 description):
+    // The @ai-sdk/harness adapters (claude-code/codex) expose only three
+    // permission modes for their *built-in* tools — allow-reads | allow-edits |
+    // allow-all — and there is NO host hook that fires BEFORE the adapter's own
+    // auto-approve decision for a built-in. The adapter's `toolApproval` config
+    // can deny a tool at dispatch, but ONLY for custom *host-defined* tools, not
+    // the adapter's native Read/Write/Bash. So a built-in that the active mode
+    // auto-approves never emits an interceptable approval request, and the host
+    // cannot stop it. We therefore enforce at the EARLIEST point the harness
+    // allows — the approval loop below denies any pausing tool not on the list —
+    // and MINIMISE the auto-approved set by forcing the most restrictive gated
+    // mode (allow-reads) whenever a list is present (downgrading allow-all AND
+    // allow-edits). That makes every write/edit/exec tool enforceable.
+    // RESIDUAL GAP: reads are auto-approved under allow-reads (the strictest
+    // mode available), so an allow-list that *excludes* Read cannot block reads
+    // without an upstream harness change (a stricter "ask-all" mode, or routing
+    // built-ins through host-defined tools). Tradeoff of the downgrade: an
+    // *allowed* Write/Edit now surfaces an approval prompt instead of being
+    // auto-approved under acceptEdits.
+    const agentToolAllowList = resolveAgentToolAllowList(request.agentMode)
 
-    // Permission mode → harness gating. Interactive per-tool approval is now
-    // wired (see the approval loop below), so gated modes raise real prompts the
-    // user answers instead of stalling:
+    // Permission mode → harness gating. Interactive per-tool approval is wired
+    // (see the approval loop below), so gated modes raise real prompts the user
+    // answers instead of stalling:
     //   bypassPermissions → allow-all   (no prompts)
     //   acceptEdits       → allow-edits (edits auto-approved; exec asks)
     //   default/plan/…    → allow-reads (reads auto; edits + exec ask)
@@ -443,8 +445,10 @@ export function createHarnessRunner({ homeDir, createAgent } = {}) {
       : request.mode === 'acceptEdits'
         ? 'allow-edits'
         : 'allow-reads'
-    if (agentToolAllowList && permissionMode === 'allow-all') {
-      // Downgrade so disallowed tools surface for the approval-loop deny below.
+    if (agentToolAllowList != null && permissionMode !== 'allow-reads') {
+      // A list is present ([] deny-all or [names]): force the strictest gated
+      // mode so the maximum set of tools (everything but reads) surfaces for the
+      // approval-loop deny below. Covers both allow-all and allow-edits.
       permissionMode = 'allow-reads'
     }
 

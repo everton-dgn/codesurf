@@ -4,7 +4,8 @@ import {
   buildHermesChatArgs,
   sanitizeAgentCliDiagnostic,
 } from '../../agents/agent-cli-contracts'
-import { buildCodeSurfOutputConvention } from '../prompt-conventions'
+import { buildCodeSurfOutputConvention, joinPromptSections } from '../prompt-conventions'
+import { resolveAgentToolAllowList, hermesToolsetsFromAllowList } from '../agent-mode-tools'
 import {
   activeProcesses,
   getPreparedMessages,
@@ -66,7 +67,11 @@ export function chatHermes(req: ChatRequest): void {
     'web': 'web,browser',
     'query': '',
   }
-  const toolsets = modeMap[req.mode ?? ''] ?? 'terminal,file,web'
+  // AgentMode.tools allow-list → Hermes toolset categories when present (Hermes
+  // gates by coarse category, not per-tool; null/absent falls back to the mode
+  // mapping; [] yields '' = query-only deny-all).
+  const agentToolsets = hermesToolsetsFromAllowList(resolveAgentToolAllowList(req.agentMode))
+  const toolsets = agentToolsets ?? (modeMap[req.mode ?? ''] ?? 'terminal,file,web')
 
   // Hermes requires the `chat` subcommand for non-interactive prompts.
   // We request NDJSON event streaming via `--stream-json` so tool calls,
@@ -79,9 +84,13 @@ export function chatHermes(req: ChatRequest): void {
   // First-turn injection: Hermes has no system-prompt flag, so the CodeSurf
   // output convention rides along with the first user message. Session
   // history carries it forward on subsequent turns.
+  // Persona (AgentMode.systemPrompt) has no Hermes flag, so — like the output
+  // convention — it rides along on the first user message and the session
+  // history carries it forward on later turns.
+  const agentPersona = req.agentMode?.systemPrompt?.trim() || undefined
   const hermesIsFirstTurn = !existingSessionId
   const hermesPrompt = hermesIsFirstTurn
-    ? `${buildCodeSurfOutputConvention()}\n\n---\n\n${lastUserMsg.content}`
+    ? `${joinPromptSections(agentPersona, buildCodeSurfOutputConvention())}\n\n---\n\n${lastUserMsg.content}`
     : lastUserMsg.content
   const args = buildHermesChatArgs({
     prompt: hermesPrompt,

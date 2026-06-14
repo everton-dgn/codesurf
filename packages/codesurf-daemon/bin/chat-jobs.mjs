@@ -9,6 +9,11 @@ import { promisify } from 'node:util'
 import { buildMemoryPrompt, loadMemoryContext } from './memory-loader.mjs'
 import { buildContextBucketBundle, describeContextBucketsForTool } from './context-buckets.mjs'
 import { applyProjectContextPolicy } from './project-context.mjs'
+import {
+  resolveAgentToolAllowList,
+  codexShouldForceReadOnly,
+  hermesToolsetsFromAllowList,
+} from './agent-mode-tools.mjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -584,6 +589,67 @@ function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPro
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
   const preamble = joinPromptSections(agentPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
+}
+
+// Build the `codex exec` argv for a request. Pure + exported so the daemon test
+// can assert AgentMode.tools constrains the constructed command. Codex's CLI has
+// no per-tool allow-list, so the allow-list maps onto the sandbox (the only real
+// toolset lever): when it grants no write-capable tool, force read-only.
+export function buildCodexExecArgs(request, workspaceDir, instructionPrompt = '') {
+  const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
+  const codexMode = ['default', 'auto', 'read-only', 'full-access'].includes(request.mode)
+    ? request.mode
+    : 'default'
+  const forceReadOnly = codexShouldForceReadOnly(resolveAgentToolAllowList(request.agentMode))
+  const codexArgs = [
+    'exec',
+    '--json',
+    '--model',
+    request.model,
+    '--skip-git-repo-check',
+    ...(workspaceDir ? ['-C', workspaceDir] : []),
+  ]
+  if (forceReadOnly) {
+    // Allow-list excludes all write/exec tools → read-only regardless of mode.
+    codexArgs.push('--sandbox', 'read-only')
+  } else if (codexMode === 'full-access') {
+    codexArgs.push('--dangerously-bypass-approvals-and-sandbox')
+  } else if (codexMode === 'auto') {
+    codexArgs.push('--full-auto')
+  } else if (codexMode === 'read-only') {
+    codexArgs.push('--sandbox', 'read-only')
+  } else {
+    codexArgs.push('--sandbox', 'workspace-write')
+  }
+  codexArgs.push(buildCodexPrompt(
+    lastUserMsg?.content ?? '',
+    request.asyncExecution,
+    instructionPrompt,
+    request.skillsPrompt,
+    agentPersonaPrompt(request),
+  ))
+  return codexArgs
+}
+
+// Resolve the Hermes `--toolsets` value for a request. AgentMode.tools (when
+// present) maps onto Hermes' coarse toolset categories and takes precedence over
+// the explicit toolsets / mode mapping. Pure + exported for the daemon test.
+export function hermesToolsetsForRequest(request) {
+  const fromAllowList = hermesToolsetsFromAllowList(resolveAgentToolAllowList(request.agentMode))
+  if (fromAllowList != null) return fromAllowList
+
+  const explicitToolsets = Array.isArray(request.toolsets)
+    ? request.toolsets.filter(Boolean).join(',')
+    : String(request.toolsets ?? '').trim()
+  if (explicitToolsets) return explicitToolsets
+
+  const modeMap = {
+    full: 'terminal,file,web,browser',
+    terminal: 'terminal,file',
+    web: 'web,browser',
+    query: '',
+  }
+  return modeMap[request.mode ?? ''] ?? 'terminal,file,web'
 }
 
 function pushOpenCodeFlag(args, flag, value) {
@@ -1278,27 +1344,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       return
     }
 
-    const codexMode = ['default', 'auto', 'read-only', 'full-access'].includes(request.mode)
-      ? request.mode
-      : 'default'
-    const codexArgs = [
-      'exec',
-      '--json',
-      '--model',
-      request.model,
-      '--skip-git-repo-check',
-      ...(workspaceDir ? ['-C', workspaceDir] : []),
-    ]
-    if (codexMode === 'full-access') {
-      codexArgs.push('--dangerously-bypass-approvals-and-sandbox')
-    } else if (codexMode === 'auto') {
-      codexArgs.push('--full-auto')
-    } else if (codexMode === 'read-only') {
-      codexArgs.push('--sandbox', 'read-only')
-    } else {
-      codexArgs.push('--sandbox', 'workspace-write')
-    }
-    codexArgs.push(buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request)))
+    const codexArgs = buildCodexExecArgs(request, workspaceDir, instructionPrompt)
 
     const proc = spawn('codex', codexArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1494,21 +1540,6 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       await appendEvent(job.id, { type: 'error', error: `Codex exited with code ${exitCode}` })
     }
     await appendEvent(job.id, { type: 'done' })
-  }
-
-  function hermesToolsetsForRequest(request) {
-    const explicitToolsets = Array.isArray(request.toolsets)
-      ? request.toolsets.filter(Boolean).join(',')
-      : String(request.toolsets ?? '').trim()
-    if (explicitToolsets) return explicitToolsets
-
-    const modeMap = {
-      full: 'terminal,file,web,browser',
-      terminal: 'terminal,file',
-      web: 'web,browser',
-      query: '',
-    }
-    return modeMap[request.mode ?? ''] ?? 'terminal,file,web'
   }
 
   async function runHermesJob(job, request, workspaceDir, instructionPrompt) {

@@ -7,7 +7,7 @@
 //  - isToolAllowedByAgent casing/normalization.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { mkdtemp as mkdtempP, mkdir as mkdirP, rm as rmP } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -16,7 +16,16 @@ import {
   createHarnessRunner,
   isToolAllowedByAgent,
 } from '../../packages/codesurf-daemon/bin/harness-runtime.mjs'
-import { createChatJobManager } from '../../bin/chat-jobs.mjs'
+import {
+  createChatJobManager,
+  buildCodexExecArgs,
+  hermesToolsetsForRequest,
+} from '../../bin/chat-jobs.mjs'
+// Daemon-side AgentMode→tool mapping (Codex sandbox / Hermes toolsets).
+import * as daemonAgentTools from '../../packages/codesurf-daemon/bin/agent-mode-tools.mjs'
+// Runtime providers' shared mapping module (the SAME code chatClaude/chatCodex/
+// chatHermes import). Pure + type-only, so node's type-stripping loads it here.
+import * as runtimeAgentTools from '../../src/main/chat/agent-mode-tools.ts'
 
 const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const TEST_TMP_ROOT = join(ROOT_DIR, '.tmp', 'daemon-tests')
@@ -42,9 +51,14 @@ async function* scriptedStream(parts) {
 
 // ─── isToolAllowedByAgent (pure) ─────────────────────────────────────────────
 
-test('isToolAllowedByAgent: null/empty allow-list permits everything', () => {
+test('isToolAllowedByAgent: null/undefined = unrestricted, [] = explicit deny-all', () => {
+  // null/undefined (unset) → unrestricted.
   assert.equal(isToolAllowedByAgent('Write', null), true)
-  assert.equal(isToolAllowedByAgent('Write', []), true)
+  assert.equal(isToolAllowedByAgent('Write', undefined), true)
+  // [] → explicit deny-all (consistent with the claude SDK's tools:[] and the
+  // harness approval-loop deny). This is the #5 semantic fix.
+  assert.equal(isToolAllowedByAgent('Write', []), false)
+  assert.equal(isToolAllowedByAgent('Read', []), false)
 })
 
 test('isToolAllowedByAgent: matches across PascalCase/lowercase normalization', () => {
@@ -250,4 +264,215 @@ test('claude SDK: no agentMode leaves tools unrestricted', async t => {
 
   await waitForCompletedJob(manager, job.id)
   assert.equal(capturedOptions.tools, undefined)
+})
+
+// ─── harness: allow-edits downgrade + [] deny-all (#3, #5) ────────────────────
+
+test('harness: an allow-list downgrades acceptEdits (allow-edits) to allow-reads', async () => {
+  const captured = {}
+  const home = mkdtempSync(join(tmpdir(), 'codesurf-agentmode-'))
+  const createAgent = opts => {
+    captured.opts = opts
+    return {
+      async createSession(o) { return { sessionId: o?.sessionId ?? 'fake', destroy: async () => {} } },
+      async stream() { return { fullStream: scriptedStream([{ type: 'finish', finishReason: 'stop' }]) } },
+    }
+  }
+  const runner = createHarnessRunner({ homeDir: home, createAgent })
+  // acceptEdits → allow-edits would auto-approve edits; with an allow-list it must
+  // downgrade to allow-reads so an excluded Write/Edit surfaces for the deny.
+  await runner.runHarnessJob(
+    { id: 'downgrade-edits-job' },
+    { provider: 'claude', mode: 'acceptEdits', messages: [{ role: 'user', content: 'hi' }], agentMode: { id: 'r', name: 'r', systemPrompt: '', tools: ['Read'] } },
+    '',
+    '',
+    { appendEvent: async () => {} },
+  )
+  assert.equal(captured.opts.permissionMode, 'allow-reads')
+})
+
+test('harness: tools:[] (deny-all) denies a pausing tool without prompting', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'codesurf-agentmode-'))
+  const events = []
+  const asked = []
+  const awaitToolPermission = async (_id, req) => { asked.push(req.toolName); return 'once' }
+  const createAgent = () => ({
+    async createSession(o) { return { sessionId: o?.sessionId ?? 'fake', destroy: async () => {} } },
+    async stream() {
+      return {
+        fullStream: scriptedStream([
+          { type: 'tool-approval-request', approvalId: 'ap-bash', toolCall: { type: 'tool-call', toolCallId: 'tc-b', toolName: 'bash', input: { command: 'ls' } } },
+        ]),
+        response: Promise.resolve({ messages: [] }),
+      }
+    },
+    async continueStream() {
+      return { fullStream: scriptedStream([{ type: 'finish', finishReason: 'stop' }]), response: Promise.resolve({ messages: [] }) }
+    },
+  })
+  const runner = createHarnessRunner({ homeDir: home, createAgent })
+  await runner.runHarnessJob(
+    { id: 'denyall-job' },
+    { provider: 'claude', mode: 'bypassPermissions', messages: [{ role: 'user', content: 'go' }], agentMode: { id: 'none', name: 'None', systemPrompt: '', tools: [] } },
+    '',
+    '',
+    { appendEvent: async (_j, e) => events.push(e), awaitToolPermission },
+  )
+  // tools:[] = deny-all → bash was auto-denied, the user was never asked.
+  assert.ok(!asked.includes('bash'), 'deny-all must not prompt the user for any tool')
+  assert.ok(events.some(e => e.type === 'tool_permission_resolved' && e.toolName === 'bash' && e.decision === 'deny'))
+})
+
+// ─── daemon Codex: AgentMode.tools → sandbox (#2) ─────────────────────────────
+
+test('daemon Codex: a write-free allow-list forces a read-only sandbox', () => {
+  const base = { provider: 'codex', model: 'gpt-test', mode: 'default', messages: [{ role: 'user', content: 'do it' }] }
+
+  // No agentMode → default mode keeps workspace-write.
+  const plain = buildCodexExecArgs({ ...base }, '/ws')
+  assert.ok(plain.includes('workspace-write'), 'default mode is workspace-write without a restriction')
+  assert.ok(!plain.includes('read-only'))
+
+  // Allow-list with NO write/exec tool → forced read-only.
+  const readOnly = buildCodexExecArgs({ ...base, agentMode: { id: 'ask', name: 'Ask', systemPrompt: '', tools: ['Read', 'Glob', 'Grep'] } }, '/ws')
+  const roIdx = readOnly.indexOf('--sandbox')
+  assert.equal(readOnly[roIdx + 1], 'read-only', 'write-free allow-list must force read-only sandbox')
+  assert.ok(!readOnly.includes('workspace-write'))
+
+  // Allow-list that includes Bash (write-capable) → stays workspace-write.
+  const withBash = buildCodexExecArgs({ ...base, agentMode: { id: 'dev', name: 'Dev', systemPrompt: '', tools: ['Read', 'Bash'] } }, '/ws')
+  assert.ok(withBash.includes('workspace-write'), 'a write-capable tool keeps the writable sandbox')
+
+  // [] = deny-all → also read-only.
+  const denyAll = buildCodexExecArgs({ ...base, agentMode: { id: 'none', name: 'None', systemPrompt: '', tools: [] } }, '/ws')
+  assert.ok(denyAll.includes('read-only'))
+})
+
+test('daemon Codex: AgentMode.systemPrompt is injected into the prompt arg', () => {
+  const args = buildCodexExecArgs({
+    provider: 'codex', model: 'gpt-test', mode: 'default',
+    messages: [{ role: 'user', content: 'hello' }],
+    agentMode: { id: 'z', name: 'Z', systemPrompt: 'CODEX-PERSONA-5512 stay terse.', tools: null },
+  }, '/ws')
+  // The prompt is the final positional arg.
+  assert.ok(args[args.length - 1].includes('CODEX-PERSONA-5512'), 'persona must reach the codex prompt')
+})
+
+// ─── daemon Hermes: AgentMode.tools → toolsets (#2) ───────────────────────────
+
+test('daemon Hermes: AgentMode.tools constrains the toolset categories', () => {
+  // file-only allow-list → file toolset.
+  assert.equal(
+    hermesToolsetsForRequest({ provider: 'hermes', mode: 'full', agentMode: { tools: ['Read', 'Glob'] } }),
+    'file',
+  )
+  // mixed allow-list → canonical terminal,file,web.
+  assert.equal(
+    hermesToolsetsForRequest({ provider: 'hermes', mode: 'query', agentMode: { tools: ['Read', 'Bash', 'WebSearch'] } }),
+    'terminal,file,web',
+  )
+  // [] deny-all → empty toolset (query-only), overriding mode 'full'.
+  assert.equal(
+    hermesToolsetsForRequest({ provider: 'hermes', mode: 'full', agentMode: { tools: [] } }),
+    '',
+  )
+  // No agentMode → falls back to the mode mapping.
+  assert.equal(
+    hermesToolsetsForRequest({ provider: 'hermes', mode: 'full' }),
+    'terminal,file,web,browser',
+  )
+})
+
+// ─── runtime providers: AgentMode mapping (#1) ────────────────────────────────
+// The runtime providers (chatClaude/chatCodex/chatHermes) live in Electron-coupled
+// .ts and can't be launched under node --test, but they all funnel AgentMode
+// through src/main/chat/agent-mode-tools.ts. We exercise that shared module (the
+// real code path) plus assert each provider actually imports & wires it.
+
+test('runtime mapping: claude tools option reflects allow-list (#1)', () => {
+  const { resolveAgentToolAllowList, claudeToolsForAllowList } = runtimeAgentTools
+  // unset → undefined (option left off → SDK default preset)
+  assert.equal(claudeToolsForAllowList(resolveAgentToolAllowList({ tools: null })), undefined)
+  assert.equal(claudeToolsForAllowList(resolveAgentToolAllowList({})), undefined)
+  // [] → deny-all passed through verbatim
+  assert.deepEqual(claudeToolsForAllowList(resolveAgentToolAllowList({ tools: [] })), [])
+  // names → restricted
+  assert.deepEqual(claudeToolsForAllowList(resolveAgentToolAllowList({ tools: ['Read', 'Glob'] })), ['Read', 'Glob'])
+})
+
+test('runtime mapping: codex sandbox + hermes toolsets reflect allow-list (#1)', () => {
+  const { resolveAgentToolAllowList, codexShouldForceReadOnly, hermesToolsetsFromAllowList } = runtimeAgentTools
+  // codex read-only forcing
+  assert.equal(codexShouldForceReadOnly(resolveAgentToolAllowList({ tools: ['Read'] })), true)
+  assert.equal(codexShouldForceReadOnly(resolveAgentToolAllowList({ tools: ['Read', 'Bash'] })), false)
+  assert.equal(codexShouldForceReadOnly(resolveAgentToolAllowList({ tools: null })), false)
+  assert.equal(codexShouldForceReadOnly(resolveAgentToolAllowList({ tools: [] })), true)
+  // hermes toolset categories
+  assert.equal(hermesToolsetsFromAllowList(resolveAgentToolAllowList({ tools: ['Read', 'WebSearch'] })), 'file,web')
+  assert.equal(hermesToolsetsFromAllowList(resolveAgentToolAllowList({ tools: [] })), '')
+  assert.equal(hermesToolsetsFromAllowList(resolveAgentToolAllowList({ tools: null })), null)
+})
+
+test('runtime ↔ daemon mapping agree (drift guard)', () => {
+  const cases = [null, [], ['Read'], ['Read', 'Bash'], ['Read', 'WebSearch'], ['Write', 'Edit']]
+  for (const tools of cases) {
+    const agentMode = { tools }
+    const rt = runtimeAgentTools.resolveAgentToolAllowList(agentMode)
+    const dn = daemonAgentTools.resolveAgentToolAllowList(agentMode)
+    assert.equal(
+      runtimeAgentTools.codexShouldForceReadOnly(rt),
+      daemonAgentTools.codexShouldForceReadOnly(dn),
+      `codex read-only mapping must agree for ${JSON.stringify(tools)}`,
+    )
+    assert.equal(
+      runtimeAgentTools.hermesToolsetsFromAllowList(rt),
+      daemonAgentTools.hermesToolsetsFromAllowList(dn),
+      `hermes toolset mapping must agree for ${JSON.stringify(tools)}`,
+    )
+  }
+})
+
+test('runtime providers import & wire the AgentMode mapping (#1 wiring guard)', () => {
+  const read = rel => readFileSync(join(ROOT_DIR, rel), 'utf8')
+
+  const claude = read('src/main/chat/providers/claude.ts')
+  assert.match(claude, /from '\.\.\/agent-mode-tools'/, 'claude imports the mapping module')
+  assert.match(claude, /options\.tools = agentTools/, 'claude wires AgentMode.tools into options.tools')
+  assert.match(claude, /req\.agentMode\?\.systemPrompt/, 'claude reads AgentMode.systemPrompt')
+
+  const codex = read('src/main/chat/providers/codex.ts')
+  assert.match(codex, /codexShouldForceReadOnly/, 'codex uses the sandbox-downgrade helper')
+  assert.match(codex, /req\.agentMode\?\.systemPrompt/, 'codex reads AgentMode.systemPrompt')
+
+  const hermes = read('src/main/chat/providers/hermes.ts')
+  assert.match(hermes, /hermesToolsetsFromAllowList/, 'hermes derives toolsets from the allow-list')
+  assert.match(hermes, /req\.agentMode\?\.systemPrompt/, 'hermes reads AgentMode.systemPrompt')
+})
+
+// ─── renderer: stale-closure deps guard (#4) ──────────────────────────────────
+// The repo has no React/DOM test runner (no vitest/RTL/jsdom) and no eslint
+// config, so a true render-and-resend test or react-hooks/exhaustive-deps lint
+// can't run here. This static guard stands in for exhaustive-deps: it asserts the
+// dispatchMessageContent useCallback dependency array lists both identifiers it
+// reads when building the send payload. Drop either from deps (the #4 regression)
+// and a stale/null agent could be sent — this test fails.
+
+test('renderer: dispatchMessageContent deps include agentId + resolvedAgentMode (#4)', () => {
+  const src = readFileSync(join(ROOT_DIR, 'src/renderer/src/hooks/useChatTileMessaging.ts'), 'utf8')
+
+  const start = src.indexOf('const dispatchMessageContent = useCallback(')
+  assert.ok(start >= 0, 'dispatchMessageContent useCallback must exist')
+  // Slice from the callback start to the next top-level `const ` declaration; the
+  // block then ends at this useCallback's closing `}, [ ...deps ])`.
+  const next = src.indexOf('\n  const ', start + 1)
+  const block = src.slice(start, next > start ? next : undefined)
+  // The dependency array is the final `}, [ ... ]` of the block. `}, [` only
+  // appears as the callback-body close, so lastIndexOf isolates the deps array.
+  const depsOpen = block.lastIndexOf('}, [')
+  assert.ok(depsOpen >= 0, 'must find the useCallback dependency array open')
+  const depsClose = block.lastIndexOf(']')
+  const deps = block.slice(depsOpen + '}, ['.length, depsClose)
+  // The payload sends `agentId` and `resolvedAgentMode`; both must be deps.
+  assert.match(deps, /\bagentId\b/, 'agentId must be in the dependency array')
+  assert.match(deps, /\bresolvedAgentMode\b/, 'resolvedAgentMode must be in the dependency array')
 })

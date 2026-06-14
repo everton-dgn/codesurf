@@ -371,6 +371,7 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     provider, model, mode, thinking, sessionId, mcpEnabled, messages, providerEntryById, currentProviderEntry,
     tileId, workspaceId, workspaceDir, connectedPeers, peerContextRef, executionTarget, cloudHostId, activeCloudHost,
     settings?.execution, settings?.chatProviderModes, peerToolNames, focusComposer, setMessagesSafe, queuedTurns,
+    agentId, resolvedAgentMode,
     effectiveAgentMode, autoAgentMode, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages,
     latestStateRef, persistLatestState, lastJobSequenceRef, resumedJobKeyRef, stickToBottomRef,
     setPreserveSessionSummary, setIsStreaming, setJobId, setJobSequence,
