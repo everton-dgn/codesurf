@@ -125,6 +125,15 @@ export class ExtensionBrokerHost {
       if (!this.deliberateExit) {
         console.error(`${prefix} Crashed unexpectedly (exit code: ${code}). Main process unaffected.`)
         this.ctx?.dispose()
+        // Remove broker-registered ipcMain handlers — they are tracked only in
+        // this.ipcChannels (registered directly via ipcMain.handle, not through
+        // ctx), so ctx.dispose() does NOT clean them. Without this, a child that
+        // registers an IPC handler then crashes leaks the ext:{id}:* channel and
+        // re-activation throws Electron's "second handler" error.
+        for (const ch of this.ipcChannels) {
+          ipcMain.removeHandler(ch)
+        }
+        this.ipcChannels = []
         this.ctx = null
         this.peer = null
         this.child = null

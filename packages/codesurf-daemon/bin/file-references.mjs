@@ -203,6 +203,11 @@ function collectInlineReferences(text, explicitRanges) {
       candidatePath,
       start,
       end: start + candidatePath.length + 1,
+      // Auto-detected from prose, not an explicit @file:/@path: reference. These
+      // are best-effort: a mention that doesn't resolve to a real workspace file
+      // (e.g. an npm spec like @ai-sdk/harness@canary) is left as literal text,
+      // never a fatal error.
+      heuristic: true,
     })
   }
 
@@ -296,7 +301,11 @@ async function loadWorkspaceReference(reference, workspaceRoot, maxBytesPerFile)
     }
   } catch (error) {
     if (error?.code === 'ENOENT' && handle == null) {
-      if (isAttachment) return null
+      // Auto-detected inline @mentions (and attachments) are non-fatal when the
+      // path simply doesn't exist — e.g. an npm spec like @ai-sdk/harness@canary
+      // is left in the prompt as literal text instead of erroring. Security and
+      // integrity failures (escapes / outside-root) still throw below.
+      if (isAttachment || reference.heuristic) return null
       throw new Error(`File reference ${reference.source} was not found in the workspace`)
     }
     if (error?.code === 'EISDIR') {

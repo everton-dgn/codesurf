@@ -742,6 +742,18 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
   let activeJobCount = 0
   const jobQueue = [] // { live, request, workspaceDir }
 
+  // Harness backend (@ai-sdk/harness) is opt-in per request and loaded lazily so
+  // its ai@7-canary dependency graph never enters the daemon process unless a
+  // harness job is actually requested. Existing provider paths are unaffected.
+  const HARNESS_PROVIDERS = new Set(['claude', 'codex', 'pi'])
+  let harnessRunnerPromise = null
+  function getHarnessRunner() {
+    if (!harnessRunnerPromise) {
+      harnessRunnerPromise = import('./harness-runtime.mjs').then(m => m.createHarnessRunner({ homeDir }))
+    }
+    return harnessRunnerPromise
+  }
+
   const liveJobs = new Map()
   const subscribers = new Map()
   const sessionPermissionGrants = new Map()
@@ -1704,7 +1716,14 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         })
       }
 
-      if (request.provider === 'claude') {
+      if (request.useHarness === true && HARNESS_PROVIDERS.has(request.provider)) {
+        const { runHarnessJob } = await getHarnessRunner()
+        await runHarnessJob(job, request, workspaceDir, instructionPrompt, {
+          appendEvent,
+          createCheckpoint: (toolName, filePaths) => createDaemonCheckpoint(job, request, toolName, filePaths),
+          awaitToolPermission: (toolUseID, permissionRequest) => awaitToolPermissionAnswer(job, toolUseID, permissionRequest),
+        })
+      } else if (request.provider === 'claude') {
         await runClaudeJob(job, request, workspaceDir, instructionPrompt)
       } else if (request.provider === 'codex') {
         await runCodexJob(job, request, workspaceDir, instructionPrompt)
