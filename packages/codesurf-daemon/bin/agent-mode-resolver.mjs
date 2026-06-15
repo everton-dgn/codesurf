@@ -147,3 +147,40 @@ export async function resolveAuthoritativeAgentMode(opts) {
   if (!resolved) return { ok: false, error: AGENT_MODE_RESOLUTION_DENIED_ERROR }
   return { ok: true, agentMode: resolved }
 }
+
+// READ-ONLY persona listing for the `/personas/list` route + the `codesurf chat
+// --list-personas` CLI. Reuses overlayPersonas (built-ins + agents.json overlay,
+// `discovered-*` scan results dropped) so the listed set CANNOT drift from what
+// resolveAuthoritativeAgentMode applies.
+//
+// DELIBERATE list-vs-resolution divergence: this listing falls back to BUILT-INS
+// when agents.json is missing/unreadable/corrupt, whereas resolveAuthoritativeAgentMode
+// FAILS CLOSED for a present-but-corrupt file (a corrupt file could mask a stricter
+// override). The list is advisory UX; resolution at start is the authoritative,
+// fail-closed gate. So a user may see a built-in here, select it, and still have
+// the launch refused if the on-disk file is corrupt — that is intended.
+export async function listPersonas(opts) {
+  let root = null
+  try {
+    root = await opts.resolveWorkspaceRoot()
+  } catch {
+    root = null
+  }
+  if (!root) return overlayPersonas(null)
+
+  let raw
+  try {
+    raw = await fs.readFile(agentsJsonPath(root), 'utf8')
+  } catch {
+    return overlayPersonas(null)
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return overlayPersonas(null)
+  }
+  // overlayPersonas treats a non-array as "built-ins unchanged".
+  return overlayPersonas(parsed)
+}

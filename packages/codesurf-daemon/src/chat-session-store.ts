@@ -7,6 +7,9 @@ export interface ChatCliSession {
   provider: string
   model: string
   workspaceDir: string
+  /** Selected Persona id ('' = no persona). Part of the identity so resume never
+   *  crosses a persona change. */
+  agentId: string
   sessionId: string | null
   jobId: string | null
   lastSequence: number
@@ -23,23 +26,28 @@ export interface ChatCliSessionIdentity {
   provider: string
   model: string
   workspaceDir: string
+  /** Selected Persona id ('' = no persona). */
+  agentId?: string | null
 }
 
 export function chatCliSessionStorePath(homeDir: string): string {
   return join(homeDir, 'chat-cli', 'sessions.json')
 }
 
-export function normalizeChatCliSessionIdentity(identity: ChatCliSessionIdentity): ChatCliSessionIdentity {
+export function normalizeChatCliSessionIdentity(
+  identity: ChatCliSessionIdentity,
+): { provider: string; model: string; workspaceDir: string; agentId: string } {
   const provider = String(identity.provider ?? '').trim()
   const model = String(identity.model ?? '').trim()
   const workspaceDir = resolve(String(identity.workspaceDir ?? '').trim() || process.cwd())
-  return { provider, model, workspaceDir }
+  const agentId = String(identity.agentId ?? '').trim()
+  return { provider, model, workspaceDir, agentId }
 }
 
 export function chatCliSessionKey(identity: ChatCliSessionIdentity): string {
   const normalized = normalizeChatCliSessionIdentity(identity)
   return createHash('sha256')
-    .update(`${normalized.provider}\0${normalized.model}\0${normalized.workspaceDir}`)
+    .update(`${normalized.provider}\0${normalized.model}\0${normalized.workspaceDir}\0${normalized.agentId}`)
     .digest('hex')
     .slice(0, 24)
 }
@@ -57,6 +65,7 @@ function normalizeSession(value: unknown): ChatCliSession | null {
     provider,
     model,
     workspaceDir: resolve(workspaceDir),
+    agentId: typeof candidate.agentId === 'string' ? candidate.agentId.trim() : '',
     sessionId: typeof candidate.sessionId === 'string' && candidate.sessionId.trim() ? candidate.sessionId.trim() : null,
     jobId: typeof candidate.jobId === 'string' && candidate.jobId.trim() ? candidate.jobId.trim() : null,
     lastSequence: Number.isFinite(candidate.lastSequence) ? Math.max(0, Number(candidate.lastSequence)) : 0,
@@ -95,9 +104,10 @@ export function readChatCliSession(homeDir: string, identity: ChatCliSessionIden
   return readChatCliSessionStore(homeDir).sessions[key] ?? null
 }
 
-export function upsertChatCliSession(homeDir: string, session: Omit<ChatCliSession, 'key' | 'updatedAt'> & {
+export function upsertChatCliSession(homeDir: string, session: Omit<ChatCliSession, 'key' | 'updatedAt' | 'agentId'> & {
   key?: string
   updatedAt?: string
+  agentId?: string | null
 }): ChatCliSession {
   const identity = normalizeChatCliSessionIdentity(session)
   const key = session.key ?? chatCliSessionKey(identity)
@@ -106,6 +116,7 @@ export function upsertChatCliSession(homeDir: string, session: Omit<ChatCliSessi
     provider: identity.provider,
     model: identity.model,
     workspaceDir: identity.workspaceDir,
+    agentId: identity.agentId,
     sessionId: typeof session.sessionId === 'string' && session.sessionId.trim() ? session.sessionId.trim() : null,
     jobId: typeof session.jobId === 'string' && session.jobId.trim() ? session.jobId.trim() : null,
     lastSequence: Number.isFinite(session.lastSequence) ? Math.max(0, Number(session.lastSequence)) : 0,
