@@ -4,6 +4,7 @@ import { useAppFonts } from '../FontContext'
 import type { PromptTemplate, PromptField, SkillDefinition, Persona } from '../../../shared/types'
 import { ChatMarkdown } from './shared/streamdown-utils'
 import { DEFAULT_PERSONAS as DEFAULT_MODES, AGENT_COLORS, AGENT_ICONS } from '../config/agentModes'
+import { useChatTileWorkspaceSkills } from '../hooks/useChatTileWorkspaceSkills'
 
 type Tab = 'prompts' | 'skills' | 'tools' | 'agents'
 
@@ -794,6 +795,12 @@ function SkillEditor({ item, onSave, onCancel }: { item: SkillDefinition; onSave
       <Field label="Name"><Input value={draft.name} onChange={v => up({ name: v })} placeholder="Skill name" /></Field>
       <Field label="Description"><Input value={draft.description} onChange={v => up({ description: v })} placeholder="What does this skill do?" /></Field>
       <Field label="Command"><Input value={draft.command ?? ''} onChange={v => up({ command: v })} placeholder="e.g. my-skill" /></Field>
+      <Field label="Required Model">
+        <Input value={draft.requiredModel ?? ''} onChange={v => up({ requiredModel: v.trim() || undefined })} placeholder="e.g. claude-opus-4-8 — pins the composer model when a persona links this skill" />
+      </Field>
+      <Field label="Required Provider">
+        <Input value={draft.requiredProvider ?? ''} onChange={v => up({ requiredProvider: v.trim() || undefined })} placeholder="optional — e.g. claude, codex (pins alongside the model)" />
+      </Field>
       <Field label="Content (Markdown)"><Input value={draft.content} onChange={v => up({ content: v })} placeholder="# Skill content..." multiline mono rows={12} /></Field>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 8 }}>
         <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: 6, border: `1px solid ${theme.border.default}`, background: theme.surface.panelElevated, color: theme.text.muted, fontSize: fonts.secondarySize, cursor: 'pointer' }}>Cancel</button>
@@ -1203,7 +1210,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
     scanDirs()
   }, [workspacePath, locationText])
 
-  if (editing) return <AgentEditor item={editing} modes={items} onSave={handleSave} onCancel={() => setEditing(null)} />
+  if (editing) return <AgentEditor item={editing} modes={items} workspacePath={workspacePath} onSave={handleSave} onCancel={() => setEditing(null)} />
   if (locationsOpen) return (
     <LocationsPanel
       title="Persona"
@@ -1242,11 +1249,21 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
   )
 }
 
-function AgentEditor({ item, modes, onSave, onCancel }: { item: Persona; modes: Persona[]; onSave: (m: Persona) => void; onCancel: () => void }): JSX.Element {
+function AgentEditor({ item, modes, workspacePath, onSave, onCancel }: { item: Persona; modes: Persona[]; workspacePath: string; onSave: (m: Persona) => void; onCancel: () => void }): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
   const [draft, setDraft] = useState(item)
   const up = (patch: Partial<Persona>) => setDraft(prev => ({ ...prev, ...patch }))
+  // Discovered + authored skills for the link picker. Linked skills are stored by
+  // NAME (stable across machines; discovered ids are path-based). A skill carrying a
+  // `requiredModel` HARD-locks the composer model for any persona that links it.
+  const { workspaceSkills } = useChatTileWorkspaceSkills(workspacePath)
+  const linkedSkills = draft.skills ?? []
+  const toggleSkill = (name: string) => up({
+    skills: linkedSkills.includes(name)
+      ? linkedSkills.filter(s => s !== name)
+      : [...linkedSkills, name],
+  })
   // tools semantics: null/undefined (unset) = unrestricted → checkbox off;
   // [] = explicit deny-all and [names] = restricted → checkbox on. Loose `!=`
   // so an absent (undefined) tools field reads as unrestricted, not restricted.
@@ -1299,6 +1316,36 @@ function AgentEditor({ item, modes, onSave, onCancel }: { item: Persona; modes: 
               </div>
             )}
           </>
+        )}
+      </Field>
+
+      <Field label="Linked Skills">
+        {workspaceSkills.length === 0 ? (
+          <div style={{ fontSize: fonts.secondarySize, color: theme.text.muted }}>
+            No workspace skills found. Skills that declare a Required Model will pin this persona&rsquo;s model when linked.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 160, overflowY: 'auto' }}>
+            {workspaceSkills.map(skill => {
+              const checked = linkedSkills.includes(skill.name)
+              return (
+                <label key={skill.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: fonts.secondarySize, color: theme.text.secondary, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleSkill(skill.name)} />
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.name}</span>
+                  {skill.requiredModel && (
+                    <span style={{ fontSize: fonts.secondarySize, color: theme.accent.base, border: `1px solid ${theme.border.accent}`, borderRadius: 4, padding: '0 5px', flexShrink: 0 }}>
+                      locks {skill.requiredModel}
+                    </span>
+                  )}
+                </label>
+              )
+            })}
+          </div>
+        )}
+        {linkedSkills.some(name => !workspaceSkills.find(s => s.name === name)) && (
+          <div style={{ marginTop: 6, fontSize: fonts.secondarySize, color: theme.text.muted }}>
+            Linked (not in current workspace): {linkedSkills.filter(name => !workspaceSkills.find(s => s.name === name)).join(', ')}
+          </div>
         )}
       </Field>
 
