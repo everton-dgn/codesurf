@@ -57,6 +57,7 @@ import {
 } from '../chat/providers/claude'
 import { chatCodex } from '../chat/providers/codex'
 import { agentModeUnresolved, AGENT_MODE_UNRESOLVED_ERROR } from '../chat/agent-mode-tools'
+import { resolveAuthoritativeAgentMode } from '../chat/agent-mode-resolver'
 import { chatCsagent } from '../chat/providers/csagent'
 import { chatLocalProxy } from '../chat/providers/local-proxy'
 import type {
@@ -875,6 +876,28 @@ export function registerChatIPC(): void {
       await abortOpenCodeSession(req.cardId)
     }
 
+    // ROOT FIX (server-side authoritative agent resolution). The renderer sends
+    // both `agentId` and a renderer-resolved `agentMode`; a race or a compromised
+    // renderer can ship a NON-null but LOOSER mode than the workspace's agents.json
+    // actually defines, and every downstream guard only rejects a NULL mode — so a
+    // wrong-but-non-null mode slips through. Re-resolve the agentId AUTHORITATIVELY
+    // here from the TRUSTED workspace root (NOT req.workspaceDir, which is renderer
+    // supplied) and OVERRIDE whatever the renderer sent. This is the single
+    // chokepoint above the runtime-vs-daemon split, so the authoritative mode flows
+    // into both the runtime switch and sendChatToDaemon (incl. remote/cloud, which
+    // cannot re-resolve). Fail closed: an unverifiable selected agent is denied.
+    const authoritativeResolution = await resolveAuthoritativeAgentMode({
+      agentId: req.agentId ?? null,
+      resolveWorkspaceRoot: () =>
+        req.workspaceId ? getWorkspacePathById(req.workspaceId).catch(() => null) : null,
+    })
+    if (!authoritativeResolution.ok) {
+      sendStream(req.cardId, { type: 'error', error: authoritativeResolution.error })
+      sendStream(req.cardId, { type: 'done' })
+      return { ok: false }
+    }
+    const authoritativeAgentMode = authoritativeResolution.agentMode
+
     let daemonHost: ExecutionHostRecord | null = null
     let localDaemonAvailable = false
     try {
@@ -891,6 +914,9 @@ export function registerChatIPC(): void {
 
     const effectiveRequest: ChatRequest = {
       ...req,
+      // Authoritative override: whatever main resolved replaces the renderer's
+      // agentMode for EVERY downstream path (runtime switch + sendChatToDaemon).
+      agentMode: authoritativeAgentMode,
       runMode: requestedRunMode,
       asyncExecution: buildAsyncExecutionContext({
         request: { ...req, runMode: requestedRunMode },

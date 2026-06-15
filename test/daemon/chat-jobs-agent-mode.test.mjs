@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync } from 'node:fs'
-import { mkdtemp as mkdtempP, mkdir as mkdirP, rm as rmP } from 'node:fs/promises'
+import { mkdtemp as mkdtempP, mkdir as mkdirP, rm as rmP, writeFile as writeFileP } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,6 +50,24 @@ import {
   buildCodexSpawnArgs,
   buildClaudeAgentModeOptions,
 } from '../../src/main/chat/providers/agent-mode-payloads.ts'
+// ROOT FIX: the authoritative SEND-time resolver. We import the REAL main-process
+// resolver (production path) so the fail-closed tests exercise actual node:fs
+// reads + parse failures — not an injected throwing loader. The daemon .mjs mirror
+// + the shared .ts data are imported for the drift guard.
+import {
+  resolveAuthoritativeAgentMode as resolveAuthoritativeMain,
+  AGENT_MODE_RESOLUTION_DENIED_ERROR as MAIN_DENIED,
+} from '../../src/main/chat/agent-mode-resolver.ts'
+import {
+  DEFAULT_AGENT_MODES as SHARED_DEFAULT_AGENT_MODES,
+  overlayAgentModes as sharedOverlayAgentModes,
+} from '../../src/shared/agentModes.ts'
+import {
+  resolveAuthoritativeAgentMode as resolveAuthoritativeDaemon,
+  AGENT_MODE_RESOLUTION_DENIED_ERROR as DAEMON_DENIED,
+  DEFAULT_AGENT_MODES as DAEMON_DEFAULT_AGENT_MODES,
+  overlayAgentModes as daemonOverlayAgentModes,
+} from '../../packages/codesurf-daemon/bin/agent-mode-resolver.mjs'
 
 const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const TEST_TMP_ROOT = join(ROOT_DIR, '.tmp', 'daemon-tests')
@@ -990,4 +1008,199 @@ test('renderer: dispatchMessageContent deps include agentId + resolvedAgentMode 
   // The payload sends `agentId` and `resolvedAgentMode`; both must be deps.
   assert.match(deps, /\bagentId\b/, 'agentId must be in the dependency array')
   assert.match(deps, /\bresolvedAgentMode\b/, 'resolvedAgentMode must be in the dependency array')
+})
+
+// ─── ROOT FIX: server-side authoritative agent resolution ─────────────────────
+// The recurring bug class: prior guards only REJECTED a NULL agentMode; they
+// never verified that a NON-null mode is the CORRECT mode for the agentId. So any
+// renderer race (or a compromised renderer) shipping a non-null-but-LOOSER mode
+// passed every guard. The fix re-resolves the agentId AUTHORITATIVELY in main from
+// the TRUSTED workspace root's agents.json and overrides what the renderer sent.
+// These tests exercise the REAL production resolver (node:fs) — not an injected
+// loader — and prove it fails closed on real load/parse failures.
+
+async function writeAgentsJson(root, content) {
+  const dir = join(root, '.contex', 'customisation')
+  await mkdirP(dir, { recursive: true })
+  await writeFileP(join(dir, 'agents.json'), typeof content === 'string' ? content : JSON.stringify(content))
+}
+
+const STRICT_AGENT_OVERRIDE = {
+  id: 'agent', name: 'Agent', description: '', systemPrompt: 'read only',
+  tools: ['Read'], icon: 'robot', color: '#3568ff', isBuiltin: true,
+}
+
+test('resolver PRODUCTION: an override-then-CORRUPTED agents.json fails closed — never the looser built-in (#root-fix, the singled-out test)', async t => {
+  const root = await makeTestTempDir('agent-resolve-corrupt-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+
+  // A REAL stricter override of the unrestricted built-in `agent` exists on disk.
+  await writeAgentsJson(root, [STRICT_AGENT_OVERRIDE])
+  const valid = await resolveAuthoritativeMain({ agentId: 'agent', resolveWorkspaceRoot: () => root })
+  assert.equal(valid.ok, true, 'sanity: a valid override resolves')
+  assert.deepEqual(valid.agentMode.tools, ['Read'], 'sanity: the stricter override tools are used')
+
+  // Now CORRUPT the file (truncated JSON). The override EXISTED — so we must NOT
+  // fall back to the unrestricted built-in `agent` (tools:null). A corrupt file
+  // with no override couldn't distinguish "fell back to built-in" from "failed
+  // closed"; corrupting a file that DID override is what proves no fallback.
+  await writeAgentsJson(root, '[{ "id": "agent", "tools": ["Read"')
+  const corrupt = await resolveAuthoritativeMain({ agentId: 'agent', resolveWorkspaceRoot: () => root })
+  assert.equal(corrupt.ok, false, 'a corrupt agents.json must fail closed, never resolve the unrestricted built-in')
+  assert.equal(corrupt.error, MAIN_DENIED)
+})
+
+test('resolver: parse error never yields DEFAULT_AGENT_MODES (#vector-c)', async t => {
+  const root = await makeTestTempDir('agent-resolve-parse-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  await writeAgentsJson(root, 'not json at all {{{')
+  // Even a built-in id must fail closed: a present-but-unparseable file could be
+  // masking a stricter override of that built-in.
+  const r = await resolveAuthoritativeMain({ agentId: 'ask', resolveWorkspaceRoot: () => root })
+  assert.equal(r.ok, false, 'a parse error must fail closed, not resolve the built-in ask')
+})
+
+test('resolver: a present-but-non-array agents.json fails closed (#vector-c)', async t => {
+  const root = await makeTestTempDir('agent-resolve-nonarray-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  await writeAgentsJson(root, '{"id":"agent"}') // valid JSON, wrong shape
+  const r = await resolveAuthoritativeMain({ agentId: 'agent', resolveWorkspaceRoot: () => root })
+  assert.equal(r.ok, false, 'a non-array agents.json could mask an override → fail closed')
+})
+
+test('resolver: a STRICTER override is dispatched, never a looser default — and the server reads disk, not a renderer seed (#vector-a + #vector-b)', async t => {
+  const root = await makeTestTempDir('agent-resolve-stricter-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  // Workspace overrides the unrestricted built-in `agent` to read-only.
+  await writeAgentsJson(root, [{ ...STRICT_AGENT_OVERRIDE, tools: ['Read', 'Glob', 'Grep'] }])
+
+  // The resolver takes ONLY agentId + a trusted-root thunk — it has no parameter
+  // for a renderer-supplied agentMode/seed, so the (a) empty-modes-first-load and
+  // (b) stale-looser-cache races structurally cannot influence it: it re-reads disk
+  // every send and returns the STRICTER override.
+  const r = await resolveAuthoritativeMain({ agentId: 'agent', resolveWorkspaceRoot: () => root })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.agentMode.tools, ['Read', 'Glob', 'Grep'], 'the on-disk stricter override governs')
+  assert.notEqual(r.agentMode.tools, null, 'the looser built-in (tools:null = UNRESTRICTED) must never be dispatched')
+  assert.equal(r.agentMode.systemPrompt, 'read only', 'the override persona is dispatched')
+})
+
+test('resolver: only the TRUSTED root is consulted — a req.workspaceDir spoof cannot redirect resolution (#spoof)', async t => {
+  const trusted = await makeTestTempDir('agent-resolve-trusted-')
+  const spoof = await makeTestTempDir('agent-resolve-spoof-')
+  t.after(async () => {
+    await rmP(trusted, { recursive: true, force: true })
+    await rmP(spoof, { recursive: true, force: true })
+  })
+  // Trusted root = strict; the attacker's spoof dir = permissive (unrestricted).
+  await writeAgentsJson(trusted, [STRICT_AGENT_OVERRIDE])
+  await writeAgentsJson(spoof, [{ ...STRICT_AGENT_OVERRIDE, systemPrompt: '', tools: null }])
+
+  // The resolver's ONLY path source is resolveWorkspaceRoot (the trusted
+  // registry). There is no parameter through which a renderer-supplied workspaceDir
+  // could redirect it, so the permissive spoof file is never read.
+  const r = await resolveAuthoritativeMain({ agentId: 'agent', resolveWorkspaceRoot: () => trusted })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.agentMode.tools, ['Read'], 'the trusted root governs')
+  assert.notEqual(r.agentMode.tools, null, 'the permissive spoof agents.json must never be consulted')
+})
+
+test('resolver: missing agents.json resolves a BUILT-IN id (no regression) but fails closed on a custom id', async t => {
+  const root = await makeTestTempDir('agent-resolve-missing-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  // No agents.json written → genuinely absent (the common fresh-workspace state;
+  // ensureCodeSurfStructure does NOT seed it). Built-ins are the authoritative
+  // truth — there is no override on disk to bypass.
+  const builtin = await resolveAuthoritativeMain({ agentId: 'ask', resolveWorkspaceRoot: () => root })
+  assert.equal(builtin.ok, true, 'a built-in agent is authoritative without a file (no regression)')
+  assert.equal(builtin.agentMode.id, 'ask')
+  assert.deepEqual(builtin.agentMode.tools, ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'])
+  // A custom agentId with no file cannot be confirmed → fail closed.
+  const custom = await resolveAuthoritativeMain({ agentId: 'deny-all-auditor', resolveWorkspaceRoot: () => root })
+  assert.equal(custom.ok, false, 'a custom agentId with no agents.json must fail closed')
+})
+
+test('resolver: a present file lacking the selected id fails closed (built-ins still overlaid)', async t => {
+  const root = await makeTestTempDir('agent-resolve-absent-id-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  await writeAgentsJson(root, [{ id: 'ask', name: 'Ask', description: '', systemPrompt: '', tools: ['Read'], icon: 'help', color: '#56c288', isBuiltin: true }])
+  // Built-ins are overlaid, so agent/ask/plan still resolve from a partial file...
+  assert.equal((await resolveAuthoritativeMain({ agentId: 'plan', resolveWorkspaceRoot: () => root })).ok, true)
+  // ...but an id that is neither built-in nor present fails closed.
+  const ghost = await resolveAuthoritativeMain({ agentId: 'ghost', resolveWorkspaceRoot: () => root })
+  assert.equal(ghost.ok, false, 'an unknown id in a present file fails closed')
+})
+
+test('resolver: no agentId selected resolves to null (unrestricted-by-design), no disk read; no trusted root fails closed', async () => {
+  // No selected agent → null mode (matches the "None" UI state); must NOT touch disk.
+  const none = await resolveAuthoritativeMain({ agentId: null, resolveWorkspaceRoot: () => { throw new Error('must not read disk when no agent is selected') } })
+  assert.equal(none.ok, true)
+  assert.equal(none.agentMode, null)
+  // A selected agent with no resolvable trusted root cannot be confirmed → fail closed.
+  const noRoot = await resolveAuthoritativeMain({ agentId: 'ask', resolveWorkspaceRoot: () => null })
+  assert.equal(noRoot.ok, false, 'a selected agent with no trusted root fails closed')
+})
+
+test('agent-mode-resolver drift guard: shared .ts data + daemon .mjs data + resolution all agree', async t => {
+  // (1) The built-in DATA must be byte-identical — the daemon copy is now
+  // security-load-bearing (it re-resolves locally), so a silent drift (e.g. the
+  // daemon's `ask` carrying different tools) would make the two paths enforce
+  // differently.
+  assert.deepEqual(DAEMON_DEFAULT_AGENT_MODES, SHARED_DEFAULT_AGENT_MODES, 'daemon DEFAULT_AGENT_MODES must match the shared constant')
+  assert.equal(DAEMON_DENIED, MAIN_DENIED, 'the denied-error string must match across the resolvers')
+
+  // (2) The pure overlay must agree on representative inputs.
+  const overlayCases = [null, 42, [], [{ id: 'agent', tools: ['Read'] }], [{ id: 'discovered-x', tools: [] }], [{ id: 'new', tools: ['Bash'] }]]
+  for (const c of overlayCases) {
+    assert.deepEqual(daemonOverlayAgentModes(c), sharedOverlayAgentModes(c), `overlay must agree for ${JSON.stringify(c)}`)
+  }
+
+  // (3) The two RESOLVERS (main .ts + daemon .mjs) must produce identical results
+  // against the SAME real fixtures, covering ENOENT / valid override / unknown id /
+  // corrupt.
+  const root = await makeTestTempDir('agent-resolve-drift-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  const agree = async (agentId, label) => {
+    const m = await resolveAuthoritativeMain({ agentId, resolveWorkspaceRoot: () => root })
+    const d = await resolveAuthoritativeDaemon({ agentId, resolveWorkspaceRoot: () => root })
+    assert.deepEqual(m, d, `main + daemon resolvers must agree: ${label}`)
+    return m
+  }
+  // ENOENT (no file yet)
+  await agree('ask', 'ENOENT built-in')
+  await agree('custom-x', 'ENOENT custom')
+  // valid override present
+  await writeAgentsJson(root, [STRICT_AGENT_OVERRIDE])
+  await agree('agent', 'valid override')
+  await agree('ghost', 'present file, unknown id')
+  // corrupt
+  await writeAgentsJson(root, '[broken json')
+  const corrupt = await agree('agent', 'corrupt → fail closed')
+  assert.equal(corrupt.ok, false)
+})
+
+test('chat:send wires authoritative resolution as a chokepoint above the runtime/daemon split (#root-fix wiring)', () => {
+  const src = readFileSync(join(ROOT_DIR, 'src/main/ipc/chat.ts'), 'utf8')
+  const callIdx = src.indexOf('resolveAuthoritativeAgentMode({')
+  assert.ok(callIdx >= 0, 'chat:send must call resolveAuthoritativeAgentMode')
+  const failIdx = src.indexOf('if (!authoritativeResolution.ok)')
+  assert.ok(failIdx > callIdx, 'must fail closed when resolution is not ok')
+  assert.match(src, /agentMode:\s*authoritativeAgentMode/, 'effectiveRequest must override agentMode with the authoritative value')
+  // Must precede BOTH dispatch paths (daemon + runtime switch) so both are covered.
+  const daemonIdx = src.indexOf('return await sendChatToDaemon(')
+  const switchIdx = src.indexOf('switch (requestWithFileReferences.provider)')
+  assert.ok(daemonIdx > callIdx && switchIdx > callIdx, 'resolution must be above the runtime/daemon split')
+  // Trusted root only — never req.workspaceDir (the renderer-supplied spoof vector).
+  const block = src.slice(callIdx, failIdx)
+  assert.match(block, /getWorkspacePathById\(/, 'must resolve the trusted root via getWorkspacePathById')
+  assert.doesNotMatch(block, /req\.workspaceDir/, 'must NOT consult req.workspaceDir for resolution')
+})
+
+test('daemon runJob adds gated defense-in-depth re-resolution (#root-fix daemon)', () => {
+  const src = readFileSync(join(ROOT_DIR, 'packages/codesurf-daemon/bin/chat-jobs.mjs'), 'utf8')
+  assert.match(src, /resolveAuthoritativeAgentMode\(/, 'runJob must re-resolve authoritatively (defense in depth)')
+  // Gated on a PRESENT local agents.json so the cloud (no .contex) trusts main's
+  // shipped value rather than failing closed on a custom id.
+  assert.match(src, /existsSync\(join\(workspaceDir, '\.contex', 'customisation', 'agents\.json'\)\)/, 'must gate re-resolution on a present local agents.json')
+  assert.match(src, /request = \{ \.\.\.request, agentMode: authoritative\.agentMode \}/, 'must override request.agentMode with the re-resolved value')
 })

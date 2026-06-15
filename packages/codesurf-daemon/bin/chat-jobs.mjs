@@ -17,6 +17,7 @@ import {
   agentModeUnresolved,
   AGENT_MODE_UNRESOLVED_ERROR,
 } from './agent-mode-tools.mjs'
+import { resolveAuthoritativeAgentMode } from './agent-mode-resolver.mjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -1728,6 +1729,30 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         await appendEvent(job.id, { type: 'error', error: AGENT_MODE_UNRESOLVED_ERROR })
         await appendEvent(job.id, { type: 'done' })
         return
+      }
+
+      // Defense-in-depth (ROOT FIX). Main already resolved the agentId
+      // authoritatively and shipped the agentMode, but the LOCAL daemon shares the
+      // filesystem with main, so when a real agents.json is present we RE-RESOLVE
+      // from the trusted workspaceDir and override — a second, independent
+      // enforcement of the same source of truth. The remote/cloud daemon has no
+      // `.contex` (the gitignored dir is excluded from the clone) → the file is
+      // absent → we trust the agentMode main resolved and shipped (the only
+      // authority the cloud has). Gating on file existence is what keeps cloud
+      // working: re-resolving a custom agentId with no local file would otherwise
+      // fail closed and clobber main's correct value.
+      if (request.agentId && workspaceDir &&
+          existsSync(join(workspaceDir, '.contex', 'customisation', 'agents.json'))) {
+        const authoritative = await resolveAuthoritativeAgentMode({
+          agentId: request.agentId,
+          resolveWorkspaceRoot: () => workspaceDir,
+        })
+        if (!authoritative.ok) {
+          await appendEvent(job.id, { type: 'error', error: authoritative.error })
+          await appendEvent(job.id, { type: 'done' })
+          return
+        }
+        request = { ...request, agentMode: authoritative.agentMode }
       }
 
       const memoryContext = await loadMemoryContext({

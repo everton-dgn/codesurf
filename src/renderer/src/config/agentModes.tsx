@@ -1,17 +1,22 @@
 import type { JSX } from 'react'
 import type { AgentMode } from '../../../shared/types'
+import { DEFAULT_AGENT_MODES, overlayAgentModes } from '../../../shared/agentModes'
 
 // ─── Shared agent-definition source ──────────────────────────────────────────
-// Single source of truth for the built-in agent modes, their palette, and their
-// icon set. Both CustomisationTile (where agents are authored) and the chat
-// toolbar (where an agent is selected for a turn) read from here so the two
-// surfaces never drift. The persisted store is `${workspace}/.contex/customisation/agents.json`.
+// The built-in agent modes + the parse/overlay logic now live in the
+// dependency-free src/shared/agentModes.ts so the Electron main process (the
+// authoritative SEND-time resolver) and the renderer share ONE source of truth.
+// This file keeps the renderer-only concerns: the icon/palette JSX and the
+// window.electron.fs-backed loader used for DISPLAY. The persisted override store
+// is `${workspace}/.contex/customisation/agents.json`.
+//
+// NOTE: loadAgentModes below is DISPLAY-only now. The SEND path no longer trusts
+// it — main re-resolves the selected agentId authoritatively (see
+// src/main/chat/agent-mode-resolver.ts). Its lenient "missing/parse-error →
+// built-ins" behaviour is therefore safe to keep (it never widens an enforced
+// permission), and changing it would churn the existing load-race tests.
 
-export const DEFAULT_AGENT_MODES: AgentMode[] = [
-  { id: 'agent', name: 'Agent', description: 'Full autonomous access to all tools', systemPrompt: '', tools: null, icon: 'robot', color: '#3568ff', isBuiltin: true },
-  { id: 'ask', name: 'Ask', description: 'Read-only Q&A mode — no file modifications', systemPrompt: 'You are in read-only mode. Do not modify files or run destructive commands.', tools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'], icon: 'help', color: '#56c288', isBuiltin: true },
-  { id: 'plan', name: 'Plan', description: 'Plan without execution — outline steps before acting', systemPrompt: 'Create a detailed plan. Do not execute changes until the user approves.', tools: ['Read', 'Glob', 'Grep', 'WebSearch'], icon: 'map', color: '#f5a623', isBuiltin: true },
-]
+export { DEFAULT_AGENT_MODES }
 
 export const AGENT_COLORS = ['#3568ff', '#56c288', '#f5a623', '#e57399', '#b368c9', '#00acd7', '#ff7b72', '#8f96a0']
 
@@ -45,16 +50,7 @@ export async function loadAgentModes(workspacePath: string): Promise<AgentMode[]
     const stat = await window.electron.fs.stat(file).catch(() => null)
     if (!stat) return [...DEFAULT_AGENT_MODES]
     const raw = await window.electron.fs.readFile(file)
-    const loaded = JSON.parse(raw) as AgentMode[]
-    if (!Array.isArray(loaded)) return [...DEFAULT_AGENT_MODES]
-    const merged = [...DEFAULT_AGENT_MODES]
-    for (const item of loaded) {
-      if (!item || typeof item.id !== 'string' || item.id.startsWith('discovered-')) continue
-      const idx = merged.findIndex(m => m.id === item.id)
-      if (idx >= 0) merged[idx] = { ...merged[idx], ...item }
-      else merged.push(item)
-    }
-    return merged
+    return overlayAgentModes(JSON.parse(raw))
   } catch {
     return [...DEFAULT_AGENT_MODES]
   }
