@@ -255,7 +255,7 @@ export function ChatTileTranscriptColumn({
       </div>
 
       <div style={{ flexShrink: 0, position: 'relative', overflow: 'visible' }}>
-        {showScrollToLatest && (
+        {!terminalActive && showScrollToLatest && (
           <button
             onClick={() => scrollToLatest()}
             title="Jump to latest"
