@@ -4,9 +4,11 @@ import {
   Bot,
   Brain,
   Maximize2,
+  MessageSquare,
   Mic,
   Plus,
   Square,
+  Terminal as TerminalIcon,
 } from 'lucide-react'
 import type { AgentMode, ExecutionHostRecord } from '../../../../shared/types'
 import type { ModeOption, ThinkingOption } from '../../config/providers'
@@ -59,6 +61,63 @@ import type { ActiveChatSurface, PendingAttachment } from './chatTileUtils'
 const NON_SELECTABLE_UI_STYLE = {
   userSelect: 'none' as const,
   WebkitUserSelect: 'none' as const,
+}
+
+/** Segmented [Chat | Terminal] toggle that flips the chat tile's body between
+ *  the transcript and the embedded terminal. The terminal stays mounted once
+ *  opened (see ChatTile) — this only drives which view is visible. */
+function ChatViewToggle({ activeView, onSelectView, theme }: {
+  activeView: 'chat' | 'terminal'
+  onSelectView: (view: 'chat' | 'terminal') => void
+  theme: ReturnType<typeof useTheme>
+}): JSX.Element {
+  const options: Array<{ id: 'chat' | 'terminal'; label: string; icon: React.ReactNode }> = [
+    { id: 'chat', label: 'Chat', icon: <MessageSquare size={12} strokeWidth={2} /> },
+    { id: 'terminal', label: 'Terminal', icon: <TerminalIcon size={12} strokeWidth={2} /> },
+  ]
+  return (
+    <div style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 2,
+      padding: 2,
+      borderRadius: 8,
+      background: theme.surface.panelMuted,
+      ...NON_SELECTABLE_UI_STYLE,
+    }}>
+      {options.map(opt => {
+        const active = activeView === opt.id
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => onSelectView(opt.id)}
+            onMouseDown={e => e.preventDefault()}
+            title={`Show ${opt.label.toLowerCase()}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              appearance: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '3px 9px',
+              borderRadius: 6,
+              fontSize: 11,
+              fontWeight: active ? 600 : 500,
+              lineHeight: 1.2,
+              background: active ? theme.surface.hover : 'transparent',
+              color: active ? theme.chat.text : theme.chat.muted,
+              transition: 'background 0.15s, color 0.15s',
+            }}
+          >
+            <span style={{ display: 'flex', opacity: 0.85 }}>{opt.icon}</span>
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 export interface ChatTileComposerProps {
@@ -197,6 +256,9 @@ export interface ChatTileComposerProps {
   estimatedContextTokens: number
   contextWindowLimit: number
   systemOverheadTokens: number
+
+  activeView: 'chat' | 'terminal'
+  onSelectView: (view: 'chat' | 'terminal') => void
 }
 
 export function ChatTileComposer({
@@ -318,6 +380,8 @@ export function ChatTileComposer({
   estimatedContextTokens,
   contextWindowLimit,
   systemOverheadTokens,
+  activeView,
+  onSelectView,
 }: ChatTileComposerProps): JSX.Element {
   const theme = useTheme()
 
@@ -526,6 +590,25 @@ export function ChatTileComposer({
             )}
           </div>
 
+          <ChatComposerAgentMenu
+            anchorRef={agentMenuRef}
+            showMenu={showAgentMenu}
+            agentId={agentId}
+            agentModes={agentModes}
+            onToggleMenu={() => onToggleMenu('agent')}
+            onSelectAgent={onSelectAgent}
+          />
+
+          <ChatComposerModeMenu
+            anchorRef={modeMenuRef}
+            showMenu={showModeMenu}
+            mode={mode}
+            currentMode={currentMode}
+            modeOptions={modeOptions}
+            onToggleMenu={() => onToggleMenu('mode')}
+            onSelectMode={onSelectMode}
+          />
+
           <div style={{ marginLeft: 'auto' }}>
             <ToolbarBtn
               icon={<Maximize2 size={TOOLBAR_ICON_SIZE - 1} />}
@@ -655,23 +738,10 @@ export function ChatTileComposer({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-          <ChatComposerAgentMenu
-            anchorRef={agentMenuRef}
-            showMenu={showAgentMenu}
-            agentId={agentId}
-            agentModes={agentModes}
-            onToggleMenu={() => onToggleMenu('agent')}
-            onSelectAgent={onSelectAgent}
-          />
-
-          <ChatComposerModeMenu
-            anchorRef={modeMenuRef}
-            showMenu={showModeMenu}
-            mode={mode}
-            currentMode={currentMode}
-            modeOptions={modeOptions}
-            onToggleMenu={() => onToggleMenu('mode')}
-            onSelectMode={onSelectMode}
+          <ChatViewToggle
+            activeView={activeView}
+            onSelectView={onSelectView}
+            theme={theme}
           />
 
           {planTodos && planTodos.length > 0 && (

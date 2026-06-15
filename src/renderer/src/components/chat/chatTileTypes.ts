@@ -2,6 +2,16 @@ import type { ChatMessage } from '../../../../shared/chat-types'
 import type { SessionEntryHint } from '../../../../shared/session-types'
 import type { ActiveChatSurface, PendingAttachment } from './chatTileUtils'
 
+/** Chat tile body view — the transcript or the embedded terminal. */
+export type ChatTileActiveView = 'chat' | 'terminal'
+
+/** Coerce any persisted/unknown value into a valid active view, defaulting to
+ *  'chat'. Shared between core-state init and persistence load so the default
+ *  and validation live in exactly one place. */
+export function normalizeActiveView(value: unknown): ChatTileActiveView {
+  return value === 'terminal' ? 'terminal' : 'chat'
+}
+
 export interface CheckpointRestoreContextValue {
   workspaceId: string | null
   tileId: string
@@ -47,4 +57,7 @@ export interface ChatTilePersistedState {
   cloudHostId?: string | null
   isStreaming: boolean
   executionTarget?: 'local' | 'cloud'
+  /** Which body view the chat tile is showing — the transcript ('chat') or the
+   *  embedded terminal ('terminal'). Defaults to 'chat' when absent. */
+  activeView?: 'chat' | 'terminal'
 }

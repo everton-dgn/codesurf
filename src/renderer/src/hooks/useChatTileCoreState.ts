@@ -18,7 +18,12 @@ import {
   type ActiveChatSurface,
   type PendingAttachment,
 } from '../components/chat/chatTileUtils'
-import type { ChatTilePersistedState, QueuedChatTurn } from '../components/chat/chatTileTypes'
+import {
+  normalizeActiveView,
+  type ChatTileActiveView,
+  type ChatTilePersistedState,
+  type QueuedChatTurn,
+} from '../components/chat/chatTileTypes'
 
 export interface UseChatTileCoreStateOptions {
   tileId: string
@@ -81,6 +86,8 @@ export interface UseChatTileCoreStateResult {
   setPreserveSessionSummary: Dispatch<SetStateAction<boolean>>
   hasEarlierMessages: boolean
   setHasEarlierMessages: Dispatch<SetStateAction<boolean>>
+  activeView: ChatTileActiveView
+  setActiveView: Dispatch<SetStateAction<ChatTileActiveView>>
 
   lastActivityAtRef: MutableRefObject<number>
   toolCollapseTick: number
@@ -197,6 +204,9 @@ export function useChatTileCoreState({
   const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>(
     () => initialRuntimeStateRef.current?.queuedTurns ?? [],
   )
+  const [activeView, setActiveView] = useState<ChatTileActiveView>(
+    () => normalizeActiveView(initialRuntimeStateRef.current?.activeView),
+  )
 
   return {
     initialRuntimeStateRef,
@@ -253,6 +263,8 @@ export function useChatTileCoreState({
     setPreserveSessionSummary,
     hasEarlierMessages,
     setHasEarlierMessages,
+    activeView,
+    setActiveView,
     lastActivityAtRef,
     toolCollapseTick,
     setToolCollapseTick,

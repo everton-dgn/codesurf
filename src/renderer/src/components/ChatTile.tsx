@@ -1,6 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react'
 import type { AppSettings, AgentMode } from '../../../shared/types'
 import { loadAgentModes, getAgentIcon, DEFAULT_AGENT_MODES } from '../config/agentModes'
+import { MONO_DEFAULT } from '../FontContext'
+
+const LazyTerminalTile = React.lazy(() => import('./TerminalTile').then(m => ({ default: m.TerminalTile })))
 
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useAutoSpeak, bargeIn } from '../hooks/useAutoSpeak'
@@ -84,7 +87,7 @@ export {
 
 // --- Component -------------------------------------------------------------------
 
-export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, width: _width, height: _height, reloadToken = 0, settings, onChatModePreferenceChange, isConnected, isAutoConnected, connectedPeers = [] }: Props): JSX.Element {
+export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, width, height, reloadToken = 0, settings, onChatModePreferenceChange, isConnected, isAutoConnected, connectedPeers = [] }: Props): JSX.Element {
   const {
     theme,
     fontSans,
@@ -111,6 +114,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     sessionId, setSessionId, jobId, setJobId, jobSequence, setJobSequence,
     linkedSessionEntryId, setLinkedSessionEntryId, linkedSessionHint, setLinkedSessionHint,
     preserveSessionSummary, setPreserveSessionSummary, hasEarlierMessages, setHasEarlierMessages,
+    activeView, setActiveView,
     lastActivityAtRef, toolCollapseTick, setToolCollapseTick, explodedChipGroups, toggleExplodedChipGroup,
     pendingToolPermissions, setPendingToolPermissions, resolvedToolPermissions, setResolvedToolPermissions,
     handleToolPermissionDecision, toolCompletedAtRef,
@@ -320,12 +324,14 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     jobSequence,
     cloudHostId,
     isStreaming,
+    activeView,
     setMessagesSafe,
     setInput,
     setAttachments,
     setQueuedTurns,
     setOpenChatSurfaces,
     setActiveChatSurfaceId,
+    setActiveView,
     setProvider,
     setModel,
     setExecutionTarget,
@@ -728,6 +734,32 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
 
   const isStartScreen = messages.length === 0 && !isStreaming
 
+  // Embedded terminal: mount it the first time the Terminal tab is opened and
+  // keep it mounted thereafter. TerminalTile unmount fires `terminal:detach`,
+  // which kills the PTY — so we never unmount on tab switch; the transcript
+  // column hides it with layout-preserving CSS instead. The PTY backend is
+  // keyed by tileId, so we derive a deterministic embedded id from the chat id.
+  const [terminalMounted, setTerminalMounted] = useState(activeView === 'terminal')
+  useEffect(() => {
+    if (activeView === 'terminal') setTerminalMounted(true)
+  }, [activeView])
+  // Resolve terminal fonts from settings exactly like App.tsx does for canvas
+  // terminal tiles, so the embedded terminal matches the standalone one.
+  const terminalFontFamily = settings?.terminalFontFamily || settings?.fonts?.mono?.family || MONO_DEFAULT
+  const terminalFontSize = settings?.terminalFontSize || settings?.fonts?.mono?.size || 13
+  const embeddedTerminal = terminalMounted ? (
+    <Suspense fallback={null}>
+      <LazyTerminalTile
+        tileId={`${tileId}-terminal`}
+        workspaceDir={_workspaceDir}
+        width={width}
+        height={height}
+        fontSize={terminalFontSize}
+        fontFamily={terminalFontFamily}
+      />
+    </Suspense>
+  ) : null
+
   const openMiniChat = useCallback(() => {
     if (!workspaceId) return
     void window.electron?.window?.openMiniChat?.({
@@ -851,6 +883,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           flushQueueStateNow(remaining)
           logQueueEvent('delete', { queueId: turnId })
         }}
+        activeView={activeView}
+        embeddedTerminal={embeddedTerminal}
       >
         <ChatTileComposer
           isStartScreen={isStartScreen}
@@ -991,6 +1025,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           estimatedContextTokens={estimatedContextTokens}
           contextWindowLimit={contextWindowLimit}
           systemOverheadTokens={systemOverheadTokens}
+          activeView={activeView}
+          onSelectView={setActiveView}
         />
       </ChatTileTranscriptColumn>
       {isPlanOpen && planTodos && planTodos.length > 0 && (
