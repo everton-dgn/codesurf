@@ -609,6 +609,14 @@ test('renderer: a change-then-send uses the LIVE mode, not the stale state ref (
   assert.equal(resolveActiveChatMode('plan', 'acceptEdits', codexModeIds, 'default'), 'default')
 })
 
+test('renderer: useChatTileMessaging passes the LIVE mode FIRST to resolveActiveChatMode (#2a wiring)', () => {
+  // The resolver is order-sensitive: live mode must be the FIRST argument. Wire
+  // it as resolveActiveChatMode(state?.mode, mode, …) and the stale-send bug
+  // returns silently — this static guard fails if the live `mode` isn't first.
+  const src = readFileSync(join(ROOT_DIR, 'src/renderer/src/hooks/useChatTileMessaging.ts'), 'utf8')
+  assert.match(src, /resolveActiveChatMode\(\s*\n?\s*mode\s*,/, 'live `mode` must be the first arg to resolveActiveChatMode')
+})
+
 // ─── renderer: stale-closure deps guard (#4) ──────────────────────────────────
 // The repo has no React/DOM test runner (no vitest/RTL/jsdom) and no eslint
 // config, so a true render-and-resend test or react-hooks/exhaustive-deps lint
