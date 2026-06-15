@@ -619,6 +619,11 @@ function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPro
 // lives in omnigent-provider.mjs so it can be unit tested without this file's
 // Claude-SDK import. Mirrors how runCodexSdkJob leans on codex-sdk-provider.mjs.
 
+// Per-turn upper bound on a stalled stream/fetch (mirrors the CLI provider's
+// DEFAULT_TIMEOUT_MS). The live SSE tail never closes per turn, so without this
+// a stalled backend would hang the job forever.
+const OMNIGENT_TURN_TIMEOUT_MS = 30 * 60 * 1000
+
 async function omnigentFetchJson(baseUrl, path, apiKey, init = {}) {
   const response = await fetch(omnigentEndpointUrl(baseUrl, path), {
     ...init,
@@ -637,12 +642,15 @@ async function omnigentFetchJson(baseUrl, path, apiKey, init = {}) {
 }
 
 // Best-effort `omni server start`. Idempotent in practice: when a server is
-// already running the CLI reports the live URL rather than erroring.
-async function startLocalOmnigentServer(cli) {
+// already running the CLI reports the live URL rather than erroring. The abort
+// signal is wired into execFile so cancelling the job (or the turn timeout)
+// kills the spawned start child instead of leaking it until its own timeout.
+async function startLocalOmnigentServer(cli, signal) {
   const command = String(cli ?? '').trim() || OMNIGENT_DEFAULT_CLI
   const { stdout = '', stderr = '' } = await execFileAsync(command, ['server', 'start'], {
     encoding: 'utf8',
     timeout: 60_000,
+    ...(signal ? { signal } : {}),
   })
   const combined = `${stdout}${stderr ? `\n${stderr}` : ''}`
   const fromStart = parseOmnigentServerUrl(combined)
@@ -652,12 +660,12 @@ async function startLocalOmnigentServer(cli) {
   return null
 }
 
-async function resolveOmnigentAgentId(modelId, settings, baseUrl, apiKey) {
+async function resolveOmnigentAgentId(modelId, settings, baseUrl, apiKey, signal) {
   const fromModel = decodeOmnigentModelId(modelId)
   if (fromModel) return fromModel
   const configured = String(settings?.agentId ?? '').trim()
   if (configured) return configured
-  const payload = await omnigentFetchJson(baseUrl, '/v1/agents?limit=100&order=asc', apiKey)
+  const payload = await omnigentFetchJson(baseUrl, '/v1/agents?limit=100&order=asc', apiKey, signal ? { signal } : {})
   const rows = Array.isArray(payload)
     ? payload
     : Array.isArray(payload?.data)
@@ -2082,6 +2090,16 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     const abortController = new AbortController()
     job.cancel = () => { try { abortController.abort() } catch {} }
 
+    // Bound the whole turn: the live SSE tail never closes per turn, so a stalled
+    // backend would otherwise hang here forever. A timeout aborts the stream and
+    // every in-flight fetch via the shared controller; timedOut distinguishes it
+    // from a user cancel (cancel is silent, timeout surfaces an error).
+    let timedOut = false
+    const turnTimeout = setTimeout(() => {
+      timedOut = true
+      try { abortController.abort() } catch {}
+    }, OMNIGENT_TURN_TIMEOUT_MS)
+
     // Lazy tool_start: the typed-event table only guarantees output_item.done,
     // so we may first see a tool on .done — emit its start then, keyed (like the
     // result) on call_id so the result block attaches to the call block.
@@ -2167,7 +2185,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       // which only starts the local server when no base URL is set).
       if (settings.autoStart !== false && baseUrl === OMNIGENT_DEFAULT_BASE_URL) {
         try {
-          const started = await startLocalOmnigentServer(OMNIGENT_DEFAULT_CLI)
+          const started = await startLocalOmnigentServer(OMNIGENT_DEFAULT_CLI, abortController.signal)
           if (started) baseUrl = started
         } catch {}
       }
@@ -2176,7 +2194,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       // request.sessionId); a fresh turn creates a new persistent session.
       let sessionId = typeof request.sessionId === 'string' && request.sessionId.trim() ? request.sessionId.trim() : null
       if (!sessionId) {
-        const agentId = await resolveOmnigentAgentId(request.model, settings, baseUrl, apiKey)
+        const agentId = await resolveOmnigentAgentId(request.model, settings, baseUrl, apiKey, abortController.signal)
         const body = {
           agent_id: agentId,
           title: omnigentTitleFromPrompt(lastUserMsg.content ?? ''),
@@ -2213,25 +2231,27 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         signal: abortController.signal,
       })
 
-      // Read the tail and STOP on the terminal response.* event — the stream
-      // does not close or emit [DONE] for a single turn, so waiting for either
-      // would hang until timeout. This is the load-bearing difference from the
-      // codex/hermes runners; mirror the CLI omnigent-provider stream reader.
+      // Read the tail and STOP only on a terminal response.* event — the stream
+      // does not close or emit [DONE] when a single turn completes, so EOF and
+      // [DONE] are NOT success: if either arrives before a terminal event the
+      // turn was truncated, which we surface as an error (not a silent done).
+      // This is the load-bearing difference from the codex/hermes runners.
       const reader = streamResponse.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let terminal = null
+      let sawTerminal = false
       try {
-        while (!terminal) {
+        while (!sawTerminal) {
           const { done, value } = await reader.read()
           if (done) break
           buffer += decoder.decode(value, { stream: true })
           let boundary = buffer.indexOf('\n\n')
+          let streamEnded = false
           while (boundary >= 0) {
             const chunk = buffer.slice(0, boundary)
             buffer = buffer.slice(boundary + 2)
             const { eventName, data } = parseOmnigentSseChunk(chunk)
-            if (data === '[DONE]') { terminal = 'done'; break }
+            if (data === '[DONE]') { streamEnded = true; break }
             if (data) {
               let parsed
               try {
@@ -2241,23 +2261,33 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
               }
               if (parsed && typeof parsed === 'object') {
                 if (eventName && typeof parsed.type !== 'string') parsed.type = eventName
-                terminal = await applyDescriptor(mapOmnigentStreamEvent(parsed))
-                if (terminal) break
+                const result = await applyDescriptor(mapOmnigentStreamEvent(parsed))
+                if (result === 'done' || result === 'error') { sawTerminal = true; break }
               }
             }
             boundary = buffer.indexOf('\n\n')
           }
+          if (streamEnded) break
         }
       } finally {
         try { await reader.cancel() } catch {}
       }
+
+      // EOF / [DONE] reached without a terminal response.* event => truncated.
+      if (!sawTerminal && !abortController.signal.aborted) {
+        await appendEvent(job.id, { type: 'error', error: 'Omnigent stream ended before the turn completed (truncated stream).' })
+      }
     } catch (err) {
-      if (!abortController.signal.aborted) {
+      if (timedOut) {
+        await appendEvent(job.id, { type: 'error', error: `Omnigent turn timed out after ${Math.round(OMNIGENT_TURN_TIMEOUT_MS / 1000)}s.` })
+      } else if (!abortController.signal.aborted) {
         const message = err instanceof Error ? err.message : String(err)
         await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(message) })
       }
     } finally {
-      // Best-effort remote interrupt when the turn was cancelled locally.
+      clearTimeout(turnTimeout)
+      // Best-effort remote interrupt when the turn was aborted locally (user
+      // cancel or the turn timeout) — the turn is still running server-side.
       if (abortController.signal.aborted) {
         const cancelledSessionId = emittedSessionIds.values().next().value
         if (cancelledSessionId) {

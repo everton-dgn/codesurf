@@ -43,18 +43,23 @@ export function decodeOmnigentModelId(modelId) {
   try {
     return decodeURIComponent(encoded)
   } catch {
-    return encoded
+    // Malformed percent-encoding: return null (mirrors the CLI provider) rather
+    // than the raw encoded string, which could become a bogus agent lookup.
+    return null
   }
 }
 
+// Precedence mirrors the CLI provider exactly (id, then session_id, then
+// conversation_id — flat keys first, then the nested `session` object) so the
+// daemon persists the SAME session id the CLI would for a given response.
 export function extractOmnigentSessionId(payload) {
   const record = payload && typeof payload === 'object' ? payload : null
-  for (const key of ['session_id', 'id', 'conversation_id']) {
+  for (const key of ['id', 'session_id', 'conversation_id']) {
     const value = record?.[key]
     if (typeof value === 'string' && value.trim()) return value.trim()
   }
   const nested = record?.session && typeof record.session === 'object' ? record.session : null
-  const nestedId = nested?.session_id ?? nested?.id ?? nested?.conversation_id
+  const nestedId = nested?.id ?? nested?.session_id ?? nested?.conversation_id
   return typeof nestedId === 'string' && nestedId.trim() ? nestedId.trim() : null
 }
 
@@ -135,6 +140,14 @@ export function mapOmnigentStreamEvent(raw) {
     }
     case 'response.reasoning.started':
       return { kind: 'thinking_start' }
+    // The CLI omnigent-provider does not map output_item events, so it is silent
+    // on tool calls. The function_call / function_call_output item shapes below
+    // are taken from the BACKEND source of truth — omnigent/server/schemas.py
+    // (OutputItemDoneEvent docstring, which gives an explicit function_call
+    // example) and omnigent/entities/conversation.py (FunctionCallData: name,
+    // arguments, call_id; FunctionCallOutputData: call_id, output). They have NOT
+    // been exercised against a captured live SSE sample; if behaviour drifts,
+    // re-confirm field names against those classes before changing the mapping.
     case 'response.output_item.added':
     case 'response.output_item.done': {
       const item = event?.item && typeof event.item === 'object' ? event.item : null

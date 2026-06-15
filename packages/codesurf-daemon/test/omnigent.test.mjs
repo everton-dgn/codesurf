@@ -68,12 +68,17 @@ test('decodeOmnigentModelId resolves agent id and treats the fallback row as nul
   assert.equal(decodeOmnigentModelId('omnigent:agent_123'), 'agent_123')
   assert.equal(decodeOmnigentModelId('omnigent:a%20b'), 'a b')
   assert.equal(decodeOmnigentModelId('claude-sonnet-4-6'), null)
+  // Malformed percent-encoding -> null (CLI parity), never the raw encoded string.
+  assert.equal(decodeOmnigentModelId('omnigent:%E0%A4%A'), null)
 })
 
-test('extractOmnigentSessionId pulls the id from common shapes', () => {
+test('extractOmnigentSessionId pulls the id from common shapes with CLI precedence', () => {
   assert.equal(extractOmnigentSessionId({ session_id: 'conv_a' }), 'conv_a')
   assert.equal(extractOmnigentSessionId({ id: 'conv_b' }), 'conv_b')
   assert.equal(extractOmnigentSessionId({ session: { id: 'conv_c' } }), 'conv_c')
+  // id wins over session_id (matches the CLI provider's key order).
+  assert.equal(extractOmnigentSessionId({ id: 'conv_id', session_id: 'conv_sid' }), 'conv_id')
+  assert.equal(extractOmnigentSessionId({ session: { id: 'nested_id', session_id: 'nested_sid' } }), 'nested_id')
   assert.equal(extractOmnigentSessionId({}), null)
 })
 
