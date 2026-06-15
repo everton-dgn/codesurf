@@ -530,7 +530,7 @@ export function ChatTileComposer({
                 active={showProviderMenu}
                 onClick={() => onToggleMenu('provider')}
                 disabled={modelLocked}
-                title={modelLocked ? lockReason : 'Choose the CLI agent (hidden once the conversation starts)'}
+                title={modelLocked ? (lockReason ?? 'Model locked') : 'Choose the CLI agent (hidden once the conversation starts)'}
               />
               {showProviderMenu && (
                 <MenuPortal anchorRef={providerMenuRef}>
@@ -558,7 +558,7 @@ export function ChatTileComposer({
               active={showModelMenu}
               onClick={() => onToggleMenu('model')}
               disabled={modelLocked}
-              title={modelLocked ? lockReason : undefined}
+              title={modelLocked ? (lockReason ?? 'Model locked') : undefined}
             />
             {showModelMenu && (
               <MenuPortal anchorRef={modelMenuRef}>
