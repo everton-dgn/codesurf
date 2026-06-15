@@ -14,6 +14,7 @@ import { createCheckpointStore } from './checkpoints.mjs'
 import { loadMemoryContext } from './memory-loader.mjs'
 import { createSkillsIndex } from './skills-index.mjs'
 import { expandFileReferences } from './file-references.mjs'
+import { listPersonas } from './agent-mode-resolver.mjs'
 import { createDreamingManager, DREAMING_DEFAULTS } from '../vendor/dreaming.mjs'
 
 const HOME = process.env.CODESURF_HOME || join(homedir(), '.codesurf')
@@ -3121,6 +3122,20 @@ const server = createServer(async (req, res) => {
         return
       }
       sendJson(res, 200, await dreamingManager.cancelDream(workspaceId, typeof body?.runId === 'string' ? body.runId : null))
+      return
+    }
+
+    if (method === 'GET' && url.pathname === '/personas/list') {
+      // READ-ONLY listing: built-ins + the workspace's agents.json overlay (the same
+      // overlay resolveAuthoritativeAgentMode applies, so the list cannot drift from
+      // what a start actually resolves). `discovered-*` scan entries are dropped by
+      // overlayPersonas. Resolves the workspace dir via the trusted workspace state
+      // (same helper as /skills/list); never trusts the raw query path as authority.
+      const workspaceId = String(url.searchParams.get('workspaceId') ?? '').trim() || null
+      const workspaceDir = String(url.searchParams.get('workspaceDir') ?? '').trim() || null
+      const root = resolveWorkspaceDirForSkills(workspaceId, workspaceDir)
+      const personas = await listPersonas({ resolveWorkspaceRoot: () => root })
+      sendJson(res, 200, { personas })
       return
     }
 

@@ -1976,6 +1976,34 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
 
   async function runJob(job, request, workspaceDir) {
     try {
+      // PRE-START authoritative resolution (#cli-persona). A caller may supply only
+      // an `agentId` and NO `agentMode` — the `codesurf chat --persona` CLI does
+      // exactly this on purpose: it NEVER constructs a trusted agentMode, it sends
+      // the persona id and lets the daemon resolve tools/permissions from trusted
+      // local sources. When agentMode is ABSENT we resolve it here, BEFORE the
+      // fail-closed unresolved check below, so an agentId-only request works instead
+      // of always failing closed. Resolution is fail-closed itself: ENOENT (no
+      // agents.json) → BUILT-INS authoritative; present file → agents.json overlay;
+      // corrupt/unknown id → refuse. Crucially the tools/permissions come ONLY from
+      // these trusted sources, never from any caller-supplied payload.
+      //
+      // This does NOT touch the agentMode-PRESENT paths: the GUI ships a re-resolved
+      // agentMode (overridden below when a local agents.json exists), and the cloud
+      // clone (no `.contex`) trusts the caller's shipped agentMode. The CLI sends no
+      // agentMode, so it can only reach THIS branch — the trust path stays intact.
+      if (request.agentId && request.agentMode == null) {
+        const preStart = await resolveAuthoritativeAgentMode({
+          agentId: request.agentId,
+          resolveWorkspaceRoot: () => workspaceDir,
+        })
+        if (!preStart.ok) {
+          await appendEvent(job.id, { type: 'error', error: preStart.error })
+          await appendEvent(job.id, { type: 'done' })
+          return
+        }
+        request = { ...request, agentMode: preStart.agentMode }
+      }
+
       // A-PR1 BLOCKING-1 (security chokepoint): a selected agent whose definition
       // has not resolved must not launch unrestricted. This guard covers EVERY
       // daemon provider (claude SDK / codex / hermes / opencode / harness) in one

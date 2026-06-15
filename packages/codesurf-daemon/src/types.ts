@@ -198,6 +198,34 @@ export interface DaemonChatMessage {
   [key: string]: unknown
 }
 
+export interface DaemonPersonaBinding {
+  provider?: string
+  model?: string
+}
+
+/**
+ * A Persona (a.k.a. agent) as returned by the read-only `/personas/list` route:
+ * built-ins + the workspace's agents.json overlay. The on-disk store and the
+ * request/wire field are still named `agentMode`/`agents.json` for back-compat.
+ */
+export interface DaemonPersona {
+  id: string
+  name?: string
+  description?: string
+  systemPrompt?: string
+  tools?: string[] | null
+  icon?: string
+  color?: string
+  isBuiltin?: boolean
+  extends?: string
+  defaultBinding?: DaemonPersonaBinding
+  [key: string]: unknown
+}
+
+export interface DaemonPersonaListResult {
+  personas: DaemonPersona[]
+}
+
 export interface DaemonChatJobRequest {
   provider: string
   model?: string | null
@@ -207,6 +235,12 @@ export interface DaemonChatJobRequest {
   workspaceDir?: string | null
   cardId?: string | null
   sessionId?: string | null
+  /**
+   * Selected Persona id. The daemon resolves its tools/permissions
+   * authoritatively from trusted local sources — callers must NOT send a trusted
+   * `agentMode` payload alongside it (the CLI sends agentId ONLY).
+   */
+  agentId?: string | null
   messages?: DaemonChatMessage[]
   [key: string]: unknown
 }
