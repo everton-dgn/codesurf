@@ -76,6 +76,38 @@ from the resulting `origin/main`.
 - Seed **Polly** and **Gemma** as built-in Personas.
 - _Est: 1–2 PRs._
 
+### P1b — Model binding (RESOLVED 2026-06-15)
+
+**Model is dissociated from Persona identity.** A Persona defines identity/soul/skills/tools;
+the engine+model is a separate, swappable axis. Any Persona (Polly, Gemma) runs on any
+engine/model with full Omni consistency intact, because identity/skills/tools/presentation are
+model-independent.
+
+**Locking lives in skills, not Personas.** A Persona may *softly prefer* an engine/model (seeds
+the composer; user can change). The only **non-overridable** model constraint comes from a
+**skill** the Persona links/defines that *requires* specific model(s): while that skill is
+active, the composer model control is pinned + disabled. (Chosen over a Persona-level hard pin
+to keep a single locking mechanism; a Persona-level lock can be added later, additively.)
+
+**Precedence (highest wins):**
+
+| # | Source | Overridable? |
+|---|--------|--------------|
+| 1 | Skill-required model (active linked skill) | ❌ locked while skill active |
+| 2 | Persona soft default (preferred engine/model) | ✅ seeds composer |
+| 3 | Composer / user pick | ✅ free choice (the dissociated default) |
+
+**Altitude:** model is **not** a security boundary — running a different model is not privilege
+escalation. The lock is a correctness/UX constraint enforced in normal resolution + composer UI
+disablement. It does **NOT** use the PR #8 trusted-disk authoritative machinery (that stays
+exclusively for tools/permissions, which remain fully fail-closed).
+
+**Split:**
+- **P1b-1 (ready now):** dissociation + Persona soft engine/model default + precedence-aware
+  resolution (skill-lock slot *designed*, layers 2–3 *implemented*). Ships "Polly on GPT-5.5."
+- **P1b-2 (advisor-gated):** skill-defined required-model + Persona↔skill linkage applies the
+  lock + composer disablement. Touches the skills subsystem.
+
 ### P2 — Detected agents as templates
 - Promote the existing ephemeral folder-scan into a first-class **"Agents (detected)"**
   surface; opt-in persistence.
@@ -122,9 +154,12 @@ P0  →  P1  →  P2
 
 ## 7. Open design questions (resolve per-phase, not now)
 
-- **Model field shape**: per-engine model map vs ordered preference list vs routing rules?
-- **Routing policy authoring**: where does the user say "Codex for narrow edits, Claude for
-  multi-file"? Persona-level rules vs per-skill vs an LLM router?
+- ~~**Model field shape**~~ → RESOLVED (P1b): Persona carries a *soft* engine/model default
+  (single preferred binding, schema shaped for N); per-skill `requiredModel` supplies locks.
+  Not a per-engine map.
+- **Routing policy authoring** (P4 scope still open): per-skill required-model is the locking
+  surface; the broader "Codex for narrow edits, Claude for multi-file" routing policy is still
+  undecided (Persona-level rules vs per-skill vs LLM router).
 - **Canonical event schema** for B2 (target is the existing `ChatMessage`/`ToolBlock` model).
 - **Kanban ↔ Persona convergence**: unify or keep separate?
 - **Multi-engine session continuity**: how threads resume across engines mid-conversation
