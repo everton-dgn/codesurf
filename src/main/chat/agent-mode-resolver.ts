@@ -1,9 +1,9 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import type { AgentMode } from '../../shared/types'
-import { DEFAULT_AGENT_MODES, overlayAgentModes, findAgentModeById } from '../../shared/agentModes.ts'
+import type { Persona } from '../../shared/types'
+import { DEFAULT_PERSONAS, overlayPersonas, findPersonaById } from '../../shared/agentModes.ts'
 
-// ─── Authoritative server-side AgentMode resolution (ROOT FIX) ────────────────
+// ─── Authoritative server-side Persona resolution (ROOT FIX) ──────────────────
 // The renderer resolves a selected `agentId` → an `agentMode` (carrying the
 // persona + tools allow-list + permission posture) and ships BOTH on chat:send.
 // Every prior guard only REJECTED a NULL agentMode — it never verified that a
@@ -38,8 +38,13 @@ import { DEFAULT_AGENT_MODES, overlayAgentModes, findAgentModeById } from '../..
 // PARSE-ERROR / UNREADABLE case (where a looser default would mask a stricter
 // override) — that is what fails closed.
 
+// NOTE: the result field is still named `agentMode` — it is the cross-process
+// wire/contract name read by chat-jobs.mjs (`authoritative.agentMode`) and the
+// providers. It is retained unchanged across the Persona rename for the same
+// reason the on-disk `agents.json` and IPC channels are: renaming it would break
+// the renderer↔main↔daemon contract. Its TYPE is now `Persona`.
 export type AgentModeResolution =
-  | { ok: true; agentMode: AgentMode | null }
+  | { ok: true; agentMode: Persona | null }
   | { ok: false; error: string }
 
 export const AGENT_MODE_RESOLUTION_DENIED_ERROR =
@@ -48,6 +53,9 @@ export const AGENT_MODE_RESOLUTION_DENIED_ERROR =
   'Refusing to launch rather than fall back to looser default permissions — ' +
   'fix the agent definition or clear the selected agent.'
 
+// BACK-COMPAT: the persisted store is, and MUST remain, agents.json (NOT renamed
+// to personas.json) — this Persona rename is in-code + UI only. Existing user
+// workspaces depend on this filename; renaming it would orphan their definitions.
 function agentsJsonPath(workspaceRoot: string): string {
   return join(workspaceRoot, '.contex', 'customisation', 'agents.json')
 }
@@ -82,7 +90,7 @@ export async function resolveAuthoritativeAgentMode(opts: {
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
       // Genuinely absent → built-ins are authoritative (no override to bypass).
-      const resolved = findAgentModeById(DEFAULT_AGENT_MODES, agentId)
+      const resolved = findPersonaById(DEFAULT_PERSONAS, agentId)
       return resolved
         ? { ok: true, agentMode: resolved }
         : { ok: false, error: AGENT_MODE_RESOLUTION_DENIED_ERROR }
@@ -101,7 +109,7 @@ export async function resolveAuthoritativeAgentMode(opts: {
   }
   if (!Array.isArray(parsed)) return { ok: false, error: AGENT_MODE_RESOLUTION_DENIED_ERROR }
 
-  const resolved = findAgentModeById(overlayAgentModes(parsed), agentId)
+  const resolved = findPersonaById(overlayPersonas(parsed), agentId)
   if (!resolved) return { ok: false, error: AGENT_MODE_RESOLUTION_DENIED_ERROR }
   return { ok: true, agentMode: resolved }
 }
