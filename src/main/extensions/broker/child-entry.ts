@@ -192,11 +192,11 @@ export function createCtxProxy(
     store: {
       get: () => ({ ...storeSnapshot }),
       getKey: (key: string) => storeSnapshot[key],
-      set: (patch: Record<string, unknown>) => {
-        // Optimistic local update
-        storeSnapshot = { ...storeSnapshot, ...patch }
-        call('store', 'set', [patch as unknown as JsonValue])
-      },
+set: (patch: Record<string, unknown>) => {
+  // Optimistic local update
+  storeSnapshot = { ...storeSnapshot, ...patch }
+  void call('store', 'set', [patch as unknown as JsonValue]).catch(() => {})
+},
       replace: (value: Record<string, unknown>) => {
         storeSnapshot = { ...value }
         call('store', 'replace', [value as unknown as JsonValue])
