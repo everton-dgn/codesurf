@@ -9,6 +9,7 @@ export type ChatTileComposerMenuId =
   | 'location'
   | 'branch'
   | 'context'
+  | 'agent'
 
 export type ChatTileComposerMenuRefs = {
   modelMenuRef: RefObject<HTMLDivElement | null>
@@ -19,6 +20,7 @@ export type ChatTileComposerMenuRefs = {
   locationMenuRef: RefObject<HTMLDivElement | null>
   branchMenuRef: RefObject<HTMLDivElement | null>
   contextMenuRef: RefObject<HTMLDivElement | null>
+  agentMenuRef: RefObject<HTMLDivElement | null>
 }
 
 type UseChatTileComposerMenusArgs = {
@@ -40,6 +42,7 @@ export function useChatTileComposerMenus({
   const [showLocationMenu, setShowLocationMenu] = useState(false)
   const [showBranchMenu, setShowBranchMenu] = useState(false)
   const [showContextMenu, setShowContextMenu] = useState(false)
+  const [showAgentMenu, setShowAgentMenu] = useState(false)
   const [modelFilter, setModelFilter] = useState('')
   const [branchFilter, setBranchFilter] = useState('')
 
@@ -51,6 +54,7 @@ export function useChatTileComposerMenus({
   const locationMenuRef = useRef<HTMLDivElement>(null)
   const branchMenuRef = useRef<HTMLDivElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+  const agentMenuRef = useRef<HTMLDivElement>(null)
 
   const closeAllMenus = useCallback(() => {
     setShowModelMenu(false)
@@ -61,6 +65,7 @@ export function useChatTileComposerMenus({
     setShowLocationMenu(false)
     setShowBranchMenu(false)
     setShowContextMenu(false)
+    setShowAgentMenu(false)
     setModelFilter('')
     setBranchFilter('')
   }, [])
@@ -82,6 +87,7 @@ export function useChatTileComposerMenus({
       return next
     })
     setShowContextMenu(prev => which === 'context' ? !prev : false)
+    setShowAgentMenu(prev => which === 'agent' ? !prev : false)
   }, [])
 
   const anyMenuOpen = showModelMenu
@@ -92,6 +98,7 @@ export function useChatTileComposerMenus({
     || showLocationMenu
     || showBranchMenu
     || showContextMenu
+    || showAgentMenu
 
   const menuRefs = [
     modelMenuRef,
@@ -102,6 +109,7 @@ export function useChatTileComposerMenus({
     locationMenuRef,
     branchMenuRef,
     contextMenuRef,
+    agentMenuRef,
   ]
 
   useEffect(() => {
@@ -147,6 +155,8 @@ export function useChatTileComposerMenus({
     showBranchMenu,
     setShowBranchMenu,
     showContextMenu,
+    showAgentMenu,
+    setShowAgentMenu,
     modelFilter,
     setModelFilter,
     branchFilter,
@@ -159,6 +169,7 @@ export function useChatTileComposerMenus({
     locationMenuRef,
     branchMenuRef,
     contextMenuRef,
+    agentMenuRef,
     toggleMenu,
     closeAllMenus,
   }

@@ -35,6 +35,8 @@ export interface ChatTilePersistedState {
   thinking: string
   agentMode: boolean
   autoAgentMode: boolean
+  /** Selected agent-definition id (AgentMode.id) for this tile, or null for none. */
+  agentId?: string | null
   preserveSessionSummary?: boolean
   linkedSessionEntryId?: string | null
   linkedSessionHint?: SessionEntryHint | null

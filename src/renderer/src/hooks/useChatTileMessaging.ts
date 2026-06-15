@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
-import type { AppSettings } from '../../../shared/types'
+import type { AppSettings, AgentMode } from '../../../shared/types'
 import type { ChatMessage } from '../../../shared/chat-types'
 import type { SessionEntryHint } from '../../../shared/session-types'
 import { stripCapabilityPrefix } from '../../../shared/nodeTools'
@@ -25,6 +25,9 @@ import {
   type DiscoveryPeer,
 } from '../components/chat/chatTileUtils'
 import { normalizeMessagesForMemory } from '../components/chat/messageNormalization'
+import { resolveActiveChatMode } from './chatModeResolution'
+import { resolveDispatchAgentMode } from './agentModeDispatch'
+import { loadAgentModes } from '../config/agentModes'
 import type { ProviderEntry } from './useChatTileProviders'
 
 export interface UseChatTileMessagingOptions {
@@ -43,6 +46,9 @@ export interface UseChatTileMessagingOptions {
   model: string
   mode: string
   thinking: string
+  agentId: string | null
+  resolvedAgentMode: AgentMode | null
+  agentModesLoaded: boolean
   sessionId: string | null
   mcpEnabled: boolean
   executionTarget: 'local' | 'cloud'
@@ -129,6 +135,9 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     model,
     mode,
     thinking,
+    agentId,
+    resolvedAgentMode,
+    agentModesLoaded,
     sessionId,
     mcpEnabled,
     executionTarget,
@@ -210,6 +219,35 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
   const dispatchMessageContent = useCallback(async (messageContent: string): Promise<boolean> => {
     const trimmedContent = messageContent.trim()
     if (!trimmedContent) return false
+
+    // A-PR1 BLOCKING-1 + load-race fix: resolve the AUTHORITATIVE AgentMode for
+    // this send. Built-ins are seeded synchronously for composer UX, but a SEND
+    // must reflect any agents.json override of a built-in id. During the pre-load
+    // window the seed is the LOOSER default built-in — and because it is non-null
+    // and valid-looking, the IPC/daemon/builder fail-closed guards (which only
+    // trip on a null/unresolved agentMode) would NOT catch it, so the turn would
+    // run with the default's tools (for `agent`, tools:null = UNRESTRICTED) for
+    // one turn. resolveDispatchAgentMode re-resolves from disk when definitions
+    // have not loaded, picking up the override, and fails closed otherwise. This
+    // is the only place the window can be closed; do NOT use the pre-load seed.
+    const agentResolution = await resolveDispatchAgentMode({
+      agentId,
+      resolvedAgentMode,
+      agentModesLoaded,
+      loadFinalModes: () => loadAgentModes(workspaceDir),
+    })
+    if (!agentResolution.ok) {
+      setMessagesSafe(prev => [...prev, {
+        id: `msg-agent-unresolved-${Date.now()}`,
+        role: 'assistant',
+        content: 'The selected agent could not be resolved — its persona and tool restrictions are not ready yet (or failed to load). Wait a moment and resend, or clear the selected agent.',
+        timestamp: Date.now(),
+        isStreaming: false,
+      }])
+      return false
+    }
+    const dispatchAgentMode = agentResolution.agentMode
+
     const { bodyText: userBodyText } = splitMessageAttachmentPaths(trimmedContent)
 
     const state = latestStateRef.current
@@ -223,10 +261,16 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     const activeModeOptions = activeProviderEntry?.kind === 'builtin'
       ? PROVIDER_MODES[activeProviderEntry.id as BuiltinProvider]
       : [EXTENSION_PROVIDER_MODE]
-    const rawActiveMode = state?.mode ?? mode
-    const activeMode = activeModeOptions.some(option => option.id === rawActiveMode)
-      ? rawActiveMode
-      : resolveProviderModeId(activeProvider, settings?.chatProviderModes?.[activeProvider])
+    // A-PR1 #2a: prefer the LIVE mode over the persisted-state ref (which lags a
+    // render behind a mode toggle), so a change-then-send launches with the
+    // chosen mode. resolveActiveChatMode validates against the active provider's
+    // options and falls back to the provider default.
+    const activeMode = resolveActiveChatMode(
+      mode,
+      state?.mode,
+      activeModeOptions.map(option => option.id),
+      resolveProviderModeId(activeProvider, settings?.chatProviderModes?.[activeProvider]),
+    )
     const nextCloudHostId = executionTarget === 'cloud'
       ? (cloudHostId ?? activeCloudHost?.id ?? null)
       : null
@@ -260,6 +304,7 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
       mcpEnabled: activeMcpEnabled,
       mode: activeMode,
       thinking: activeThinking,
+      agentId: state?.agentId ?? agentId,
       agentMode: state?.agentMode ?? effectiveAgentMode,
       autoAgentMode: state?.autoAgentMode ?? autoAgentMode,
       preserveSessionSummary: linkedSessionEntryId ? true : false,
@@ -322,6 +367,8 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
         providerTransport: activeProviderEntry?.transport ?? null,
         mode: activeMode,
         thinking: activeThinking,
+        agentId: agentId ?? null,
+        agentMode: dispatchAgentMode,
         workspaceDir,
         mcpEnabled: activeMcpEnabled,
         executionTarget,
@@ -364,6 +411,7 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     provider, model, mode, thinking, sessionId, mcpEnabled, messages, providerEntryById, currentProviderEntry,
     tileId, workspaceId, workspaceDir, connectedPeers, peerContextRef, executionTarget, cloudHostId, activeCloudHost,
     settings?.execution, settings?.chatProviderModes, peerToolNames, focusComposer, setMessagesSafe, queuedTurns,
+    agentId, resolvedAgentMode, agentModesLoaded,
     effectiveAgentMode, autoAgentMode, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages,
     latestStateRef, persistLatestState, lastJobSequenceRef, resumedJobKeyRef, stickToBottomRef,
     setPreserveSessionSummary, setIsStreaming, setJobId, setJobSequence,

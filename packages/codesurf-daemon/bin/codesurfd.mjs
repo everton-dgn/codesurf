@@ -8,6 +8,7 @@ import { dirname, basename, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { findSessionEntryById, getExternalSessionChatState, invalidateExternalSessionCache, listExternalSessionEntries } from './session-index.mjs'
 import { createChatJobManager } from './chat-jobs.mjs'
+import { isHarnessEnabled } from './harness-settings.mjs'
 import { createCheckpointStore } from './checkpoints.mjs'
 import { loadMemoryContext } from './memory-loader.mjs'
 import { createSkillsIndex } from './skills-index.mjs'
@@ -2690,7 +2691,10 @@ function buildDaemonSessionState(jobId, workspaceId, limit = 100) {
     provider: metadata.provider ?? 'claude',
     model: metadata.model ?? '',
     mcpEnabled: true,
-    mode: 'default',
+    // A-PR1 #2b: restore the persisted permission mode (stored in job metadata
+    // by chat-jobs.startJob). Falls back to 'default' for legacy jobs that
+    // predate mode persistence or never stored one.
+    mode: typeof metadata.mode === 'string' && metadata.mode ? metadata.mode : 'default',
     thinking: 'adaptive',
     agentMode: false,
     autoAgentMode: false,
@@ -3242,6 +3246,16 @@ const server = createServer(async (req, res) => {
           }
         } catch {
           // Skills are optional context; daemon-owned prompt assembly should not fail the job if indexing is unavailable.
+        }
+      }
+      // Daemon-side harness enablement: when settings.harness.enabled (or the
+      // CODESURF_HARNESS env override) is on, route claude/codex through the
+      // worktree-backed harness backend — the client never sets this. An
+      // explicit useHarness in the request still wins.
+      if (request.useHarness == null) {
+        const settingsDoc = readJsonFile(SETTINGS_FILE, { version: 1, settings: {} })
+        if (isHarnessEnabled({ settings: settingsDoc?.settings, env: process.env.CODESURF_HARNESS, provider: request.provider })) {
+          request = { ...request, useHarness: true }
         }
       }
       const job = await chatJobs.startJob(request)

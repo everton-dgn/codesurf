@@ -8,7 +8,7 @@ import {
   Plus,
   Square,
 } from 'lucide-react'
-import type { ExecutionHostRecord } from '../../../../shared/types'
+import type { AgentMode, ExecutionHostRecord } from '../../../../shared/types'
 import type { ModeOption, ThinkingOption } from '../../config/providers'
 import type { MCPServerEntry } from '../../hooks/useMCPServers'
 import type { ProviderEntry } from '../../hooks/useChatTileProviders'
@@ -26,6 +26,7 @@ import {
   ChatComposerInput,
   ChatComposerLocationMenu,
   ChatComposerModeMenu,
+  ChatComposerAgentMenu,
   ChatComposerPrimaryToolbar,
   ChatComposerProjectPathButton,
   ChatComposerSecondaryToolbar,
@@ -103,7 +104,7 @@ export interface ChatTileComposerProps {
 
   insertMenuRef: React.RefObject<HTMLDivElement | null>
   showInsertMenu: boolean
-  onToggleMenu: (which: 'model' | 'provider' | 'insert' | 'mode' | 'thinking' | 'location' | 'branch' | 'context') => void
+  onToggleMenu: (which: 'model' | 'provider' | 'insert' | 'mode' | 'thinking' | 'location' | 'branch' | 'context' | 'agent') => void
   onAttachFiles: () => void
   mcpEnabled: boolean
   onToggleMcpEnabled: () => void
@@ -178,6 +179,12 @@ export interface ChatTileComposerProps {
   currentMode: ModeOption
   modeOptions: ModeOption[]
   onSelectMode: (modeId: string) => void
+
+  agentMenuRef: React.RefObject<HTMLDivElement | null>
+  showAgentMenu: boolean
+  agentId: string | null
+  agentModes: AgentMode[]
+  onSelectAgent: (agentId: string | null) => void
 
   planTodos: TileTodoItem[] | null
   isPlanOpen: boolean
@@ -296,6 +303,11 @@ export function ChatTileComposer({
   currentMode,
   modeOptions,
   onSelectMode,
+  agentMenuRef,
+  showAgentMenu,
+  agentId,
+  agentModes,
+  onSelectAgent,
   planTodos,
   isPlanOpen,
   onTogglePlanOpen,
@@ -643,6 +655,15 @@ export function ChatTileComposer({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <ChatComposerAgentMenu
+            anchorRef={agentMenuRef}
+            showMenu={showAgentMenu}
+            agentId={agentId}
+            agentModes={agentModes}
+            onToggleMenu={() => onToggleMenu('agent')}
+            onSelectAgent={onSelectAgent}
+          />
+
           <ChatComposerModeMenu
             anchorRef={modeMenuRef}
             showMenu={showModeMenu}

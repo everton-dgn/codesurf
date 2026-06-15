@@ -1,10 +1,9 @@
 import { spawn, execFileSync } from 'child_process'
 import { getAgentPath, getShellEnvPath } from '../../agent-paths'
 import {
-  buildHermesChatArgs,
   sanitizeAgentCliDiagnostic,
 } from '../../agents/agent-cli-contracts'
-import { buildCodeSurfOutputConvention } from '../prompt-conventions'
+import { buildHermesSpawnArgs } from './agent-mode-payloads'
 import {
   activeProcesses,
   getPreparedMessages,
@@ -59,37 +58,26 @@ export function chatHermes(req: ChatRequest): void {
     resuming: !!existingSessionId,
   })
 
-  // Map mode to hermes toolsets
-  const modeMap: Record<string, string> = {
-    'full': 'terminal,file,web,browser',
-    'terminal': 'terminal,file',
-    'web': 'web,browser',
-    'query': '',
+  // Build the `hermes chat` argv from the shared, pure builder. It maps
+  // AgentMode.tools onto Hermes' coarse toolset categories, re-injects the
+  // persona on resumed turns (A-PR1 #1a), and FAILS CLOSED (throws) if a
+  // selected agent's definition has not resolved (A-PR1 BLOCKING-1) — caught
+  // below so we surface the reason instead of launching unrestricted.
+  let args: string[]
+  try {
+    args = buildHermesSpawnArgs({
+      agentId: req.agentId,
+      agentMode: req.agentMode,
+      mode: req.mode,
+      model: req.model,
+      userContent: lastUserMsg.content,
+      existingSessionId,
+    })
+  } catch (err) {
+    sendStream(req.cardId, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+    sendStream(req.cardId, { type: 'done' })
+    return
   }
-  const toolsets = modeMap[req.mode ?? ''] ?? 'terminal,file,web'
-
-  // Hermes requires the `chat` subcommand for non-interactive prompts.
-  // We request NDJSON event streaming via `--stream-json` so tool calls,
-  // text deltas, and thinking blocks surface in real time (the old `--quiet`
-  // mode nulled Hermes' streaming callbacks and the UI went silent until
-  // the final response). Provider-prefixed CodeSurf model ids (for example
-  // openai-codex/gpt-5.5) are split into Hermes' separate --provider /
-  // --model flags by the shared contract helper.
-  //
-  // First-turn injection: Hermes has no system-prompt flag, so the CodeSurf
-  // output convention rides along with the first user message. Session
-  // history carries it forward on subsequent turns.
-  const hermesIsFirstTurn = !existingSessionId
-  const hermesPrompt = hermesIsFirstTurn
-    ? `${buildCodeSurfOutputConvention()}\n\n---\n\n${lastUserMsg.content}`
-    : lastUserMsg.content
-  const args = buildHermesChatArgs({
-    prompt: hermesPrompt,
-    model: req.model,
-    resumeSessionId: existingSessionId,
-    toolsets,
-    streamJson: true,
-  })
 
   const proc = spawn(hermesBin, args, {
     stdio: ['ignore', 'pipe', 'pipe'],

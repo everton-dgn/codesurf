@@ -1,0 +1,10 @@
+{
+  "id": "chat-only-ext",
+  "name": "Chat Only Extension",
+  "version": "1.0.0",
+  "tier": "power",
+  "main": "main.js",
+  "capabilities": [
+    { "name": "chat" }
+  ]
+}

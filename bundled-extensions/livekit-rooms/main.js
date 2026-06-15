@@ -326,8 +326,14 @@ module.exports = {
 
     ctx.ipc.handle('setConfig', async (args) => {
       const data = typeof args === 'string' ? JSON.parse(args) : (args || {})
-      if (data.serverUrl !== undefined) ctx.settings.get('serverUrl') // ensure loaded
-      // Settings are persisted via the settings API from the tile side
+      const allowed = ['serverUrl', 'apiKey', 'apiSecret', 'defaultIdentity',
+        'assistantEnabled', 'assistantProvider', 'assistantModel',
+        'assistantSpeakReplies', 'assistantUseCamera']
+      const patch = {}
+      for (const key of allowed) {
+        if (data[key] !== undefined) patch[key] = data[key]
+      }
+      if (Object.keys(patch).length > 0) ctx.settings.set(patch)
       return JSON.stringify({ ok: true })
     })
 

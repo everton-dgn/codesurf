@@ -3,6 +3,7 @@ import { useTheme } from '../ThemeContext'
 import { useAppFonts } from '../FontContext'
 import type { PromptTemplate, PromptField, SkillDefinition, AgentMode } from '../../../shared/types'
 import { ChatMarkdown } from './shared/streamdown-utils'
+import { DEFAULT_AGENT_MODES as DEFAULT_MODES, AGENT_COLORS, AGENT_ICONS } from '../config/agentModes'
 
 type Tab = 'prompts' | 'skills' | 'tools' | 'agents'
 
@@ -1090,21 +1091,8 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
 }
 
 // ─── Agents section ──────────────────────────────────────────────────────────
-
-const DEFAULT_MODES: AgentMode[] = [
-  { id: 'agent', name: 'Agent', description: 'Full autonomous access to all tools', systemPrompt: '', tools: null, icon: 'robot', color: '#3568ff', isBuiltin: true },
-  { id: 'ask', name: 'Ask', description: 'Read-only Q&A mode — no file modifications', systemPrompt: 'You are in read-only mode. Do not modify files or run destructive commands.', tools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'], icon: 'help', color: '#56c288', isBuiltin: true },
-  { id: 'plan', name: 'Plan', description: 'Plan without execution — outline steps before acting', systemPrompt: 'Create a detailed plan. Do not execute changes until the user approves.', tools: ['Read', 'Glob', 'Grep', 'WebSearch'], icon: 'map', color: '#f5a623', isBuiltin: true },
-]
-
-const AGENT_COLORS = ['#3568ff', '#56c288', '#f5a623', '#e57399', '#b368c9', '#00acd7', '#ff7b72', '#8f96a0']
-const AGENT_ICONS: Record<string, JSX.Element> = {
-  robot: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="4" width="10" height="8" rx="2" stroke="currentColor" strokeWidth="1.2" /><circle cx="5" cy="8" r="1" fill="currentColor" /><circle cx="9" cy="8" r="1" fill="currentColor" /><path d="M7 1v3M5 1h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></svg>,
-  help: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" /><path d="M5.5 5.5a1.5 1.5 0 012.8.8c0 1-1.3 1.2-1.3 2.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /><circle cx="7" cy="10.5" r="0.5" fill="currentColor" /></svg>,
-  map: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3l4-1.5 4 1.5 4-1.5v9.5l-4 1.5-4-1.5L1 12.5V3z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /><path d="M5 1.5v10M9 3.5v10" stroke="currentColor" strokeWidth="1.2" /></svg>,
-  star: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1l1.8 3.6L13 5.2l-3 2.9.7 4.1L7 10.3 3.3 12.2l.7-4.1-3-2.9 4.2-.6L7 1z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /></svg>,
-  bolt: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7.5 1L3 8h4l-.5 5L11 6H7l.5-5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /></svg>,
-}
+// DEFAULT_MODES / AGENT_COLORS / AGENT_ICONS are imported from
+// ../config/agentModes so the chat-toolbar agent selector reads the same source.
 
 export function AgentsSection({ workspacePath, hideHeaderText = false }: { workspacePath: string; hideHeaderText?: boolean }): JSX.Element {
   void hideHeaderText
@@ -1259,7 +1247,10 @@ function AgentEditor({ item, modes, onSave, onCancel }: { item: AgentMode; modes
   const fonts = useAppFonts()
   const [draft, setDraft] = useState(item)
   const up = (patch: Partial<AgentMode>) => setDraft(prev => ({ ...prev, ...patch }))
-  const [restrictTools, setRestrictTools] = useState(item.tools !== null)
+  // tools semantics: null/undefined (unset) = unrestricted → checkbox off;
+  // [] = explicit deny-all and [names] = restricted → checkbox on. Loose `!=`
+  // so an absent (undefined) tools field reads as unrestricted, not restricted.
+  const [restrictTools, setRestrictTools] = useState(item.tools != null)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1300,7 +1291,14 @@ function AgentEditor({ item, modes, onSave, onCancel }: { item: AgentMode; modes
           </label>
         </div>
         {restrictTools && (
-          <Input value={(draft.tools ?? []).join(', ')} onChange={v => up({ tools: v.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="Read, Glob, Grep, WebSearch..." />
+          <>
+            <Input value={(draft.tools ?? []).join(', ')} onChange={v => up({ tools: v.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="Read, Glob, Grep, WebSearch..." />
+            {(draft.tools ?? []).length === 0 && (
+              <div style={{ marginTop: 6, fontSize: fonts.secondarySize, color: theme.text.muted }}>
+                Empty list = deny all tools. Uncheck &ldquo;Restrict tools&rdquo; to leave the toolset unrestricted instead.
+              </div>
+            )}
+          </>
         )}
       </Field>
 

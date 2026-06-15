@@ -220,3 +220,35 @@ test('daemon file-reference expansion route resolves workspaceId and returns clo
   assert.match(response.payload.message, /feature\(\)/)
   assert.doesNotMatch(response.payload.message, new RegExp(projectDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 })
+
+test('expandFileReferences leaves npm-style @mentions as literal text instead of erroring', async () => {
+  const fixture = await makeWorkspaceFixture()
+  try {
+    const message = 'install @ai-sdk/harness@canary and @scope/pkg then read @src/app.ts'
+    // The regression: this used to throw "File reference ... was not found in the workspace".
+    const result = await expandFileReferences({ workspaceDir: fixture.workspaceDir, message })
+    // npm specs survive as literal text...
+    assert.match(result.message, /@ai-sdk\/harness@canary/)
+    assert.match(result.message, /@scope\/pkg/)
+    // ...and are not treated as references...
+    assert.equal(result.references.some(r => String(r.source).includes('ai-sdk') || String(r.source).includes('scope/pkg')), false)
+    // ...while a real workspace file is still expanded.
+    assert.ok(result.references.some(r => String(r.displayPath).includes('app.ts')))
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('expandFileReferences does not throw on a bare unresolved @mention', async () => {
+  const fixture = await makeWorkspaceFixture()
+  try {
+    const result = await expandFileReferences({
+      workspaceDir: fixture.workspaceDir,
+      message: 'ping @octocat/hello-world about the build',
+    })
+    assert.match(result.message, /@octocat\/hello-world/)
+    assert.equal(result.references.length, 0)
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})

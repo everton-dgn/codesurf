@@ -12,6 +12,7 @@ import { getMCPPort, getMCPToken, getContexMcpToolNames } from '../../mcp-server
 import { formatClaudeSdkError } from '../output-sanitizers'
 import { buildAsyncExecutionPrompt, buildPeerSystemPrompt } from '../prompt-builders'
 import { buildCodeSurfOutputConvention, joinPromptSections } from '../prompt-conventions'
+import { buildClaudeAgentModeOptions } from './agent-mode-payloads'
 import { daemonClient } from '../../daemon/client'
 import { getDisconnectedPeerBridgeMcpToolNames } from '../../../shared/nodeTools'
 import {
@@ -345,10 +346,13 @@ function buildClaudeAgentPrompt(
   memoryPrompt: string | undefined,
   skillsPrompt: string | undefined,
   asyncExecution: ChatRequest['asyncExecution'],
+  agentPersona?: string | undefined,
 ): string | undefined {
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
   const outputConvention = buildCodeSurfOutputConvention()
-  return joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
+  // Persona (AgentMode.systemPrompt) leads ahead of memory/skills, matching the
+  // daemon Claude path so the agent definition frames the turn the same way.
+  return joinPromptSections(basePrompt, agentPersona, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
 }
 
 // --- Anthropic file-change summaries -----------------------------------------
@@ -558,7 +562,22 @@ export function chatClaude(req: ChatRequest): void {
   if (systemPrompt) {
     log('systemPrompt built for', req.peers?.length ?? 0, 'peers, contex tools:', contexToolNames.length)
   }
-  systemPrompt = buildClaudeAgentPrompt(systemPrompt, req.memoryPrompt, req.skillsPrompt, req.asyncExecution)
+  // Resolved AgentMode (selected agent definition): persona → system prompt,
+  // tools allow-list → SDK tool restriction. The shared builder FAILS CLOSED
+  // (throws) if a selected agent's definition has not resolved (A-PR1
+  // BLOCKING-1) — surface it instead of launching unrestricted. Mirrors the
+  // daemon Claude path.
+  let agentTools: string[] | undefined
+  let agentPersona: string | undefined
+  try {
+    ({ tools: agentTools, persona: agentPersona } = buildClaudeAgentModeOptions(req))
+  } catch (err) {
+    sendStream(req.cardId, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+    sendStream(req.cardId, { type: 'done' })
+    cardAbortControllers.delete(req.cardId)
+    return
+  }
+  systemPrompt = buildClaudeAgentPrompt(systemPrompt, req.memoryPrompt, req.skillsPrompt, req.asyncExecution, agentPersona)
 
   // Resolve claude binary from startup detection
   const claudePath = getAgentPath('claude')
@@ -706,6 +725,15 @@ export function chatClaude(req: ChatRequest): void {
     options.resume = existingSessionId
   }
 
+  // AgentMode.tools allow-list → restrict the built-in tools the model may use
+  // (null/absent = all defaults; [] = deny-all per the SDK). Set BOTH the
+  // top-level option (governs when no custom agent is active) AND the custom
+  // agent definition below, since the active agent's own `tools` field governs
+  // its toolset when `options.agent` is set.
+  if (agentTools !== undefined) {
+    options.tools = agentTools
+  }
+
   try {
     log('calling query()...')
     // Inject system prompt via named agent definition if we have peer context
@@ -715,6 +743,7 @@ export function chatClaude(req: ChatRequest): void {
         contex: {
           description: 'CodeSurf canvas AI agent with peer block awareness',
           prompt: systemPrompt,
+          ...(agentTools !== undefined ? { tools: agentTools } : {}),
         }
       }
     }

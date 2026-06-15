@@ -11,9 +11,9 @@ import { getAgentPath, getShellEnvPath } from '../../agent-paths'
 import { daemonClient } from '../../daemon/client'
 import { writeMCPConfigToWorkspace } from '../../mcp-server'
 import { CONTEX_HOME } from '../../paths'
-import { buildAsyncExecutionPrompt, buildPeerSystemPrompt } from '../prompt-builders'
-import { buildCodeSurfOutputConvention, joinPromptSections } from '../prompt-conventions'
+import { buildPeerSystemPrompt } from '../prompt-builders'
 import { sanitizeToolOutputText } from '../output-sanitizers'
+import { buildCodexSpawnArgs } from './agent-mode-payloads'
 import type { ChatRequest, RuntimeChatSessionState } from '../types'
 import {
   log,
@@ -49,19 +49,6 @@ interface CodexFileSnapshot {
   changeType: StreamToolFileChange['changeType']
   existed: boolean
   content: string | null
-}
-
-function buildCodexPrompt(
-  userText: string,
-  asyncExecution: ChatRequest['asyncExecution'],
-  basePrompt?: string,
-  memoryPrompt?: string,
-  skillsPrompt?: string,
-): string {
-  const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
-  const outputConvention = buildCodeSurfOutputConvention()
-  const preamble = joinPromptSections(basePrompt, memoryPrompt, skillsPrompt, asyncPrompt, outputConvention)
-  return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
 }
 
 function normalizeCodexShellCommand(command: string): string {
@@ -341,49 +328,33 @@ export function chatCodex(req: ChatRequest): void {
   }
   void upsertRuntimeSessionState(req, runtimeSession)
 
-  const codexMode = req.mode === 'default' || req.mode === 'auto' || req.mode === 'read-only' || req.mode === 'full-access'
-    ? req.mode
-    : 'default'
-
-  // Build the arg list. When we have a thread ID to resume we use the
-  // `codex exec resume <threadId> [flags] <prompt>` subcommand so that
-  // multi-turn context is preserved. The flags (`--json`, `--model`,
-  // sandbox, `--ignore-user-config`, `-C`) are identical for both paths
-  // and are accepted by the `resume` subcommand too.
-  const promptText = buildCodexPrompt(lastUserMsg.content, req.asyncExecution, peerPrompt, req.memoryPrompt, req.skillsPrompt)
-
-  const args: string[] = ['exec']
-  if (resumeThreadId) {
-    // Use `exec resume <threadId>` to continue the existing conversation
-    args.push('resume', resumeThreadId)
+  // Build the `codex exec` argv from the shared, pure builder. It maps
+  // AgentMode.tools onto the sandbox (Codex's only per-toolset lever), injects
+  // the persona into the prompt, and FAILS CLOSED (throws) for both an
+  // unenforceable deny-all tool list (A-PR1 #1b, CODEX_DENY_ALL_ERROR) and a
+  // selected agent whose definition has not resolved (A-PR1 BLOCKING-1). When a
+  // thread ID is present it emits `exec resume <threadId>` to preserve multi-turn
+  // context; `--ignore-user-config` keeps the run isolated from ~/.codex.
+  let args: string[]
+  try {
+    args = buildCodexSpawnArgs({
+      agentId: req.agentId,
+      agentMode: req.agentMode,
+      mode: req.mode,
+      model: req.model,
+      userContent: lastUserMsg.content,
+      resumeThreadId,
+      workspaceDir: req.workspaceDir,
+      peerPrompt,
+      memoryPrompt: req.memoryPrompt,
+      skillsPrompt: req.skillsPrompt,
+      asyncExecution: req.asyncExecution,
+    })
+  } catch (err) {
+    sendStream(req.cardId, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+    sendStream(req.cardId, { type: 'done' })
+    return
   }
-  args.push('--json', '--model', req.model)
-
-  if (codexMode === 'full-access') {
-    args.push('--dangerously-bypass-approvals-and-sandbox')
-  } else if (codexMode === 'auto') {
-    args.push('--full-auto')
-  } else {
-    if (codexMode === 'default') {
-      args.push('--sandbox', 'workspace-write')
-    } else {
-      args.push('--sandbox', 'read-only')
-    }
-  }
-  // App-launched Codex runs must NOT inherit the user's global ~/.codex/config.toml
-  // (its MCP servers, plugins, and hooks). In codex-cli 0.136.0 the older
-  // `-c mcp_servers={}` override no longer suppresses them, and a loaded MCP server
-  // — auth-required (slack/stripe) or a long-lived stdio server — can stall the run
-  // so codex never exits. That surfaces in the app as a hang (no `done` is ever
-  // emitted). `--ignore-user-config` skips config.toml entirely while still using
-  // CODEX_HOME for auth, giving a clean, predictable, isolated run.
-  args.push('--ignore-user-config')
-  if (req.workspaceDir) {
-    args.push('--skip-git-repo-check', '-C', req.workspaceDir)
-  } else {
-    args.push('--skip-git-repo-check')
-  }
-  args.push(promptText)
 
   if (req.workspaceDir) {
     void writeMCPConfigToWorkspace(req.workspaceDir).catch(() => {})

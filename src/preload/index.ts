@@ -246,6 +246,8 @@ contextBridge.exposeInMainWorld('electron', {
       negotiatedTools?: string[]
       peers?: { peerId: string; peerType: string; tools: string[]; actions?: Array<{ name: string; description: string }>; context?: Record<string, unknown> }[]
       providerTransport?: import('../shared/types').ExtensionChatTransportConfig | null
+      agentId?: string | null
+      agentMode?: import('../shared/types').AgentMode | null
     }) =>
       ipcRenderer.invoke('chat:send', req),
     resumeJob: (req: {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import type { AppSettings } from '../../../shared/types'
+import type { AppSettings, AgentMode } from '../../../shared/types'
+import { loadAgentModes, getAgentIcon, DEFAULT_AGENT_MODES } from '../config/agentModes'
 
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useAutoSpeak, bargeIn } from '../hooks/useAutoSpeak'
@@ -104,7 +105,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     messages, setMessages, input, setInput, isStreaming, setIsStreaming,
     executionTarget, setExecutionTarget, cloudHostId, setCloudHostId,
     provider, setProvider, model, setModel, mcpEnabled, setMcpEnabled,
-    mode, setMode, thinking, setThinking, autoAgentMode, setAutoAgentMode,
+    mode, setMode, thinking, setThinking, agentId, setAgentId, autoAgentMode, setAutoAgentMode,
     attachments, setAttachments, queuedTurns, setQueuedTurns,
     openChatSurfaces, setOpenChatSurfaces, activeChatSurfaceId, setActiveChatSurfaceId,
     sessionId, setSessionId, jobId, setJobId, jobSequence, setJobSequence,
@@ -179,6 +180,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     showBranchMenu,
     setShowBranchMenu,
     showContextMenu,
+    showAgentMenu,
+    setShowAgentMenu,
     modelFilter,
     setModelFilter,
     branchFilter,
@@ -191,6 +194,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     locationMenuRef,
     branchMenuRef,
     contextMenuRef,
+    agentMenuRef,
     toggleMenu,
   } = useChatTileComposerMenus({
     textareaRef,
@@ -198,6 +202,35 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     onCloseAutocomplete: () => closeAutocompleteRef.current(),
   })
   closeProviderMenuRef.current = () => setShowProviderMenu(false)
+
+  // Agent definitions (built-ins + workspace agents.json) selectable from the
+  // composer toolbar. Refreshed on mount and whenever the agent menu opens, so a
+  // freshly-authored agent in CustomisationTile shows up without a tile reload.
+  // Seed with the built-in modes so a restored built-in agentId resolves
+  // synchronously (no fail-closed window for Agent/Ask/Plan). Only user-authored
+  // agents — which live in agents.json and load asynchronously below — can briefly
+  // be unresolved, and the dispatch guard + provider safety net cover that window.
+  const [agentModes, setAgentModes] = useState<AgentMode[]>(DEFAULT_AGENT_MODES)
+  // Definitive "agents.json has been read for this workspace" flag. The composer
+  // seeds built-ins synchronously for UX, but a SEND must reflect any agents.json
+  // override — until this is true, dispatchMessageContent re-resolves the agent
+  // from disk (or fails closed) instead of trusting the looser seeded built-in.
+  const [agentModesLoaded, setAgentModesLoaded] = useState(false)
+  // Reset on workspace change so a send can't dispatch against the previous
+  // workspace's agent definitions.
+  useEffect(() => { setAgentModesLoaded(false) }, [_workspaceDir])
+  useEffect(() => {
+    let cancelled = false
+    void loadAgentModes(_workspaceDir).then(list => {
+      if (!cancelled) { setAgentModes(list); setAgentModesLoaded(true) }
+    })
+    return () => { cancelled = true }
+  }, [_workspaceDir, showAgentMenu])
+  const resolvedAgentMode = useMemo(
+    () => agentModes.find(a => a.id === agentId) ?? null,
+    [agentModes, agentId],
+  )
+
   const {
     chatSurfaceMenu,
     activeChatSurface,
@@ -275,6 +308,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     mcpEnabled,
     mode,
     thinking,
+    agentId,
     effectiveAgentMode,
     autoAgentMode,
     preserveSessionSummary,
@@ -298,6 +332,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     setMcpEnabled,
     setMode,
     setThinking,
+    setAgentId,
     setAutoAgentMode,
     setPreserveSessionSummary,
     setLinkedSessionEntryId,
@@ -594,6 +629,9 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     model,
     mode,
     thinking,
+    agentId,
+    resolvedAgentMode,
+    agentModesLoaded,
     sessionId,
     mcpEnabled,
     executionTarget,
@@ -732,6 +770,25 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
         position: 'relative',
       }}
     >
+
+      {/* Active agent definition header — surfaces the selected AgentMode's
+          colour + icon so the persona driving this tile is visible at a glance. */}
+      {resolvedAgentMode && (
+        <div
+          title={resolvedAgentMode.description}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '4px 10px', flexShrink: 0,
+            borderBottom: `0.5px solid ${composerBorder}`,
+            color: resolvedAgentMode.color,
+            background: `color-mix(in srgb, ${resolvedAgentMode.color} 10%, transparent)`,
+            fontSize: 11, fontWeight: 600, letterSpacing: 0.2,
+          }}
+        >
+          <span style={{ display: 'flex', alignItems: 'center' }}>{getAgentIcon(resolvedAgentMode.icon)}</span>
+          <span>{resolvedAgentMode.name}</span>
+        </div>
+      )}
 
       {/* Horizontal split: [transcript + composer column] | [plan pane] */}
       <div style={{
@@ -915,6 +972,14 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
             setMode(modeId)
             onChatModePreferenceChange?.(provider, modeId)
             setShowModeMenu(false)
+          }}
+          agentMenuRef={agentMenuRef}
+          showAgentMenu={showAgentMenu}
+          agentId={agentId}
+          agentModes={agentModes}
+          onSelectAgent={nextAgentId => {
+            setAgentId(nextAgentId)
+            setShowAgentMenu(false)
           }}
           planTodos={planTodos}
           isPlanOpen={isPlanOpen}

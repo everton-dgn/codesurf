@@ -81,6 +81,8 @@ export type BrokerResponse = BrokerSuccessResponse | BrokerErrorResponse
 export interface ActivateParams extends JsonObject {
   /** Extension manifest id. */
   extensionId: string
+  /** Absolute path to the extension's main entry file. */
+  entryPath: string
   /** Granted capability keys (subset of ExtensionContext surface). */
   grantedCapabilities: string[]
   /** Extension settings (manifest defaults merged with persisted values). */
@@ -163,6 +165,50 @@ export interface BrokerStoreUpdateNotification {
     extensionId: string
     state: JsonObject
   }
+}
+
+// ── Reverse-RPC messages (main → child for registered callbacks) ─────────────
+
+/**
+ * `broker.invokeTool` — main calls the child to invoke an MCP tool handler
+ * registered by the extension via ctx.mcp.registerTool.
+ */
+export interface InvokeToolParams extends JsonObject {
+  /** The registration id returned at registerTool time. */
+  registrationId: string
+  /** Tool call arguments. */
+  args: JsonObject
+}
+
+export interface InvokeToolResult extends JsonObject {
+  /** String result from the tool handler. */
+  result: string
+}
+
+/**
+ * `broker.invokeIpc` — main calls the child to invoke an IPC handler registered
+ * via ctx.ipc.handle.
+ */
+export interface InvokeIpcParams extends JsonObject {
+  /** Fully qualified channel name (ext:{id}:{channel}). */
+  channel: string
+  /** Arguments to the handler. */
+  args: JsonValue[]
+}
+
+export interface InvokeIpcResult extends JsonObject {
+  returnValue: JsonValue
+}
+
+/**
+ * `broker.busEvent` — main pushes a bus event to a subscriber registered in
+ * the child via ctx.bus.subscribe.
+ */
+export interface BusEventParams extends JsonObject {
+  /** The subscription id returned from ctx.bus.subscribe in the child. */
+  subscriptionId: string
+  /** The serialised bus event payload. */
+  event: JsonObject
 }
 
 // ── Type guard helpers ───────────────────────────────────────────────────────

@@ -9,6 +9,15 @@ import { promisify } from 'node:util'
 import { buildMemoryPrompt, loadMemoryContext } from './memory-loader.mjs'
 import { buildContextBucketBundle, describeContextBucketsForTool } from './context-buckets.mjs'
 import { applyProjectContextPolicy } from './project-context.mjs'
+import {
+  resolveAgentToolAllowList,
+  codexShouldForceReadOnly,
+  codexSandboxApprovalFlags,
+  hermesToolsetsFromAllowList,
+  agentModeUnresolved,
+  AGENT_MODE_UNRESOLVED_ERROR,
+} from './agent-mode-tools.mjs'
+import { resolveAuthoritativeAgentMode } from './agent-mode-resolver.mjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -566,16 +575,77 @@ function buildMemoryContextInput(contextBuckets, instructionPrompt) {
   return describeContextBucketsForTool(contextBuckets, instructionPrompt).input
 }
 
-function buildClaudeAgentPrompt(peers, asyncExecution, instructionPrompt, skillsPrompt) {
-  const peerPrompt = buildClaudeSystemPrompt(peers)
-  const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
-  return joinPromptSections(peerPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
+// The selected agent definition's persona prompt (AgentMode.systemPrompt). Sits
+// at the front of the assembled system prompt — ahead of memory/skills/async —
+// so the persona frames the turn the same way for every provider. Empty/missing
+// systemPrompt contributes nothing (joinPromptSections drops blank sections).
+function agentPersonaPrompt(request) {
+  return String(request?.agentMode?.systemPrompt ?? '').trim() || undefined
 }
 
-function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPrompt) {
+function buildClaudeAgentPrompt(peers, asyncExecution, instructionPrompt, skillsPrompt, agentPrompt) {
+  const peerPrompt = buildClaudeSystemPrompt(peers)
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
-  const preamble = joinPromptSections(instructionPrompt, skillsPrompt, asyncPrompt)
+  return joinPromptSections(peerPrompt, agentPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
+}
+
+function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPrompt, agentPrompt) {
+  const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
+  const preamble = joinPromptSections(agentPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
+}
+
+// Build the `codex exec` argv for a request. Pure + exported so the daemon test
+// can assert AgentMode.tools constrains the constructed command. Codex's CLI has
+// no per-tool allow-list, so the allow-list maps onto the sandbox (the only real
+// toolset lever): when it grants no write-capable tool, force read-only.
+export function buildCodexExecArgs(request, workspaceDir, instructionPrompt = '') {
+  const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
+  const codexMode = ['default', 'auto', 'read-only', 'full-access'].includes(request.mode)
+    ? request.mode
+    : 'default'
+  // Per-mode sandbox + approval policy (and write-free allow-list → read-only).
+  // THROWS CODEX_DENY_ALL_ERROR for an explicit deny-all ([]) — runCodexJob
+  // catches it and surfaces the error instead of spawning Codex (fail closed).
+  const sandboxApprovalFlags = codexSandboxApprovalFlags(codexMode, resolveAgentToolAllowList(request.agentMode))
+  const codexArgs = [
+    'exec',
+    '--json',
+    '--model',
+    request.model,
+    '--skip-git-repo-check',
+    ...(workspaceDir ? ['-C', workspaceDir] : []),
+    ...sandboxApprovalFlags,
+  ]
+  codexArgs.push(buildCodexPrompt(
+    lastUserMsg?.content ?? '',
+    request.asyncExecution,
+    instructionPrompt,
+    request.skillsPrompt,
+    agentPersonaPrompt(request),
+  ))
+  return codexArgs
+}
+
+// Resolve the Hermes `--toolsets` value for a request. AgentMode.tools (when
+// present) maps onto Hermes' coarse toolset categories and takes precedence over
+// the explicit toolsets / mode mapping. Pure + exported for the daemon test.
+export function hermesToolsetsForRequest(request) {
+  const fromAllowList = hermesToolsetsFromAllowList(resolveAgentToolAllowList(request.agentMode))
+  if (fromAllowList != null) return fromAllowList
+
+  const explicitToolsets = Array.isArray(request.toolsets)
+    ? request.toolsets.filter(Boolean).join(',')
+    : String(request.toolsets ?? '').trim()
+  if (explicitToolsets) return explicitToolsets
+
+  const modeMap = {
+    full: 'terminal,file,web,browser',
+    terminal: 'terminal,file',
+    web: 'web,browser',
+    query: '',
+  }
+  return modeMap[request.mode ?? ''] ?? 'terminal,file,web'
 }
 
 function pushOpenCodeFlag(args, flag, value) {
@@ -741,6 +811,18 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
   const MAX_CONCURRENT_JOBS = Math.max(1, Number(maxConcurrentJobs) || 4)
   let activeJobCount = 0
   const jobQueue = [] // { live, request, workspaceDir }
+
+  // Harness backend (@ai-sdk/harness) is opt-in per request and loaded lazily so
+  // its ai@7-canary dependency graph never enters the daemon process unless a
+  // harness job is actually requested. Existing provider paths are unaffected.
+  const HARNESS_PROVIDERS = new Set(['claude', 'codex', 'pi'])
+  let harnessRunnerPromise = null
+  function getHarnessRunner() {
+    if (!harnessRunnerPromise) {
+      harnessRunnerPromise = import('./harness-runtime.mjs').then(m => m.createHarnessRunner({ homeDir }))
+    }
+    return harnessRunnerPromise
+  }
 
   const liveJobs = new Map()
   const subscribers = new Map()
@@ -1142,13 +1224,27 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       ...(request.sessionId ? { resume: request.sessionId } : {}),
     }
 
-    const systemPrompt = buildClaudeAgentPrompt(request.peers, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    // Agent-definition tools allow-list → restrict the built-in tools the model
+    // may use (null/absent = all default tools). AgentMode.tools names are
+    // already Claude-style (Read/Glob/Grep/…), so they pass through verbatim.
+    // Set it BOTH at the top level (governs when no custom agent is active) AND
+    // on the custom agent definition below — when `options.agent` is set, the
+    // active agent's own `tools` field governs its toolset (SDK AgentDefinition),
+    // so the allow-list must be applied there too or it would be a no-op for any
+    // agent definition that also carries a systemPrompt.
+    const agentToolAllowList = Array.isArray(request.agentMode?.tools) ? request.agentMode.tools : null
+    if (agentToolAllowList) {
+      options.tools = agentToolAllowList
+    }
+
+    const systemPrompt = buildClaudeAgentPrompt(request.peers, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request))
     if (systemPrompt) {
       options.agent = 'contex'
       options.agents = {
         contex: {
           description: 'CodeSurf canvas AI agent with peer context',
           prompt: systemPrompt,
+          ...(agentToolAllowList ? { tools: agentToolAllowList } : {}),
         },
       }
     }
@@ -1244,27 +1340,16 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       return
     }
 
-    const codexMode = ['default', 'auto', 'read-only', 'full-access'].includes(request.mode)
-      ? request.mode
-      : 'default'
-    const codexArgs = [
-      'exec',
-      '--json',
-      '--model',
-      request.model,
-      '--skip-git-repo-check',
-      ...(workspaceDir ? ['-C', workspaceDir] : []),
-    ]
-    if (codexMode === 'full-access') {
-      codexArgs.push('--dangerously-bypass-approvals-and-sandbox')
-    } else if (codexMode === 'auto') {
-      codexArgs.push('--full-auto')
-    } else if (codexMode === 'read-only') {
-      codexArgs.push('--sandbox', 'read-only')
-    } else {
-      codexArgs.push('--sandbox', 'workspace-write')
+    let codexArgs
+    try {
+      codexArgs = buildCodexExecArgs(request, workspaceDir, instructionPrompt)
+    } catch (err) {
+      // Fail closed: e.g. an unenforceable deny-all tool list on Codex. Surface
+      // the specific reason instead of spawning Codex with weaker enforcement.
+      await appendEvent(job.id, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+      await appendEvent(job.id, { type: 'done' })
+      return
     }
-    codexArgs.push(buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt))
 
     const proc = spawn('codex', codexArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1462,21 +1547,6 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     await appendEvent(job.id, { type: 'done' })
   }
 
-  function hermesToolsetsForRequest(request) {
-    const explicitToolsets = Array.isArray(request.toolsets)
-      ? request.toolsets.filter(Boolean).join(',')
-      : String(request.toolsets ?? '').trim()
-    if (explicitToolsets) return explicitToolsets
-
-    const modeMap = {
-      full: 'terminal,file,web,browser',
-      terminal: 'terminal,file',
-      web: 'web,browser',
-      query: '',
-    }
-    return modeMap[request.mode ?? ''] ?? 'terminal,file,web'
-  }
-
   async function runHermesJob(job, request, workspaceDir, instructionPrompt) {
     const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
     if (!lastUserMsg) {
@@ -1485,14 +1555,14 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       return
     }
 
-    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request))
     const proc = spawn('hermes', buildHermesChatArgs({
       prompt,
       model: request.model,
       provider: request.providerId ?? request.modelProvider ?? request.providerName,
       toolsets: hermesToolsetsForRequest(request),
       resumeSessionId: request.sessionId,
-      ignoreRules: Boolean(instructionPrompt || request.skillsPrompt || request.contextBuckets || request.memoryPrompt),
+      ignoreRules: Boolean(instructionPrompt || request.skillsPrompt || request.contextBuckets || request.memoryPrompt || agentPersonaPrompt(request)),
       bypassPermissions: request.mode === 'bypassPermissions',
     }), {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1551,7 +1621,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       return
     }
 
-    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt)
+    const prompt = buildCodexPrompt(lastUserMsg.content, request.asyncExecution, instructionPrompt, request.skillsPrompt, agentPersonaPrompt(request))
     const agent = typeof request.agent === 'string'
       ? request.agent
       : typeof request.agentName === 'string'
@@ -1650,6 +1720,41 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
 
   async function runJob(job, request, workspaceDir) {
     try {
+      // A-PR1 BLOCKING-1 (security chokepoint): a selected agent whose definition
+      // has not resolved must not launch unrestricted. This guard covers EVERY
+      // daemon provider (claude SDK / codex / hermes / opencode / harness) in one
+      // place — providers downstream enforce persona + tools from request.agentMode,
+      // so a dangling agentId without agentMode would silently bypass them.
+      if (agentModeUnresolved(request)) {
+        await appendEvent(job.id, { type: 'error', error: AGENT_MODE_UNRESOLVED_ERROR })
+        await appendEvent(job.id, { type: 'done' })
+        return
+      }
+
+      // Defense-in-depth (ROOT FIX). Main already resolved the agentId
+      // authoritatively and shipped the agentMode, but the LOCAL daemon shares the
+      // filesystem with main, so when a real agents.json is present we RE-RESOLVE
+      // from the trusted workspaceDir and override — a second, independent
+      // enforcement of the same source of truth. The remote/cloud daemon has no
+      // `.contex` (the gitignored dir is excluded from the clone) → the file is
+      // absent → we trust the agentMode main resolved and shipped (the only
+      // authority the cloud has). Gating on file existence is what keeps cloud
+      // working: re-resolving a custom agentId with no local file would otherwise
+      // fail closed and clobber main's correct value.
+      if (request.agentId && workspaceDir &&
+          existsSync(join(workspaceDir, '.contex', 'customisation', 'agents.json'))) {
+        const authoritative = await resolveAuthoritativeAgentMode({
+          agentId: request.agentId,
+          resolveWorkspaceRoot: () => workspaceDir,
+        })
+        if (!authoritative.ok) {
+          await appendEvent(job.id, { type: 'error', error: authoritative.error })
+          await appendEvent(job.id, { type: 'done' })
+          return
+        }
+        request = { ...request, agentMode: authoritative.agentMode }
+      }
+
       const memoryContext = await loadMemoryContext({
         homeDir,
         workspaceDir,
@@ -1704,7 +1809,23 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         })
       }
 
-      if (request.provider === 'claude') {
+      // Codex is deliberately EXCLUDED from the harness path even when the
+      // harness is enabled (A-PR1 #2c / honest-notes): the @ai-sdk/harness-codex
+      // adapter cannot honor CodeSurf's 4 permission modes — it throws on any
+      // non-'allow-all' permissionMode and its bridge hardcodes
+      // sandboxMode:'danger-full-access' + approvalPolicy:'never'. Routing Codex
+      // through it would either crash or silently grant full access regardless
+      // of the user's chosen mode. The native `codex exec` CLI (runCodexJob)
+      // honors all 4 modes via -s/--sandbox + -c approval_policy=, so Codex
+      // always uses it. Tradeoff: Codex forgoes the harness's worktree isolation.
+      if (request.useHarness === true && HARNESS_PROVIDERS.has(request.provider) && request.provider !== 'codex') {
+        const { runHarnessJob } = await getHarnessRunner()
+        await runHarnessJob(job, request, workspaceDir, instructionPrompt, {
+          appendEvent,
+          createCheckpoint: (toolName, filePaths) => createDaemonCheckpoint(job, request, toolName, filePaths),
+          awaitToolPermission: (toolUseID, permissionRequest) => awaitToolPermissionAnswer(job, toolUseID, permissionRequest),
+        })
+      } else if (request.provider === 'claude') {
         await runClaudeJob(job, request, workspaceDir, instructionPrompt)
       } else if (request.provider === 'codex') {
         await runCodexJob(job, request, workspaceDir, instructionPrompt)
@@ -1768,6 +1889,9 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       status: startStatus,
       provider: request.provider,
       model: request.model,
+      // A-PR1 #2b: persist the chosen permission mode so reopening a session
+      // restores it (read back in codesurfd.mjs reconstructSessionState).
+      mode: typeof request.mode === 'string' ? request.mode : null,
       runMode: request.runMode === 'background' ? 'background' : 'foreground',
       workspaceId: typeof request.workspaceId === 'string' ? request.workspaceId : null,
       cardId: typeof request.cardId === 'string' ? request.cardId : null,

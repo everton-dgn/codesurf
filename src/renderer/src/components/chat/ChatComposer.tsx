@@ -3,10 +3,11 @@ import { FileText, Folder, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { useTheme } from '../../ThemeContext'
 import { stackEdgeShadow } from '../../theme'
 import { basename } from '../../utils/dnd'
-import type { ExecutionHostRecord } from '../../../../shared/types'
+import type { AgentMode, ExecutionHostRecord } from '../../../../shared/types'
 import type { TtsPlayerState } from '../../utils/ttsPlayer'
 import { FooterPill } from './ChatComposerControls'
 import { Dropdown, DropdownItem, MenuPortal } from './ChatComposerMenus'
+import { getAgentIcon } from '../../config/agentModes'
 
 export interface ChatComposerAutocompleteItem {
   key: string
@@ -866,6 +867,57 @@ export function ChatComposerModeMenu({
                 sublabel={item.description}
                 active={mode === item.id}
                 onClick={() => onSelectMode(item.id)}
+              />
+            ))}
+          </Dropdown>
+        </MenuPortal>
+      )}
+    </div>
+  )
+}
+
+export function ChatComposerAgentMenu({
+  anchorRef,
+  showMenu,
+  agentId,
+  agentModes,
+  onToggleMenu,
+  onSelectAgent,
+}: {
+  anchorRef: React.RefObject<HTMLDivElement | null>
+  showMenu: boolean
+  agentId: string | null
+  agentModes: AgentMode[]
+  onToggleMenu: () => void
+  onSelectAgent: (agentId: string | null) => void
+}): JSX.Element {
+  const selected = agentModes.find(a => a.id === agentId) ?? null
+  return (
+    <div ref={anchorRef} style={{ position: 'relative' }}>
+      <FooterPill
+        prefix={getAgentIcon(selected?.icon)}
+        label={selected ? selected.name : 'Agent'}
+        color={selected?.color ?? '#8f96a0'}
+        active={showMenu}
+        onClick={onToggleMenu}
+      />
+      {showMenu && (
+        <MenuPortal anchorRef={anchorRef}>
+          <Dropdown>
+            <DropdownItem
+              label="None"
+              sublabel="No agent definition"
+              active={!agentId}
+              onClick={() => onSelectAgent(null)}
+            />
+            {agentModes.map(item => (
+              <DropdownItem
+                key={item.id}
+                icon={getAgentIcon(item.icon)}
+                label={item.name}
+                sublabel={item.description}
+                active={agentId === item.id}
+                onClick={() => onSelectAgent(item.id)}
               />
             ))}
           </Dropdown>

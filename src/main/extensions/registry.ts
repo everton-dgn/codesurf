@@ -12,7 +12,7 @@ import { promises as fs } from 'fs'
 import { join, resolve } from 'path'
 import { CONTEX_HOME } from '../paths'
 import { ExtensionContext } from './context'
-import { loadPowerExtension, type ExtensionScope } from './loader'
+import { activatePowerExtension, type ExtensionScope } from './loader'
 import { bus } from '../event-bus'
 import { adapters, tryAdaptExtension } from './adapters'
 import type { ExtensionManifest, ExtensionTileContrib, ExtensionChatSurfaceContrib, ExtensionMCPToolContrib, ExtensionContextMenuContrib, ExtensionCommandContrib, ExtensionFooterContrib, ExtensionPanelContrib, ExtensionSettingsSectionContrib, ExtensionLayoutPresetContrib } from '../../shared/types'
@@ -97,6 +97,16 @@ export interface LoadedExtension {
 }
 
 const EXTENSIONS_DIRNAME = 'extensions'
+
+function normalizeTileTypes(manifest: ExtensionManifest): void {
+  if (manifest.contributes?.tiles) {
+    for (const tile of manifest.contributes.tiles) {
+      if (!tile.type.startsWith('ext:')) {
+        tile.type = `ext:${tile.type}`
+      }
+    }
+  }
+}
 
 function normalizeManifestUi(manifest: ExtensionManifest): void {
   manifest.ui = manifest.ui ?? {}
@@ -279,13 +289,7 @@ export class ExtensionRegistry {
         extensionId: manifest.id,
         manifestEnabled: manifest._enabled,
       })
-      if (manifest.contributes?.tiles) {
-        for (const tile of manifest.contributes.tiles) {
-          if (!tile.type.startsWith('ext:')) {
-            tile.type = `ext:${tile.type}`
-          }
-        }
-      }
+      normalizeTileTypes(manifest)
       return manifest
     } catch {
       try {
@@ -303,13 +307,7 @@ export class ExtensionRegistry {
         adapted._enabled = disabledIds.has(adapted.id)
           ? false
           : (defaultEnabledAdapted ? (adapted._enabled !== false) : false)
-        if (adapted.contributes?.tiles) {
-          for (const tile of adapted.contributes.tiles) {
-            if (!tile.type.startsWith('ext:')) {
-              tile.type = `ext:${tile.type}`
-            }
-          }
-        }
+        normalizeTileTypes(adapted)
         return adapted
       } catch {
         return null
@@ -349,13 +347,7 @@ export class ExtensionRegistry {
     })
 
     // Namespace tile types with ext: prefix
-    if (manifest.contributes?.tiles) {
-      for (const tile of manifest.contributes.tiles) {
-        if (!tile.type.startsWith('ext:')) {
-          tile.type = `ext:${tile.type}`
-        }
-      }
-    }
+    normalizeTileTypes(manifest)
 
     // Skip catalog duplicates; installed/bundled copies win over gallery entries.
     if (this.extensions.has(manifest.id) && opts?.defaultEnabled === false) {
@@ -383,7 +375,7 @@ export class ExtensionRegistry {
             ? 'bundled'
             : 'global'
       const ctx = new ExtensionContext(manifest, bus, this)
-      const deactivate = await loadPowerExtension(manifest, ctx, scope)
+      const deactivate = await activatePowerExtension(manifest, ctx, scope, this)
       loaded.deactivate = deactivate ?? undefined
       // NOTE: MCP tools are registered directly into this.extraMCPTools during
       // activate() via ExtensionContext.mcp.registerTool -> registry.registerMCPTool.
@@ -413,13 +405,7 @@ export class ExtensionRegistry {
     })
 
     // Namespace tiles
-    if (manifest.contributes?.tiles) {
-      for (const tile of manifest.contributes.tiles) {
-        if (!tile.type.startsWith('ext:')) {
-          tile.type = `ext:${tile.type}`
-        }
-      }
-    }
+    normalizeTileTypes(manifest)
 
     const loaded: LoadedExtension = { manifest }
 
@@ -430,7 +416,7 @@ export class ExtensionRegistry {
           ? 'catalog'
           : 'global'
       const ctx = new ExtensionContext(manifest, bus, this)
-      const deactivate = await loadPowerExtension(manifest, ctx, scope)
+      const deactivate = await activatePowerExtension(manifest, ctx, scope, this)
       loaded.deactivate = deactivate ?? undefined
       // NOTE: tools are registered directly via registerMCPTool during activate();
       // do not push ctx.getRegisteredTools() here to avoid double-registration.
@@ -709,7 +695,7 @@ export class ExtensionRegistry {
       )
       try {
         const ctx = new ExtensionContext(m, bus, this)
-        const deactivate = await loadPowerExtension(m, ctx, scope)
+        const deactivate = await activatePowerExtension(m, ctx, scope, this)
         ext.deactivate = deactivate ?? undefined
         // NOTE: tools are registered directly via registerMCPTool during activate();
         // do not push ctx.getRegisteredTools() here to avoid double-registration.

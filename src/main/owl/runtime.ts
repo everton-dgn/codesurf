@@ -1,10 +1,12 @@
 import { app, BrowserWindow, session, type KeyboardInputEvent, type MouseInputEvent } from 'electron'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { JsonRpcPeer as _JsonRpcPeer, type JsonValue as _JsonValue, type JsonObject as _JsonObject } from '../extensions/broker/json-rpc'
 
 export type OwlRuntimeKind = 'electron'
+// Re-export types from the shared module (owl/runtime.ts previously declared these locally)
 export type JsonPrimitive = string | number | boolean | null
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
-export type JsonObject = { [key: string]: JsonValue }
+export type JsonValue = _JsonValue
+export type JsonObject = _JsonObject
 
 export interface OwlSessionRecord {
   id: string
@@ -51,15 +53,6 @@ interface HostedWebView {
   profile: OwlProfileRecord
   window: BrowserWindow
 }
-
-interface RpcResponse {
-  jsonrpc: '2.0'
-  id: number
-  result?: JsonValue
-  error?: { code: number; message: string }
-}
-
-type RpcHandler = (method: string, params: JsonObject) => Promise<JsonValue> | JsonValue
 
 function id(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
@@ -108,97 +101,8 @@ function translateOwlInputToElectron(event: OwlInputEvent): Array<KeyboardInputE
   }
 }
 
-class JsonRpcPeer {
-  private nextId = 1
-  private buffer = ''
-  private closed = false
-  private pending = new Map<number, { resolve: (value: JsonValue) => void; reject: (error: Error) => void }>()
-
-  constructor(
-    private readonly writeLine: (line: string) => void,
-    private readonly handler?: RpcHandler,
-  ) {}
-
-  call<T extends JsonValue = JsonValue>(method: string, params: JsonObject = {}, timeoutMs = 15_000): Promise<T> {
-    if (this.closed) return Promise.reject(new Error('OWL transport is closed'))
-    const request = { jsonrpc: '2.0' as const, id: this.nextId++, method, params }
-
-    return new Promise<T>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(request.id)
-        reject(new Error(`OWL request timed out: ${method}`))
-      }, timeoutMs)
-      this.pending.set(request.id, {
-        resolve: value => {
-          clearTimeout(timeout)
-          resolve(value as T)
-        },
-        reject: error => {
-          clearTimeout(timeout)
-          reject(error)
-        },
-      })
-      try {
-        this.writeLine(JSON.stringify(request))
-      } catch (error) {
-        this.pending.delete(request.id)
-        clearTimeout(timeout)
-        reject(error instanceof Error ? error : new Error(String(error)))
-      }
-    })
-  }
-
-  feed(chunk: string): void {
-    if (this.closed) return
-    this.buffer += chunk
-    while (true) {
-      const idx = this.buffer.indexOf('\n')
-      if (idx < 0) break
-      const line = this.buffer.slice(0, idx).trim()
-      this.buffer = this.buffer.slice(idx + 1)
-      if (line.length > 0) void this.handleLine(line)
-    }
-  }
-
-  close(reason = 'OWL transport closed'): void {
-    if (this.closed) return
-    this.closed = true
-    const error = new Error(reason)
-    for (const pending of this.pending.values()) pending.reject(error)
-    this.pending.clear()
-  }
-
-  private async handleLine(line: string): Promise<void> {
-    let message: { id?: unknown; method?: unknown; params?: unknown; error?: { message?: unknown }; result?: JsonValue }
-    try {
-      message = JSON.parse(line)
-    } catch {
-      return
-    }
-
-    if (typeof message.method === 'string') {
-      if (!this.handler || typeof message.id !== 'number') return
-      try {
-        const params = message.params && typeof message.params === 'object' && !Array.isArray(message.params)
-          ? message.params as JsonObject
-          : {}
-        const result = await this.handler(message.method, params)
-        this.writeLine(JSON.stringify({ jsonrpc: '2.0', id: message.id, result } satisfies RpcResponse))
-      } catch (error) {
-        const err = error instanceof Error ? error.message : String(error)
-        this.writeLine(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: err } } satisfies RpcResponse))
-      }
-      return
-    }
-
-    if (typeof message.id !== 'number') return
-    const pending = this.pending.get(message.id)
-    if (!pending) return
-    this.pending.delete(message.id)
-    if (message.error) pending.reject(new Error(String(message.error.message ?? 'OWL request failed')))
-    else pending.resolve(message.result ?? null)
-  }
-}
+// JsonRpcPeer alias — imported from the shared broker module above.
+const JsonRpcPeer = _JsonRpcPeer
 
 class ElectronOwlHost {
   readonly runtime: OwlRuntimeKind = 'electron'
@@ -391,7 +295,7 @@ const OWL_RESTART_BACKOFF_MAX_MS = 5_000
 
 export class StdioOwlHostSupervisor {
   private child: ChildProcessWithoutNullStreams | null = null
-  private peer: JsonRpcPeer | null = null
+  private peer: InstanceType<typeof _JsonRpcPeer> | null = null
   private stderr = ''
   /** Single in-flight start promise prevents concurrent double-starts. */
   private starting: Promise<void> | null = null
