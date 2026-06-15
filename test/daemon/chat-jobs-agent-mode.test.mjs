@@ -630,9 +630,17 @@ test('runtime providers delegate to the shared payload builders (thin wiring gua
   // Substance is behaviorally tested above; this only ensures the providers route
   // through the tested builders (so a revert to inline construction is caught).
   const read = rel => readFileSync(join(ROOT_DIR, rel), 'utf8')
+  // claude.ts passes `req` wholesale → can't drop a field.
   assert.match(read('src/main/chat/providers/claude.ts'), /buildClaudeAgentModeOptions\(req\)/, 'chatClaude must call buildClaudeAgentModeOptions')
-  assert.match(read('src/main/chat/providers/codex.ts'), /buildCodexSpawnArgs\(/, 'chatCodex must call buildCodexSpawnArgs')
-  assert.match(read('src/main/chat/providers/hermes.ts'), /buildHermesSpawnArgs\(/, 'chatHermes must call buildHermesSpawnArgs')
+  // codex.ts / hermes.ts pass object literals — pin agentMode: req.agentMode so a
+  // silent drop of the field (the only way to bypass the in-builder fail-closed
+  // without throwing on a kept agentId) is caught.
+  const codex = read('src/main/chat/providers/codex.ts')
+  assert.match(codex, /buildCodexSpawnArgs\(/, 'chatCodex must call buildCodexSpawnArgs')
+  assert.match(codex, /agentMode:\s*req\.agentMode/, 'chatCodex must forward req.agentMode to the builder')
+  const hermes = read('src/main/chat/providers/hermes.ts')
+  assert.match(hermes, /buildHermesSpawnArgs\(/, 'chatHermes must call buildHermesSpawnArgs')
+  assert.match(hermes, /agentMode:\s*req\.agentMode/, 'chatHermes must forward req.agentMode to the builder')
 })
 
 // ─── BLOCKING-1: agentId set + agentMode unresolved must FAIL CLOSED ───────────
