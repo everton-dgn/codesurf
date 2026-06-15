@@ -20,3 +20,4 @@ opensrc/morph-labs--morph-typescript-sdk/
 .mcp.json
 .codesurf/mcp-server.json
 /.claude/worktrees
+/.worktrees
