@@ -91,6 +91,7 @@ function ChatViewToggle({ activeView, onSelectView, theme }: {
           <button
             key={opt.id}
             type="button"
+            aria-pressed={active}
             onClick={() => onSelectView(opt.id)}
             onMouseDown={e => e.preventDefault()}
             title={`Show ${opt.label.toLowerCase()}`}
