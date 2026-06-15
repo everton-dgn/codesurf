@@ -118,19 +118,35 @@ export interface SkillDefinition {
   command?: string
 }
 
-export interface AgentMode {
+export interface Persona {
   id: string
   name: string
   description: string
+  /** The persona's "soul": its system prompt. */
   systemPrompt: string
   tools: string[] | null
   icon: string
   color: string
   isBuiltin: boolean
   defaultNextMode?: string
-  /** Which tool this agent was discovered from: 'claude' | 'cursor' | 'opencode' | 'gemini' | etc. */
+  /**
+   * Optional base-persona id to inherit from. Resolution merges the base, then
+   * overlays this persona's explicitly-defined fields. Fail-closed tool rule: if
+   * this persona defines `tools`, its list wins outright; if it omits `tools`, it
+   * inherits the base's. Inheritance never widens tools beyond the child's grant.
+   * See overlayPersonas() in src/shared/agentModes.ts.
+   */
+  extends?: string
+  /** Which tool this persona was discovered from: 'claude' | 'cursor' | 'opencode' | 'gemini' | etc. */
   source?: string
 }
+
+/**
+ * @deprecated Renamed to {@link Persona}. This alias is retained so the many
+ * existing `AgentMode` references (and the wire field `ChatRequest.agentMode`)
+ * keep compiling during/after the Persona rename. Prefer `Persona` in new code.
+ */
+export type AgentMode = Persona
 export type TileType = BuiltinTileType | `ext:${string}`
 
 // ─── Tile Context Types ────────────────────────────────────────────────────

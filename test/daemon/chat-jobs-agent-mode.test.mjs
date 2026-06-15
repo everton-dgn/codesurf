@@ -66,15 +66,17 @@ import {
   resolveAuthoritativeAgentMode as resolveAuthoritativeMain,
   AGENT_MODE_RESOLUTION_DENIED_ERROR as MAIN_DENIED,
 } from '../../src/main/chat/agent-mode-resolver.ts'
+// Persona rename: these now import the primary export names (DEFAULT_PERSONAS /
+// overlayPersonas); the local aliases keep the existing assertions unchanged.
 import {
-  DEFAULT_AGENT_MODES as SHARED_DEFAULT_AGENT_MODES,
-  overlayAgentModes as sharedOverlayAgentModes,
+  DEFAULT_PERSONAS as SHARED_DEFAULT_AGENT_MODES,
+  overlayPersonas as sharedOverlayAgentModes,
 } from '../../src/shared/agentModes.ts'
 import {
   resolveAuthoritativeAgentMode as resolveAuthoritativeDaemon,
   AGENT_MODE_RESOLUTION_DENIED_ERROR as DAEMON_DENIED,
-  DEFAULT_AGENT_MODES as DAEMON_DEFAULT_AGENT_MODES,
-  overlayAgentModes as daemonOverlayAgentModes,
+  DEFAULT_PERSONAS as DAEMON_DEFAULT_AGENT_MODES,
+  overlayPersonas as daemonOverlayAgentModes,
 } from '../../packages/codesurf-daemon/bin/agent-mode-resolver.mjs'
 
 const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
@@ -1419,4 +1421,195 @@ test('daemon runJob adds gated defense-in-depth re-resolution (#root-fix daemon)
   // shipped value rather than failing closed on a custom id.
   assert.match(src, /existsSync\(join\(workspaceDir, '\.contex', 'customisation', 'agents\.json'\)\)/, 'must gate re-resolution on a present local agents.json')
   assert.match(src, /request = \{ \.\.\.request, agentMode: authoritative\.agentMode \}/, 'must override request.agentMode with the re-resolved value')
+})
+
+// ─── Persona `extends` inheritance + fail-closed tool rule (NEW) ──────────────
+// A Persona may declare `extends: <basePersonaId>`. Resolution merges the base,
+// then overlays the child's EXPLICITLY-DEFINED fields. FAIL-CLOSED TOOL RULE:
+// inheritance must NEVER widen tools beyond what the child explicitly grants — if
+// the child defines `tools`, the child's list wins outright; if the child omits
+// `tools`, it inherits the base's. The pure `overlayPersonas` (sharedOverlay…)
+// performs the merge; we assert against it AND through the production resolver.
+
+const personaById = (list, id) => list.find(p => p.id === id) ?? null
+
+test('persona extends: inherits base soul/icon, child-defined fields overlay the base', () => {
+  const resolved = sharedOverlayAgentModes([
+    { id: 'base', name: 'Base', description: 'base desc', systemPrompt: 'BASE-SOUL', tools: ['Read', 'Glob'], icon: 'map', color: '#111111', isBuiltin: false },
+    { id: 'child', name: 'Child', extends: 'base', description: 'child desc', tools: ['Read'], isBuiltin: false },
+  ])
+  const child = personaById(resolved, 'child')
+  assert.equal(child.systemPrompt, 'BASE-SOUL', 'omitted systemPrompt inherits the base soul')
+  assert.equal(child.icon, 'map', 'omitted icon inherits the base')
+  assert.equal(child.color, '#111111', 'omitted color inherits the base')
+  assert.equal(child.name, 'Child', 'defined name overlays the base')
+  assert.equal(child.description, 'child desc', 'defined description overlays the base')
+  assert.equal(child.id, 'child', 'the child keeps its own id')
+  assert.deepEqual(child.tools, ['Read'], 'child-defined tools win outright')
+  // The base itself is untouched.
+  assert.deepEqual(personaById(resolved, 'base').tools, ['Read', 'Glob'])
+})
+
+test('persona extends FAIL-CLOSED: an omitted child `tools` inherits the base (never widened)', () => {
+  const resolved = sharedOverlayAgentModes([
+    { id: 'base', name: 'Base', description: '', systemPrompt: 'S', tools: ['Read', 'Glob'], icon: 'help', color: '#222', isBuiltin: false },
+    { id: 'child', name: 'Child', extends: 'base', isBuiltin: false }, // no `tools` key
+  ])
+  assert.deepEqual(personaById(resolved, 'child').tools, ['Read', 'Glob'], 'omitted tools inherits the base list verbatim')
+})
+
+test('persona extends FAIL-CLOSED: a restricted child is NEVER widened by a permissive base', () => {
+  // Base is unrestricted (tools:null = all tools). The child explicitly narrows to
+  // ['Read']. Inheritance must NOT let the base widen the child back to null.
+  const resolved = sharedOverlayAgentModes([
+    { id: 'wide', name: 'Wide', description: '', systemPrompt: '', tools: null, icon: 'robot', color: '#333', isBuiltin: false },
+    { id: 'narrow', name: 'Narrow', extends: 'wide', tools: ['Read'], isBuiltin: false },
+  ])
+  const narrow = personaById(resolved, 'narrow')
+  assert.deepEqual(narrow.tools, ['Read'], 'child-defined restriction wins — base null must not widen it')
+  assert.notEqual(narrow.tools, null, 'inheritance must never widen a restricted child to unrestricted')
+})
+
+test('persona extends FAIL-CLOSED: a deny-all ([]) child is honored over a permissive base', () => {
+  const resolved = sharedOverlayAgentModes([
+    { id: 'wide', name: 'Wide', description: '', systemPrompt: '', tools: ['Read', 'Bash'], icon: 'robot', color: '#333', isBuiltin: false },
+    { id: 'locked', name: 'Locked', extends: 'wide', tools: [], isBuiltin: false }, // explicit deny-all
+  ])
+  assert.deepEqual(personaById(resolved, 'locked').tools, [], 'explicit deny-all child wins; base tools must not leak in')
+})
+
+test('persona extends: a child may extend a BUILT-IN, inheriting its tools while overriding the soul', () => {
+  // Built-in `ask` carries tools ['Read','Glob','Grep','WebSearch','WebFetch'].
+  const resolved = sharedOverlayAgentModes([
+    { id: 'ask-plus', name: 'Ask Plus', extends: 'ask', systemPrompt: 'CUSTOM-ASK-SOUL', isBuiltin: false },
+  ])
+  const askPlus = personaById(resolved, 'ask-plus')
+  assert.deepEqual(askPlus.tools, ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'], 'omitted tools inherits the built-in base')
+  assert.equal(askPlus.systemPrompt, 'CUSTOM-ASK-SOUL', 'defined systemPrompt overlays the built-in soul')
+  // Built-in `ask` itself is unchanged by the overlay.
+  assert.equal(personaById(resolved, 'ask').systemPrompt, SHARED_DEFAULT_AGENT_MODES.find(p => p.id === 'ask').systemPrompt)
+})
+
+test('persona extends: a dangling/cyclic base resolves the child UNCHANGED (no widening)', () => {
+  // Dangling: child points at a base that does not exist → child stands alone.
+  const dangling = sharedOverlayAgentModes([
+    { id: 'orphan', name: 'Orphan', extends: 'does-not-exist', tools: ['Read'], systemPrompt: 'O', icon: 'robot', color: '#444', isBuiltin: false },
+  ])
+  assert.deepEqual(personaById(dangling, 'orphan').tools, ['Read'], 'a dangling extends never inherits (cannot widen)')
+
+  // Self-cycle: extends itself → resolves to itself, no infinite loop, no widening.
+  const selfCycle = sharedOverlayAgentModes([
+    { id: 'loop', name: 'Loop', extends: 'loop', tools: ['Read'], systemPrompt: 'L', icon: 'robot', color: '#555', isBuiltin: false },
+  ])
+  assert.deepEqual(personaById(selfCycle, 'loop').tools, ['Read'], 'a self-cycle resolves safely without widening')
+})
+
+test('persona extends FAIL-CLOSED: a dangling base + child OMITS tools → DENY-ALL (not unrestricted)', () => {
+  // Regression for the fail-OPEN bug: a missing base with no explicit child tools
+  // must normalize to deny-all `[]`, NEVER leave tools undefined (= unrestricted
+  // downstream in agent-mode-tools).
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'orphan', name: 'Orphan', extends: 'does-not-exist', systemPrompt: 'O', icon: 'robot', color: '#444', isBuiltin: false }, // no tools key
+    ])
+    assert.deepEqual(personaById(resolved, 'orphan').tools, [], 'dangling extends + omitted tools must fail closed to []')
+    assert.notEqual(personaById(resolved, 'orphan').tools, null, 'must NOT be unrestricted')
+  }
+})
+
+test('persona extends FAIL-CLOSED: a self-cycle + child OMITS tools → DENY-ALL', () => {
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'loop', name: 'Loop', extends: 'loop', systemPrompt: 'L', icon: 'robot', color: '#555', isBuiltin: false }, // no tools key
+    ])
+    assert.deepEqual(personaById(resolved, 'loop').tools, [], 'self-cycle + omitted tools must fail closed to []')
+  }
+})
+
+test('persona extends FAIL-CLOSED: a TWO-NODE cycle + child OMITS tools must NOT inherit the permissive partner', () => {
+  // A extends B, B extends A. `child` omits tools while its cycle partner `wideman`
+  // is permissive (tools:null). The cycle is unresolvable → child must deny-all,
+  // NEVER inherit the permissive partner's tools.
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'child', name: 'Child', extends: 'wideman', systemPrompt: 'C', icon: 'robot', color: '#666', isBuiltin: false }, // no tools key
+      { id: 'wideman', name: 'Wideman', extends: 'child', tools: null, systemPrompt: 'W', icon: 'robot', color: '#777', isBuiltin: false },
+    ])
+    assert.deepEqual(personaById(resolved, 'child').tools, [], 'cyclic child omitting tools must fail closed to [], not inherit the permissive partner')
+    assert.notEqual(personaById(resolved, 'child').tools, null, 'must never widen to unrestricted via a cycle')
+  }
+})
+
+test('persona extends: a TWO-NODE cycle where the child DEFINES tools:[] stays [] (explicit deny-all honored)', () => {
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'child', name: 'Child', extends: 'wideman', tools: [], systemPrompt: 'C', icon: 'robot', color: '#666', isBuiltin: false },
+      { id: 'wideman', name: 'Wideman', extends: 'child', tools: ['Read', 'Bash'], systemPrompt: 'W', icon: 'robot', color: '#777', isBuiltin: false },
+    ])
+    assert.deepEqual(personaById(resolved, 'child').tools, [], 'explicit deny-all child in a cycle stays []')
+  }
+})
+
+test('persona extends FAIL-CLOSED: the production resolver denies all for a dangling extends with no child tools', async t => {
+  const root = await makeTestTempDir('persona-failclosed-resolve-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  await writeAgentsJson(root, [
+    { id: 'orphan', name: 'Orphan', extends: 'ghost-base', systemPrompt: 'O', icon: 'robot', color: '#444', isBuiltin: false },
+  ])
+  const m = await resolveAuthoritativeMain({ agentId: 'orphan', resolveWorkspaceRoot: () => root })
+  const d = await resolveAuthoritativeDaemon({ agentId: 'orphan', resolveWorkspaceRoot: () => root })
+  assert.equal(m.ok, true)
+  assert.deepEqual(m.agentMode.tools, [], 'production resolver must fail closed to [] for a broken extends with no child tools')
+  assert.deepEqual(m, d, 'main + daemon must agree on the fail-closed result')
+})
+
+test('persona extends: main + daemon resolvers agree on an extends fixture (drift guard)', async t => {
+  const root = await makeTestTempDir('persona-extends-drift-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  await writeAgentsJson(root, [
+    { id: 'base', name: 'Base', description: '', systemPrompt: 'BASE', tools: ['Read', 'Glob'], icon: 'map', color: '#111', isBuiltin: false },
+    { id: 'child', name: 'Child', extends: 'base', tools: ['Read'], isBuiltin: false },
+    { id: 'inheritor', name: 'Inheritor', extends: 'base', isBuiltin: false },
+  ])
+  for (const agentId of ['base', 'child', 'inheritor']) {
+    const m = await resolveAuthoritativeMain({ agentId, resolveWorkspaceRoot: () => root })
+    const d = await resolveAuthoritativeDaemon({ agentId, resolveWorkspaceRoot: () => root })
+    assert.deepEqual(m, d, `main + daemon must agree resolving extends for ${agentId}`)
+  }
+  // Spot-check the resolved values through the production resolver.
+  const child = await resolveAuthoritativeMain({ agentId: 'child', resolveWorkspaceRoot: () => root })
+  assert.deepEqual(child.agentMode.tools, ['Read'], 'child-defined tools win through the production resolver')
+  assert.equal(child.agentMode.systemPrompt, 'BASE', 'child inherits the base soul through the production resolver')
+  const inheritor = await resolveAuthoritativeMain({ agentId: 'inheritor', resolveWorkspaceRoot: () => root })
+  assert.deepEqual(inheritor.agentMode.tools, ['Read', 'Glob'], 'omitted child tools inherit the base through the production resolver')
+})
+
+// ─── Seeded built-in Personas: Polly + Gemma (NEW) ────────────────────────────
+
+test('seeded personas: Polly and Gemma are built-ins and resolve correctly with no agents.json', async t => {
+  const root = await makeTestTempDir('persona-seeds-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+
+  for (const id of ['polly', 'gemma']) {
+    // Present in the shared + daemon built-in constants (byte-identical).
+    const sharedDef = SHARED_DEFAULT_AGENT_MODES.find(p => p.id === id)
+    const daemonDef = DAEMON_DEFAULT_AGENT_MODES.find(p => p.id === id)
+    assert.ok(sharedDef, `${id} must be a shared built-in persona`)
+    assert.deepEqual(sharedDef, daemonDef, `${id} built-in must be byte-identical across shared + daemon`)
+    assert.equal(sharedDef.isBuiltin, true, `${id} must be flagged built-in`)
+    assert.ok(sharedDef.name && sharedDef.description && sharedDef.icon && sharedDef.color, `${id} must carry name/description/icon/color`)
+    assert.ok(typeof sharedDef.systemPrompt === 'string' && sharedDef.systemPrompt.length > 0, `${id} must carry a soul (systemPrompt)`)
+
+    // Resolve authoritatively with NO agents.json (ENOENT → built-ins authoritative).
+    const m = await resolveAuthoritativeMain({ agentId: id, resolveWorkspaceRoot: () => root })
+    const d = await resolveAuthoritativeDaemon({ agentId: id, resolveWorkspaceRoot: () => root })
+    assert.equal(m.ok, true, `${id} resolves from the built-ins without a file`)
+    assert.deepEqual(m, d, `${id} main + daemon resolution must agree`)
+    assert.equal(m.agentMode.id, id)
+    assert.equal(m.agentMode.name, sharedDef.name)
+  }
+
+  // Sanity on the placeholder identities (refine the souls later, not the wiring).
+  assert.equal(SHARED_DEFAULT_AGENT_MODES.find(p => p.id === 'polly').name, 'Polly')
+  assert.equal(SHARED_DEFAULT_AGENT_MODES.find(p => p.id === 'gemma').name, 'Gemma')
 })

@@ -14,7 +14,7 @@
 // pattern as the daemon `buildCodexExecArgs`): callers catch-and-surface, which
 // makes BLOCKING-1's runtime guard behaviorally testable rather than a regex.
 
-import type { AgentMode } from '../../../shared/types'
+import type { Persona } from '../../../shared/types'
 // Relative imports carry the .ts extension so the daemon `node --test` runner
 // can load this module under native type-stripping (no bundler). The repo enables
 // allowImportingTsExtensions, and esbuild/tsgo resolve these the same way.
@@ -35,7 +35,9 @@ type AsyncExecutionInput = Parameters<typeof buildAsyncExecutionPrompt>[0]
 
 interface AgentModeSelection {
   agentId?: string | null
-  agentMode?: AgentMode | null
+  // Field name `agentMode` retained for cross-process wire compatibility; its
+  // type is now Persona (the renamed concept).
+  agentMode?: Persona | null
 }
 
 // ── Hermes ───────────────────────────────────────────────────────────────────

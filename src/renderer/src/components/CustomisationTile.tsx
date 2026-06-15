@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { useTheme } from '../ThemeContext'
 import { useAppFonts } from '../FontContext'
-import type { PromptTemplate, PromptField, SkillDefinition, AgentMode } from '../../../shared/types'
+import type { PromptTemplate, PromptField, SkillDefinition, Persona } from '../../../shared/types'
 import { ChatMarkdown } from './shared/streamdown-utils'
-import { DEFAULT_AGENT_MODES as DEFAULT_MODES, AGENT_COLORS, AGENT_ICONS } from '../config/agentModes'
+import { DEFAULT_PERSONAS as DEFAULT_MODES, AGENT_COLORS, AGENT_ICONS } from '../config/agentModes'
 
 type Tab = 'prompts' | 'skills' | 'tools' | 'agents'
 
@@ -1096,15 +1096,15 @@ export function ToolsSection({ hideHeaderText = false }: { hideHeaderText?: bool
 
 export function AgentsSection({ workspacePath, hideHeaderText = false }: { workspacePath: string; hideHeaderText?: boolean }): JSX.Element {
   void hideHeaderText
-  const [items, setItems] = useState<AgentMode[]>([])
-  const [editing, setEditing] = useState<AgentMode | null>(null)
+  const [items, setItems] = useState<Persona[]>([])
+  const [editing, setEditing] = useState<Persona | null>(null)
   const [locationsOpen, setLocationsOpen] = useState(false)
   const [locationText, setLocationText] = useState(DEFAULT_AGENT_LOCATIONS)
 
   const file = `${dataDir(workspacePath)}/agents.json`
   const locFile = `${dataDir(workspacePath)}/locations-agents.json`
   useEffect(() => {
-    loadJson<AgentMode[]>(file, []).then(loaded => {
+    loadJson<Persona[]>(file, []).then(loaded => {
       // Merge with defaults. Drop any previously-persisted `discovered-*`
       // entries — those are rebuilt each mount by the scan effect below, so
       // keeping them here causes stale entries to race ahead of the scan and
@@ -1125,7 +1125,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
     saveJson(locFile, text).then(() => emitLocationsChanged('agents', workspacePath))
   }, [locFile, workspacePath])
 
-  const save = useCallback((next: AgentMode[]) => {
+  const save = useCallback((next: Persona[]) => {
     setItems(next)
     // Only persist non-default or modified items. Also exclude discovered-*
     // entries — discovery rebuilds those on every mount, so persisting them
@@ -1136,7 +1136,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
     ))
   }, [file])
 
-  const handleSave = useCallback((item: AgentMode) => {
+  const handleSave = useCallback((item: Persona) => {
     const exists = items.find(i => i.id === item.id)
     save(exists ? items.map(i => i.id === item.id ? item : i) : [...items, item])
     setEditing(null)
@@ -1147,7 +1147,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
     const scanDirs = async () => {
       const homePath = window.electron.homedir
       const dirs = resolveLocations(locationText, homePath, workspacePath)
-      const discovered: AgentMode[] = []
+      const discovered: Persona[] = []
       for (const dir of dirs) {
         const entries: Array<{ name: string; path: string; isDir: boolean; ext: string }> = await window.electron.fs.readDir(dir).catch(() => [])
         for (const f of entries) {
@@ -1156,7 +1156,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
           if (!raw) continue
           if (f.ext === '.json') {
             try {
-              const data = JSON.parse(raw) as Partial<AgentMode>
+              const data = JSON.parse(raw) as Partial<Persona>
               const name = data.name ?? f.name.replace('.json', '')
               if (!discovered.find(a => a.name === name)) {
                 discovered.push({
@@ -1206,7 +1206,7 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
   if (editing) return <AgentEditor item={editing} modes={items} onSave={handleSave} onCancel={() => setEditing(null)} />
   if (locationsOpen) return (
     <LocationsPanel
-      title="Agent"
+      title="Persona"
       value={locationText}
       onChange={saveLocations}
       onClose={() => setLocationsOpen(false)}
@@ -1217,9 +1217,9 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%', minHeight: 0 }}>
       <PageHeader
-        title="Agent Modes"
-        description="Agent personas with system prompts and tool access"
-        newLabel="New Mode"
+        title="Personas"
+        description="Personas with system prompts and tool access"
+        newLabel="New Persona"
         onNew={() => setEditing({ id: `mode-${Date.now()}`, name: '', description: '', systemPrompt: '', tools: null, icon: 'robot', color: '#3568ff', isBuiltin: false })}
         onLocations={() => setLocationsOpen(true)}
         hideText={hideHeaderText}
@@ -1242,11 +1242,11 @@ export function AgentsSection({ workspacePath, hideHeaderText = false }: { works
   )
 }
 
-function AgentEditor({ item, modes, onSave, onCancel }: { item: AgentMode; modes: AgentMode[]; onSave: (m: AgentMode) => void; onCancel: () => void }): JSX.Element {
+function AgentEditor({ item, modes, onSave, onCancel }: { item: Persona; modes: Persona[]; onSave: (m: Persona) => void; onCancel: () => void }): JSX.Element {
   const theme = useTheme()
   const fonts = useAppFonts()
   const [draft, setDraft] = useState(item)
-  const up = (patch: Partial<AgentMode>) => setDraft(prev => ({ ...prev, ...patch }))
+  const up = (patch: Partial<Persona>) => setDraft(prev => ({ ...prev, ...patch }))
   // tools semantics: null/undefined (unset) = unrestricted → checkbox off;
   // [] = explicit deny-all and [names] = restricted → checkbox on. Loose `!=`
   // so an absent (undefined) tools field reads as unrestricted, not restricted.
@@ -1254,10 +1254,10 @@ function AgentEditor({ item, modes, onSave, onCancel }: { item: AgentMode; modes
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <span style={{ fontSize: fonts.size, fontWeight: 600, color: theme.text.primary }}>{item.name ? 'Edit Mode' : 'New Mode'}</span>
-      <Field label="Name"><Input value={draft.name} onChange={v => up({ name: v })} placeholder="Mode name" /></Field>
-      <Field label="Description"><Input value={draft.description} onChange={v => up({ description: v })} placeholder="What is this mode for?" /></Field>
-      <Field label="System Prompt"><Input value={draft.systemPrompt} onChange={v => up({ systemPrompt: v })} placeholder="Instructions for the agent..." multiline rows={6} /></Field>
+      <span style={{ fontSize: fonts.size, fontWeight: 600, color: theme.text.primary }}>{item.name ? 'Edit Persona' : 'New Persona'}</span>
+      <Field label="Name"><Input value={draft.name} onChange={v => up({ name: v })} placeholder="Persona name" /></Field>
+      <Field label="Description"><Input value={draft.description} onChange={v => up({ description: v })} placeholder="What is this persona for?" /></Field>
+      <Field label="System Prompt"><Input value={draft.systemPrompt} onChange={v => up({ systemPrompt: v })} placeholder="Instructions for the persona..." multiline rows={6} /></Field>
 
       <Field label="Icon & Color">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1302,7 +1302,7 @@ function AgentEditor({ item, modes, onSave, onCancel }: { item: AgentMode; modes
         )}
       </Field>
 
-      <Field label="Default Next Mode">
+      <Field label="Default Next Persona">
         <select value={draft.defaultNextMode ?? ''} onChange={e => up({ defaultNextMode: e.target.value || undefined })}
           style={{ padding: '6px 10px', fontSize: fonts.secondarySize, borderRadius: 6, background: theme.surface.input, color: theme.text.secondary, border: `1px solid ${theme.border.default}`, outline: 'none' }}>
           <option value="">None</option>

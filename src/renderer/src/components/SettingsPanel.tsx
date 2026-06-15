@@ -45,7 +45,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ReactNode; description
   { id: 'prompts',    label: 'Prompts',    icon: <FileText size={15} />,   description: 'Prompt templates with variables and fields', group: 'customise' },
   { id: 'skills',     label: 'Skills',     icon: <Star size={15} />,       description: 'Custom skills and skill registry', group: 'customise' },
   { id: 'tools',      label: 'Tools',      icon: <Wrench size={15} />,     description: 'MCP servers, tools, integrations and registry', group: 'customise' },
-  { id: 'agents',     label: 'Agents',     icon: <Users size={15} />,      description: 'Agent modes with system prompts and tool access', group: 'customise' },
+  { id: 'agents',     label: 'Personas',   icon: <Users size={15} />,      description: 'Personas with system prompts and tool access', group: 'customise' },
   // System
   { id: 'extensions', label: 'Plugins', icon: <Puzzle size={15} />,     description: 'Installed plugins', group: 'system' },
 ]
