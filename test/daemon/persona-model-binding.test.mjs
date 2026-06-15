@@ -122,7 +122,7 @@ test('ChatTile seeds the composer via resolvePersonaModelSeed inside onSelectAge
   assert.match(block, /if \(modelSeed\?\.model\) setModel\(/, 'must seed model only when present')
   // Must NOT be wired as an agentId-keyed effect (would re-clobber the user pick on
   // restore/re-render).
-  assert.doesNotMatch(src, /useEffect\([^)]*resolvePersonaModelSeed/s, 'seeding must not live in an effect')
+  assert.doesNotMatch(src, /useEffect\(\s*\([^)]*\)\s*=>\s*\{[\s\S]*?resolvePersonaModelSeed[\s\S]*?\}\s*,/s, 'seeding must not live in an effect')
 })
 
 // ─── overlay / extends: defaultBinding flows through unchanged ─────────────────
