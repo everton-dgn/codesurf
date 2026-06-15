@@ -22,6 +22,13 @@ import {
   hermesToolsetsForRequest,
   shouldUseHarness,
 } from '../../bin/chat-jobs.mjs'
+import {
+  CODEX_SDK_CONFIG_ISOLATION_GAP,
+  buildCodexSdkThreadOptions,
+  shouldUseCodexSdkProvider,
+  startCodexSdkThread,
+} from '../../packages/codesurf-daemon/bin/codex-sdk-provider.mjs'
+import { isCodexSdkEnabled } from '../../packages/codesurf-daemon/bin/codex-sdk-settings.mjs'
 // Daemon-side AgentMode→tool mapping (Codex sandbox / Hermes toolsets).
 import * as daemonAgentTools from '../../packages/codesurf-daemon/bin/agent-mode-tools.mjs'
 // Runtime providers' shared mapping module (the SAME code chatClaude/chatCodex/
@@ -515,6 +522,156 @@ test('daemon Codex: a request with sessionId resumes the thread (`exec resume <i
   // Resume must not disturb the sandbox/approval flags (continuity is orthogonal
   // to permission enforcement).
   assert.deepEqual(codexSandboxAndApproval(resumed), { sandbox: 'workspace-write', approval: 'on-request' })
+})
+
+// ─── daemon Codex SDK provider: opt-in mapping + resume ──────────────────────
+
+test('daemon Codex SDK: each UI mode maps to SDK sandboxMode + approvalPolicy', () => {
+  const base = { provider: 'codex', model: 'gpt-test', messages: [{ role: 'user', content: 'do it' }] }
+  const expected = {
+    'default': { sandboxMode: 'workspace-write', approvalPolicy: 'on-request' },
+    'auto': { sandboxMode: 'workspace-write', approvalPolicy: 'on-failure' },
+    'read-only': { sandboxMode: 'read-only', approvalPolicy: 'on-request' },
+    'full-access': { sandboxMode: 'danger-full-access', approvalPolicy: 'never' },
+  }
+  for (const [mode, want] of Object.entries(expected)) {
+    assert.deepEqual(
+      buildCodexSdkThreadOptions({ ...base, mode }, '/ws'),
+      { model: 'gpt-test', skipGitRepoCheck: true, workingDirectory: '/ws', ...want },
+      `mode ${mode} must map to ${JSON.stringify(want)}`,
+    )
+  }
+})
+
+test('daemon Codex SDK: write-free allow-list forces read-only and deny-all fails closed', () => {
+  const base = { provider: 'codex', model: 'gpt-test', mode: 'full-access', messages: [{ role: 'user', content: 'do it' }] }
+
+  const readOnly = buildCodexSdkThreadOptions({
+    ...base,
+    agentMode: { id: 'ask', name: 'Ask', systemPrompt: '', tools: ['Read', 'Glob'] },
+  }, '/ws')
+  assert.deepEqual(
+    { sandboxMode: readOnly.sandboxMode, approvalPolicy: readOnly.approvalPolicy },
+    { sandboxMode: 'read-only', approvalPolicy: 'never' },
+    'write-free allow-list must override the SDK sandbox without loosening approval policy',
+  )
+
+  assert.throws(
+    () => buildCodexSdkThreadOptions({ ...base, agentMode: { id: 'none', name: 'None', systemPrompt: '', tools: [] } }, '/ws'),
+    err => { assert.equal(err.message, CODEX_DENY_ALL_ERROR); return true },
+    'SDK deny-all must fail closed before starting a thread',
+  )
+})
+
+test('daemon Codex SDK: sessionId resumes the SDK thread, first turn starts a new thread', () => {
+  const calls = []
+  const fakeCodex = {
+    startThread(options) {
+      calls.push({ type: 'start', options })
+      return { kind: 'started' }
+    },
+    resumeThread(id, options) {
+      calls.push({ type: 'resume', id, options })
+      return { kind: 'resumed' }
+    },
+  }
+  const options = buildCodexSdkThreadOptions({ provider: 'codex', model: 'gpt-test', mode: 'default' }, '/ws')
+
+  const resumed = startCodexSdkThread(fakeCodex, { provider: 'codex', sessionId: 'thread-1' }, options)
+  assert.deepEqual(calls[0], { type: 'resume', id: 'thread-1', options })
+  assert.equal(resumed.resumed, true)
+  assert.equal(resumed.sessionId, 'thread-1')
+  assert.equal(resumed.thread.kind, 'resumed')
+
+  const fresh = startCodexSdkThread(fakeCodex, { provider: 'codex', sessionId: '' }, options)
+  assert.deepEqual(calls[1], { type: 'start', options })
+  assert.equal(fresh.resumed, false)
+  assert.equal(fresh.sessionId, null)
+  assert.equal(fresh.thread.kind, 'started')
+})
+
+test('daemon Codex SDK: fake SDK provider streams into the same job event shape', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-codex-sdk-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdirP(workspaceDir, { recursive: true })
+  t.after(async () => { await rmP(homeDir, { recursive: true, force: true }) })
+
+  const captured = {}
+  const fakeCodex = {
+    resumeThread(id, options) {
+      captured.resumeId = id
+      captured.options = options
+      return {
+        async runStreamed(input, turnOptions) {
+          captured.input = input
+          captured.signal = turnOptions.signal
+          return {
+            events: scriptedStream([
+              { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: 'sdk ok' } },
+              { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+            ]),
+          }
+        },
+      }
+    },
+    startThread() {
+      throw new Error('resumeThread should be used when request.sessionId is set')
+    },
+  }
+  const manager = createChatJobManager({
+    homeDir,
+    codexSdkFactory: () => fakeCodex,
+    checkpointStore: { createCheckpoint() { return { ok: true, checkpoint: { id: 'c' } } } },
+  })
+
+  const job = await manager.startJob({
+    cardId: 'codex-sdk-card',
+    workspaceId: 'codex-sdk-workspace',
+    provider: 'codex',
+    model: 'gpt-test',
+    mode: 'read-only',
+    useCodexSdk: true,
+    sessionId: 'thread-sdk-1',
+    workspaceDir,
+    messages: [{ role: 'user', content: 'continue' }],
+    agentMode: { id: 'ask', name: 'Ask', systemPrompt: 'SDK-PERSONA-7781', tools: ['Read'] },
+  })
+
+  const completed = await waitForCompletedJob(manager, job.id)
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.sessionId, 'thread-sdk-1')
+  assert.equal(captured.resumeId, 'thread-sdk-1')
+  assert.deepEqual(
+    {
+      sandboxMode: captured.options.sandboxMode,
+      approvalPolicy: captured.options.approvalPolicy,
+      workingDirectory: captured.options.workingDirectory,
+      skipGitRepoCheck: captured.options.skipGitRepoCheck,
+    },
+    {
+      sandboxMode: 'read-only',
+      approvalPolicy: 'on-request',
+      workingDirectory: workspaceDir,
+      skipGitRepoCheck: true,
+    },
+  )
+  assert.ok(captured.input.includes('SDK-PERSONA-7781'), 'persona must reach the SDK prompt')
+})
+
+test('daemon Codex SDK selection is opt-in; CLI stays the default/config-isolated fallback', () => {
+  assert.equal(shouldUseCodexSdkProvider({ provider: 'codex' }), false, 'Codex defaults to the CLI provider')
+  assert.equal(shouldUseCodexSdkProvider({ provider: 'codex', useCodexSdk: true }), true)
+  assert.equal(shouldUseCodexSdkProvider({ provider: 'codex', codexExecutionProvider: 'sdk' }), true)
+  assert.equal(shouldUseCodexSdkProvider({ provider: 'claude', useCodexSdk: true }), false)
+
+  assert.equal(isCodexSdkEnabled({ provider: 'codex', settings: {}, env: {} }), false)
+  assert.equal(isCodexSdkEnabled({ provider: 'codex', settings: { codex: { executionProvider: 'sdk' } }, env: {} }), true)
+  assert.equal(isCodexSdkEnabled({ provider: 'codex', settings: { codex: { executionProvider: 'sdk' } }, env: { CODESURF_CODEX_PROVIDER: 'cli' } }), false)
+  assert.equal(isCodexSdkEnabled({ provider: 'codex', settings: {}, env: { CODESURF_CODEX_PROVIDER: 'sdk' } }), true)
+
+  const cliArgs = buildCodexSpawnArgs({ mode: 'default', model: 'm', userContent: 'go' })
+  assert.ok(cliArgs.includes('--ignore-user-config'), 'runtime CLI path keeps config isolation')
+  assert.match(CODEX_SDK_CONFIG_ISOLATION_GAP, /--ignore-user-config/, 'SDK config isolation gap must stay documented in code')
 })
 
 // ─── daemon routing: harness vs native (continuity stopgap) ──────────────────

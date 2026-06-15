@@ -10,8 +10,14 @@ import { buildMemoryPrompt, loadMemoryContext } from './memory-loader.mjs'
 import { buildContextBucketBundle, describeContextBucketsForTool } from './context-buckets.mjs'
 import { applyProjectContextPolicy } from './project-context.mjs'
 import {
+  CODEX_SDK_UNAVAILABLE_CODE,
+  buildCodexSdkThreadOptions,
+  createCodexSdkClient,
+  shouldUseCodexSdkProvider,
+  startCodexSdkThread,
+} from './codex-sdk-provider.mjs'
+import {
   resolveAgentToolAllowList,
-  codexShouldForceReadOnly,
   codexSandboxApprovalFlags,
   hermesToolsetsFromAllowList,
   agentModeUnresolved,
@@ -837,7 +843,7 @@ function writeSseEvent(res, payload) {
   }
 }
 
-export function createChatJobManager({ homeDir, checkpointStore = null, claudeQuery = query, maxConcurrentJobs = 4 }) {
+export function createChatJobManager({ homeDir, checkpointStore = null, claudeQuery = query, codexSdkFactory = null, maxConcurrentJobs = 4 }) {
   const jobsDir = join(homeDir, 'jobs')
   const timelinesDir = join(homeDir, 'timelines')
   ensureDir(jobsDir)
@@ -1373,7 +1379,216 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     }
   }
 
+  async function runCodexSdkJob(job, request, workspaceDir, instructionPrompt) {
+    const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
+    if (!lastUserMsg) {
+      await appendEvent(job.id, { type: 'error', error: 'No user message' })
+      await appendEvent(job.id, { type: 'done' })
+      return true
+    }
+
+    let threadOptions
+    try {
+      threadOptions = buildCodexSdkThreadOptions(request, workspaceDir)
+    } catch (err) {
+      await appendEvent(job.id, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+      await appendEvent(job.id, { type: 'done' })
+      return true
+    }
+
+    let codex
+    try {
+      codex = await createCodexSdkClient({ codexSdkFactory })
+    } catch (err) {
+      if (err?.code === CODEX_SDK_UNAVAILABLE_CODE) {
+        console.warn(`[chat-jobs] Codex SDK unavailable; falling back to CLI: ${err.message}`)
+        return false
+      }
+      await appendEvent(job.id, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+      await appendEvent(job.id, { type: 'done' })
+      return true
+    }
+
+    const abortController = new AbortController()
+    job.cancel = () => abortController.abort()
+
+    const prompt = buildCodexPrompt(
+      lastUserMsg.content ?? '',
+      request.asyncExecution,
+      instructionPrompt,
+      request.skillsPrompt,
+      agentPersonaPrompt(request),
+    )
+
+    const pendingSnapshots = new Map()
+    const aggregatedFileChanges = new Map()
+    const exploreEntries = []
+    const emittedSessionIds = new Set()
+    let editsStarted = false
+    let exploreStarted = false
+    let commandSeq = 0
+    let fatalFailure = null
+
+    const emitSession = async (sessionId) => {
+      if (typeof sessionId !== 'string' || !sessionId.trim()) return
+      const normalized = sessionId.trim()
+      if (emittedSessionIds.has(normalized)) return
+      emittedSessionIds.add(normalized)
+      await appendEvent(job.id, { type: 'session', sessionId: normalized })
+    }
+
+    const abortSdkTurn = () => {
+      try { abortController.abort() } catch {}
+    }
+
+    const handleCodexJsonEvent = async (evt) => {
+      if (!evt || typeof evt !== 'object') return
+      if (evt.type === 'thread.started' && typeof evt.thread_id === 'string') {
+        await emitSession(evt.thread_id)
+        return
+      }
+      if (fatalFailure) return
+
+      if (evt.type === 'turn.failed' || evt.type === 'error') {
+        fatalFailure = evt.error?.message ?? evt.message ?? `Codex SDK event: ${evt.type}`
+        await appendEvent(job.id, { type: 'error', error: String(fatalFailure) })
+        abortSdkTurn()
+        return
+      }
+
+      if (evt.type === 'item.started') {
+        const item = evt.item
+        if (item?.type === 'file_change' && Array.isArray(item.changes)) {
+          const checkpointPaths = extractCodexCheckpointPaths(item.changes, workspaceDir)
+          if (item.changes.length > 0 && checkpointPaths.length === 0) {
+            fatalFailure = 'no checkpointable file paths were provided by Codex SDK file_change'
+            await appendEvent(job.id, {
+              type: 'error',
+              error: `Checkpoint creation failed before Codex SDK file change: ${fatalFailure}`,
+            })
+            abortSdkTurn()
+            return
+          }
+          const checkpoint = await createDaemonCheckpoint(job, request, 'Codex file change', checkpointPaths, {
+            itemType: 'file_change',
+            provider: 'codex-sdk',
+          })
+          if (!checkpoint.ok) {
+            fatalFailure = checkpoint.error ?? 'unknown error'
+            await appendEvent(job.id, {
+              type: 'error',
+              error: `Checkpoint creation failed before Codex SDK file change: ${fatalFailure}`,
+            })
+            abortSdkTurn()
+            return
+          }
+
+          for (const change of item.changes) {
+            if (typeof change?.path !== 'string') continue
+            const resolvedPath = resolveCodexFilePath(change.path, workspaceDir)
+            const snapshot = await readSnapshotContent(resolvedPath)
+            pendingSnapshots.set(resolvedPath, {
+              displayPath: getDisplayPath(resolvedPath, workspaceDir),
+              changeType: changeTypeFromCodexKind(change.kind),
+              existed: snapshot.existed,
+              content: snapshot.content,
+            })
+          }
+        }
+        return
+      }
+
+      if (evt.type !== 'item.completed') return
+      const item = evt.item
+      if (!item || typeof item !== 'object') return
+
+      if (item.type === 'agent_message' && typeof item.text === 'string' && item.text) {
+        await appendEvent(job.id, { type: 'text', text: item.text })
+        return
+      }
+
+      if (item.type === 'command_execution' && typeof item.command === 'string') {
+        const command = normalizeCodexShellCommand(item.command)
+        const kind = classifyCodexCommand(command)
+        const MAX_CMD_OUTPUT = 64 * 1024
+        const rawOutput = sanitizeToolOutputText(typeof item.aggregated_output === 'string' ? item.aggregated_output : '')
+        const output = rawOutput.length > MAX_CMD_OUTPUT
+          ? rawOutput.slice(0, MAX_CMD_OUTPUT) + '\n…[truncated]'
+          : rawOutput
+        if (kind === 'search' || kind === 'read') {
+          if (!exploreStarted) {
+            await appendEvent(job.id, { type: 'tool_start', toolId: 'codex-explore', toolName: 'Exploring workspace' })
+            exploreStarted = true
+          }
+          exploreEntries.push({ label: command, command, output, kind })
+          await appendEvent(job.id, {
+            type: 'tool_summary',
+            toolId: 'codex-explore',
+            toolName: buildExploreToolName(exploreEntries),
+            commandEntries: [...exploreEntries],
+          })
+        } else {
+          const toolId = `codex-cmd-${commandSeq++}`
+          await appendEvent(job.id, { type: 'tool_start', toolId, toolName: 'exec_command' })
+          await appendEvent(job.id, {
+            type: 'tool_summary',
+            toolId,
+            toolName: 'exec_command',
+            commandEntries: [{ label: command, command, output, kind: 'command' }],
+          })
+        }
+        return
+      }
+
+      if (item.type === 'file_change' && Array.isArray(item.changes)) {
+        const fileChanges = await summarizeCodexFileChanges(item.changes, pendingSnapshots, workspaceDir)
+        if (fileChanges.length === 0) return
+        for (const change of fileChanges) {
+          const key = `${change.path}::${change.previousPath ?? ''}::${change.changeType}`
+          aggregatedFileChanges.set(key, change)
+        }
+        const merged = Array.from(aggregatedFileChanges.values())
+        if (!editsStarted) {
+          await appendEvent(job.id, {
+            type: 'tool_start',
+            toolId: 'codex-file-changes',
+            toolName: buildEditedToolName(merged),
+          })
+          editsStarted = true
+        }
+        await appendEvent(job.id, {
+          type: 'tool_summary',
+          toolId: 'codex-file-changes',
+          toolName: buildEditedToolName(merged),
+          fileChanges: merged,
+        })
+      }
+    }
+
+    try {
+      const { thread, resumed, sessionId } = startCodexSdkThread(codex, request, threadOptions)
+      if (resumed) await emitSession(sessionId)
+      const { events } = await thread.runStreamed(prompt, { signal: abortController.signal })
+      for await (const evt of events) {
+        await handleCodexJsonEvent(evt)
+      }
+    } catch (err) {
+      if (!fatalFailure) {
+        const message = err instanceof Error ? err.message : String(err)
+        await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(message) })
+      }
+    }
+
+    await appendEvent(job.id, { type: 'done' })
+    return true
+  }
+
   async function runCodexJob(job, request, workspaceDir, instructionPrompt) {
+    if (shouldUseCodexSdkProvider(request)) {
+      const handledBySdk = await runCodexSdkJob(job, request, workspaceDir, instructionPrompt)
+      if (handledBySdk) return
+    }
+
     const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
     if (!lastUserMsg) {
       await appendEvent(job.id, { type: 'error', error: 'No user message' })
