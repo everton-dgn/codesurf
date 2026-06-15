@@ -185,6 +185,10 @@ export interface ChatTileComposerProps {
   showModelMenu: boolean
   currentProviderEntry: ProviderEntry | undefined
   currentModelLabel: string
+  /** P1b-2 (layer 1): a linked skill pins the model — disable the model/provider pickers. */
+  modelLocked?: boolean
+  /** Tooltip explaining the lock, shown on the disabled pills. */
+  lockReason?: string
   model: string
   modelFilter: string
   onModelFilterChange: (value: string) => void
@@ -318,6 +322,8 @@ export function ChatTileComposer({
   showModelMenu,
   currentProviderEntry,
   currentModelLabel,
+  modelLocked,
+  lockReason,
   model,
   modelFilter,
   onModelFilterChange,
@@ -523,7 +529,8 @@ export function ChatTileComposer({
                 label={currentProviderEntry?.label ?? 'Provider'}
                 active={showProviderMenu}
                 onClick={() => onToggleMenu('provider')}
-                title="Choose the CLI agent (hidden once the conversation starts)"
+                disabled={modelLocked}
+                title={modelLocked ? (lockReason ?? 'Model locked') : 'Choose the CLI agent (hidden once the conversation starts)'}
               />
               {showProviderMenu && (
                 <MenuPortal anchorRef={providerMenuRef}>
@@ -550,6 +557,8 @@ export function ChatTileComposer({
               label={currentModelLabel}
               active={showModelMenu}
               onClick={() => onToggleMenu('model')}
+              disabled={modelLocked}
+              title={modelLocked ? (lockReason ?? 'Model locked') : undefined}
             />
             {showModelMenu && (
               <MenuPortal anchorRef={modelMenuRef}>

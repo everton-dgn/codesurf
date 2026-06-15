@@ -90,15 +90,23 @@ export function useChatTileWorkspaceSkills(workspaceDir: string) {
       })
 
       const registerDiscoveredSkill = (filePath: string, fallbackName: string, content: string, dir: string): void => {
-        const nameMatch = content.match(/^---[\s\S]*?name:\s*(.+?)$/m)
-        const descriptionMatch = content.match(/^---[\s\S]*?description:\s*(.+?)$/m)
-        const name = nameMatch?.[1]?.trim() ?? fallbackName
+        const frontmatter = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? ''
+        const name = frontmatter.match(/^name:\s*(.+?)\s*$/m)?.[1]?.trim() ?? fallbackName
+        const description = frontmatter.match(/^description:\s*(.+?)\s*$/m)?.[1]?.trim() ?? `From ${dir}`
+        // P1b-2: an optional `model:`/`provider:` frontmatter key declares a HARD
+        // model lock for any persona that links this skill (see resolveSkillModelLock).
+        // Parse them ONLY from the leading `---`-fenced frontmatter block, line-anchored,
+        // so prose like "pick the best model: fast" in the body never trips a spurious lock.
+        const requiredModel = frontmatter.match(/^model:\s*(.+?)\s*$/m)?.[1]?.trim() || undefined
+        const requiredProvider = frontmatter.match(/^provider:\s*(.+?)\s*$/m)?.[1]?.trim() || undefined
         registerSkill({
           id: `discovered-${filePath}`,
           name,
-          description: descriptionMatch?.[1]?.trim() ?? `From ${dir}`,
+          description,
           content,
           command: name,
+          ...(requiredModel ? { requiredModel } : {}),
+          ...(requiredProvider ? { requiredProvider } : {}),
         })
       }
 
