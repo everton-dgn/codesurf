@@ -5,6 +5,7 @@ const path = require('path')
 const fs = require('fs')
 const os = require('os')
 const https = require('https')
+const { pathToFileURL } = require('url')
 
 const APP_NAME = 'codesurf'
 const APP_DIR = path.join(__dirname, '..')
@@ -471,6 +472,26 @@ function getCurrentVersion() {
   }
 }
 
+function getDaemonPackageVersion() {
+  try {
+    const pkgPath = path.join(APP_DIR, 'packages', 'codesurf-daemon', 'package.json')
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version.trim() : '0.1.0'
+  } catch {
+    return '0.1.0'
+  }
+}
+
+async function handleChatCommand(argv) {
+  const cliPath = path.join(APP_DIR, 'packages', 'codesurf-daemon', 'src', 'chat-cli.ts')
+  const { runCodesurfChatCli } = await import(pathToFileURL(cliPath).href)
+  return await runCodesurfChatCli(argv, {
+    appDir: APP_DIR,
+    homeDir: CACHE_DIR,
+    getAppVersion: () => process.env.CODESURF_DAEMON_VERSION_PIN?.trim() || getDaemonPackageVersion(),
+  })
+}
+
 function fetchLatestVersion() {
   return new Promise((resolve) => {
     const req = https.get(`https://registry.npmjs.org/${APP_NAME}/latest`, {
@@ -705,13 +726,22 @@ if (args[0] === 'permissions' || args[0] === 'permission') {
   }
 }
 
-if (args.includes('--help') || args.includes('-h')) {
+if (args[0] === 'chat') {
+  handleChatCommand(args.slice(1))
+    .then(code => process.exit(code))
+    .catch(error => {
+      console.error(`codesurf chat: ${error.message}`)
+      console.error('Run `codesurf chat --help` for usage.')
+      process.exit(1)
+    })
+} else if (args.includes('--help') || args.includes('-h')) {
   const version = getCurrentVersion() || 'unknown'
   console.log(`
 CodeSurf v${version} - Infinite canvas workspace for AI agents
 
 Usage:
   npx codesurf            Launch the app
+  npx codesurf chat       Chat with the local CodeSurf daemon
   npx codesurf permissions Manage remembered tool permissions
   npx codesurf --update   Check for and install updates
   npx codesurf --version  Show current version
@@ -721,15 +751,11 @@ Usage:
 Cache location: ${CACHE_DIR}
 `)
   process.exit(0)
-}
-
-if (args.includes('--version') || args.includes('-v')) {
+} else if (args.includes('--version') || args.includes('-v')) {
   const version = getCurrentVersion() || 'unknown'
   console.log(`codesurf v${version}`)
   process.exit(0)
-}
-
-if (args.includes('--update') || args.includes('-u')) {
+} else if (args.includes('--update') || args.includes('-u')) {
   performUpdate().then(updated => {
     process.exit(updated ? 0 : 1)
   })

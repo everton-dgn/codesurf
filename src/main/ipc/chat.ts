@@ -33,6 +33,7 @@ import type { SessionEntryHint } from '../../shared/session-types'
 import type { ExecutionHostRecord } from '../../shared/types'
 import { daemonClient } from '../daemon/client'
 import { ensureDaemonRunning } from '../daemon/manager'
+import { parseSseJsonBuffer } from '@codesurf/daemon/sse'
 import { getBuiltinExecutionHosts, resolveExecutionTarget } from '../execution/targets'
 import { getWorkspacePathById, readSettingsSync } from './workspace'
 
@@ -730,21 +731,13 @@ async function attachDaemonJobStream(cardId: string, host: ExecutionHostRecord, 
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
-
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary >= 0) {
-        const chunk = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        const dataLines = chunk.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim())
-        if (dataLines.length > 0) {
-          try {
-            const payload = JSON.parse(dataLines.join('\n'))
-            sendStream(cardId, payload)
-          } catch (error) {
-            log('daemon stream parse error', error)
-          }
-        }
-        boundary = buffer.indexOf('\n\n')
+      const parsed = parseSseJsonBuffer<Record<string, unknown>>(buffer)
+      buffer = parsed.remaining
+      for (const error of parsed.errors) {
+        log('daemon stream parse error', error)
+      }
+      for (const payload of parsed.events) {
+        sendStream(cardId, payload)
       }
     }
   } catch (error) {
