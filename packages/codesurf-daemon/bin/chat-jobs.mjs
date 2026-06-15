@@ -24,6 +24,19 @@ import {
   AGENT_MODE_UNRESOLVED_ERROR,
 } from './agent-mode-tools.mjs'
 import { resolveAuthoritativeAgentMode } from './agent-mode-resolver.mjs'
+import {
+  OMNIGENT_DEFAULT_BASE_URL,
+  OMNIGENT_DEFAULT_CLI,
+  decodeOmnigentModelId,
+  extractOmnigentSessionId,
+  mapOmnigentStreamEvent,
+  normalizeOmnigentServerRoot,
+  omnigentAuthHeaders,
+  omnigentEndpointUrl,
+  parseOmnigentServerUrl,
+  parseOmnigentSseChunk,
+  parseOmnigentStatusJson,
+} from './omnigent-provider.mjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -599,6 +612,68 @@ function buildCodexPrompt(userText, asyncExecution, instructionPrompt, skillsPro
   const asyncPrompt = buildAsyncExecutionPrompt(asyncExecution)
   const preamble = joinPromptSections(agentPrompt, instructionPrompt, skillsPrompt, asyncPrompt)
   return preamble ? `${preamble}\n\n## User Request\n${userText}` : userText
+}
+
+// --- Omnigent wire helpers (used by runOmnigentJob) ----------------------
+// Side-effecting fetch/CLI glue lives here at module scope; the pure parsing
+// lives in omnigent-provider.mjs so it can be unit tested without this file's
+// Claude-SDK import. Mirrors how runCodexSdkJob leans on codex-sdk-provider.mjs.
+
+async function omnigentFetchJson(baseUrl, path, apiKey, init = {}) {
+  const response = await fetch(omnigentEndpointUrl(baseUrl, path), {
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...omnigentAuthHeaders(apiKey),
+      ...(init.headers ?? {}),
+    },
+  })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(text || `${path} returned HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+// Best-effort `omni server start`. Idempotent in practice: when a server is
+// already running the CLI reports the live URL rather than erroring.
+async function startLocalOmnigentServer(cli) {
+  const command = String(cli ?? '').trim() || OMNIGENT_DEFAULT_CLI
+  const { stdout = '', stderr = '' } = await execFileAsync(command, ['server', 'start'], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  })
+  const combined = `${stdout}${stderr ? `\n${stderr}` : ''}`
+  const fromStart = parseOmnigentServerUrl(combined)
+  if (fromStart) return fromStart
+  const status = parseOmnigentStatusJson(combined)
+  if (status?.running && status.url) return normalizeOmnigentServerRoot(status.url)
+  return null
+}
+
+async function resolveOmnigentAgentId(modelId, settings, baseUrl, apiKey) {
+  const fromModel = decodeOmnigentModelId(modelId)
+  if (fromModel) return fromModel
+  const configured = String(settings?.agentId ?? '').trim()
+  if (configured) return configured
+  const payload = await omnigentFetchJson(baseUrl, '/v1/agents?limit=100&order=asc', apiKey)
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.agents)
+        ? payload.agents
+        : []
+  const first = rows.find(row => typeof row?.id === 'string' && row.id.trim())
+  if (!first) throw new Error('Omnigent returned no agents from /v1/agents; configure settings.omnigent.agentId.')
+  return first.id.trim()
+}
+
+function omnigentTitleFromPrompt(text) {
+  const oneLine = String(text ?? '').replace(/\s+/g, ' ').trim()
+  if (!oneLine) return 'CodeSurf session'
+  return oneLine.length > 80 ? `${oneLine.slice(0, 77)}...` : oneLine
 }
 
 // Build the `codex exec` argv for a request. Pure + exported so the daemon test
@@ -1974,6 +2049,233 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
     await appendEvent(job.id, { type: 'done' })
   }
 
+  async function runOmnigentJob(job, request, workspaceDir, instructionPrompt) {
+    const lastUserMsg = [...(request.messages ?? [])].reverse().find(message => message.role === 'user')
+    if (!lastUserMsg) {
+      await appendEvent(job.id, { type: 'error', error: 'No user message' })
+      await appendEvent(job.id, { type: 'done' })
+      return
+    }
+
+    // Daemon-resolved settings (codesurfd folds settings.json + env overrides
+    // into request.omnigent). Fall back to defaults so the cloud clone — which
+    // has no settings.json — still works against a local backend.
+    const settings = request.omnigent && typeof request.omnigent === 'object' ? request.omnigent : {}
+    if (settings.enabled === false) {
+      await appendEvent(job.id, { type: 'error', error: 'Omnigent provider is disabled in daemon settings (settings.omnigent.enabled = false).' })
+      await appendEvent(job.id, { type: 'done' })
+      return
+    }
+    const apiKey = typeof settings.apiKey === 'string' ? settings.apiKey : ''
+    let baseUrl = normalizeOmnigentServerRoot(
+      typeof settings.baseUrl === 'string' && settings.baseUrl.trim() ? settings.baseUrl : OMNIGENT_DEFAULT_BASE_URL,
+    )
+
+    const prompt = buildCodexPrompt(
+      lastUserMsg.content ?? '',
+      request.asyncExecution,
+      instructionPrompt,
+      request.skillsPrompt,
+      agentPersonaPrompt(request),
+    )
+
+    const abortController = new AbortController()
+    job.cancel = () => { try { abortController.abort() } catch {} }
+
+    // Lazy tool_start: the typed-event table only guarantees output_item.done,
+    // so we may first see a tool on .done — emit its start then, keyed (like the
+    // result) on call_id so the result block attaches to the call block.
+    const startedToolIds = new Set()
+    const emittedSessionIds = new Set()
+
+    const emitSession = async (sessionId) => {
+      if (typeof sessionId !== 'string' || !sessionId.trim()) return
+      const normalized = sessionId.trim()
+      if (emittedSessionIds.has(normalized)) return
+      emittedSessionIds.add(normalized)
+      await appendEvent(job.id, { type: 'session', sessionId: normalized })
+    }
+
+    const ensureToolStart = async (toolId, toolName) => {
+      if (startedToolIds.has(toolId)) return
+      startedToolIds.add(toolId)
+      await appendEvent(job.id, { type: 'tool_start', toolId, toolName })
+    }
+
+    // Pair thinking_start with a block_stop. The client's reducer leaves a
+    // thinking block open until block_stop (it is never closed by `done`), so an
+    // unpaired thinking_start renders a perpetually-open reasoning indicator. We
+    // close it on the first non-reasoning event — and ALWAYS before starting any
+    // tool, because block_stop also marks the last running tool block done.
+    let thinkingOpen = false
+    const closeThinking = async () => {
+      if (!thinkingOpen) return
+      thinkingOpen = false
+      await appendEvent(job.id, { type: 'block_stop' })
+    }
+
+    // Apply a mapped descriptor; returns 'done' | 'error' for terminals.
+    const applyDescriptor = async (descriptor) => {
+      if (!descriptor) return null
+      switch (descriptor.kind) {
+        case 'text':
+          await closeThinking()
+          await appendEvent(job.id, { type: 'text', text: descriptor.text })
+          return null
+        case 'thinking':
+          await appendEvent(job.id, { type: 'thinking', text: descriptor.text })
+          return null
+        case 'thinking_start':
+          thinkingOpen = true
+          await appendEvent(job.id, { type: 'thinking_start' })
+          return null
+        case 'tool_call':
+          await closeThinking()
+          await ensureToolStart(descriptor.toolId, descriptor.toolName)
+          if (descriptor.toolInput != null) {
+            await appendEvent(job.id, {
+              type: 'tool_use',
+              toolName: descriptor.toolName,
+              toolId: descriptor.toolId,
+              toolInput: descriptor.toolInput,
+            })
+          }
+          return null
+        case 'tool_result':
+          await closeThinking()
+          await ensureToolStart(descriptor.toolId, 'tool')
+          await appendEvent(job.id, { type: 'tool_summary', toolId: descriptor.toolId, text: descriptor.output })
+          return null
+        case 'terminal':
+          await closeThinking()
+          if (descriptor.stop === 'error') {
+            await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(descriptor.error ?? 'Omnigent turn failed.') })
+            return 'error'
+          }
+          return 'done'
+        default:
+          return null
+      }
+    }
+
+    try {
+      // Auto-start the local omni server when enabled. Idempotent: a running
+      // server reports its live URL. Best effort — fall through to the
+      // configured base URL and let the stream fetch surface a clear error.
+      // Only autostart when the base URL is still the local default — a
+      // configured remote endpoint always wins (mirrors the CLI's ensureBaseUrl,
+      // which only starts the local server when no base URL is set).
+      if (settings.autoStart !== false && baseUrl === OMNIGENT_DEFAULT_BASE_URL) {
+        try {
+          const started = await startLocalOmnigentServer(OMNIGENT_DEFAULT_CLI)
+          if (started) baseUrl = started
+        } catch {}
+      }
+
+      // Resume reuses the prior Omnigent session id (echoed back as
+      // request.sessionId); a fresh turn creates a new persistent session.
+      let sessionId = typeof request.sessionId === 'string' && request.sessionId.trim() ? request.sessionId.trim() : null
+      if (!sessionId) {
+        const agentId = await resolveOmnigentAgentId(request.model, settings, baseUrl, apiKey)
+        const body = {
+          agent_id: agentId,
+          title: omnigentTitleFromPrompt(lastUserMsg.content ?? ''),
+          ...(workspaceDir ? { workspace: workspaceDir } : {}),
+        }
+        const created = await omnigentFetchJson(baseUrl, '/v1/sessions', apiKey, {
+          method: 'POST',
+          body: JSON.stringify(body),
+          signal: abortController.signal,
+        })
+        sessionId = extractOmnigentSessionId(created)
+        if (!sessionId) throw new Error('Omnigent session create response did not include an id.')
+      }
+      await emitSession(sessionId)
+
+      // Live-tail SSE: no replay, stays open across turns. Subscribe FIRST, then
+      // POST the user turn so no events fire in the gap (API.md Reconnect Contract).
+      const streamResponse = await fetch(
+        omnigentEndpointUrl(baseUrl, `/v1/sessions/${encodeURIComponent(sessionId)}/stream`),
+        {
+          method: 'GET',
+          headers: { Accept: 'text/event-stream', ...omnigentAuthHeaders(apiKey) },
+          signal: abortController.signal,
+        },
+      )
+      if (!streamResponse.ok || !streamResponse.body) {
+        const text = await streamResponse.text().catch(() => '')
+        throw new Error(text || `Omnigent stream returned HTTP ${streamResponse.status}`)
+      }
+
+      await omnigentFetchJson(baseUrl, `/v1/sessions/${encodeURIComponent(sessionId)}/events`, apiKey, {
+        method: 'POST',
+        body: JSON.stringify({ type: 'message', data: { role: 'user', content: [{ type: 'input_text', text: prompt }] } }),
+        signal: abortController.signal,
+      })
+
+      // Read the tail and STOP on the terminal response.* event — the stream
+      // does not close or emit [DONE] for a single turn, so waiting for either
+      // would hang until timeout. This is the load-bearing difference from the
+      // codex/hermes runners; mirror the CLI omnigent-provider stream reader.
+      const reader = streamResponse.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let terminal = null
+      try {
+        while (!terminal) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          let boundary = buffer.indexOf('\n\n')
+          while (boundary >= 0) {
+            const chunk = buffer.slice(0, boundary)
+            buffer = buffer.slice(boundary + 2)
+            const { eventName, data } = parseOmnigentSseChunk(chunk)
+            if (data === '[DONE]') { terminal = 'done'; break }
+            if (data) {
+              let parsed
+              try {
+                parsed = JSON.parse(data)
+              } catch {
+                parsed = null
+              }
+              if (parsed && typeof parsed === 'object') {
+                if (eventName && typeof parsed.type !== 'string') parsed.type = eventName
+                terminal = await applyDescriptor(mapOmnigentStreamEvent(parsed))
+                if (terminal) break
+              }
+            }
+            boundary = buffer.indexOf('\n\n')
+          }
+        }
+      } finally {
+        try { await reader.cancel() } catch {}
+      }
+    } catch (err) {
+      if (!abortController.signal.aborted) {
+        const message = err instanceof Error ? err.message : String(err)
+        await appendEvent(job.id, { type: 'error', error: sanitizeAgentCliDiagnostic(message) })
+      }
+    } finally {
+      // Best-effort remote interrupt when the turn was cancelled locally.
+      if (abortController.signal.aborted) {
+        const cancelledSessionId = emittedSessionIds.values().next().value
+        if (cancelledSessionId) {
+          try {
+            await fetch(omnigentEndpointUrl(baseUrl, `/v1/sessions/${encodeURIComponent(cancelledSessionId)}/events`), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...omnigentAuthHeaders(apiKey) },
+              body: JSON.stringify({ type: 'interrupt', data: {} }),
+              signal: AbortSignal.timeout(2_000),
+            })
+          } catch {}
+        }
+      }
+    }
+
+    await appendEvent(job.id, { type: 'done' })
+  }
+
   async function runJob(job, request, workspaceDir) {
     try {
       // PRE-START authoritative resolution (#cli-persona). A caller may supply only
@@ -2121,8 +2423,10 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         await runOpenCodeJob(job, request, workspaceDir, instructionPrompt)
       } else if (request.provider === 'hermes') {
         await runHermesJob(job, request, workspaceDir, instructionPrompt)
+      } else if (request.provider === 'omnigent') {
+        await runOmnigentJob(job, request, workspaceDir, instructionPrompt)
       } else {
-        await appendEvent(job.id, { type: 'error', error: `Daemon execution is only implemented for Claude, Codex, OpenCode, and Hermes right now. Requested: ${request.provider}` })
+        await appendEvent(job.id, { type: 'error', error: `Daemon execution is only implemented for Claude, Codex, OpenCode, Hermes, and Omnigent right now. Requested: ${request.provider}` })
         await appendEvent(job.id, { type: 'done' })
       }
     } catch (err) {

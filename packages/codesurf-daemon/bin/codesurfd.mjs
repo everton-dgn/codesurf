@@ -10,6 +10,7 @@ import { findSessionEntryById, getExternalSessionChatState, invalidateExternalSe
 import { createChatJobManager } from './chat-jobs.mjs'
 import { isCodexSdkEnabled } from './codex-sdk-settings.mjs'
 import { isHarnessEnabled } from './harness-settings.mjs'
+import { resolveOmnigentSettings } from './omnigent-settings.mjs'
 import { createCheckpointStore } from './checkpoints.mjs'
 import { loadMemoryContext } from './memory-loader.mjs'
 import { createSkillsIndex } from './skills-index.mjs'
@@ -3280,6 +3281,12 @@ const server = createServer(async (req, res) => {
         if (isHarnessEnabled({ settings: settingsDoc?.settings, env: process.env.CODESURF_HARNESS, provider: request.provider })) {
           request = { ...request, useHarness: true }
         }
+      }
+      // Daemon-side Omnigent config: fold settings.json + env overrides into the
+      // request so runOmnigentJob reads ready-resolved baseUrl/apiKey/agentId/
+      // autoStart. The client never sends backend config — same pattern as above.
+      if (request.provider === 'omnigent' && request.omnigent == null) {
+        request = { ...request, omnigent: resolveOmnigentSettings({ settings: settingsDoc?.settings, env: process.env }) }
       }
       const job = await chatJobs.startJob(request)
       sendJson(res, 200, job)

@@ -78,12 +78,14 @@ const DEFAULT_MODELS: Record<string, string> = {
   codex: 'gpt-5.5',
   opencode: 'anthropic/claude-sonnet-4-6',
   hermes: 'openai-codex/gpt-5.5',
+  omnigent: 'omnigent:default',
 }
 const DEFAULT_MODES: Record<string, string> = {
   claude: 'default',
   codex: 'default',
   opencode: 'default',
   hermes: 'full',
+  omnigent: 'default',
 }
 
 function packageRoot(): string {
@@ -254,7 +256,7 @@ Usage:
   codesurf chat --list-personas
 
 Options:
-  -p, --provider <name>   claude, codex, opencode, or hermes (default: claude)
+  -p, --provider <name>   claude, codex, opencode, hermes, or omnigent (default: claude)
   -m, --model <name>      Provider model name
       --mode <mode>       Provider permission/tool mode
       --persona <id>      Select a CodeSurf Persona; the daemon applies its
