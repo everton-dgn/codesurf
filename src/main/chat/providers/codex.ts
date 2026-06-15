@@ -14,7 +14,7 @@ import { CONTEX_HOME } from '../../paths'
 import { buildAsyncExecutionPrompt, buildPeerSystemPrompt } from '../prompt-builders'
 import { buildCodeSurfOutputConvention, joinPromptSections } from '../prompt-conventions'
 import { sanitizeToolOutputText } from '../output-sanitizers'
-import { resolveAgentToolAllowList, codexShouldForceReadOnly } from '../agent-mode-tools'
+import { resolveAgentToolAllowList, codexDenyAllUnsupported, codexSandboxApprovalFlags, CODEX_DENY_ALL_ERROR } from '../agent-mode-tools'
 import type { ChatRequest, RuntimeChatSessionState } from '../types'
 import {
   log,
@@ -349,6 +349,17 @@ export function chatCodex(req: ChatRequest): void {
     ? req.mode
     : 'default'
 
+  // A-PR1 #1b: an explicit deny-all tool list ([]) is NOT enforceable on Codex
+  // (its strictest sandbox still permits reads, and it has no per-tool gate). Fail
+  // closed — surface the reason and refuse to launch rather than overclaim
+  // deny-all while silently allowing full-workspace reads.
+  const codexAllowList = resolveAgentToolAllowList(req.agentMode)
+  if (codexDenyAllUnsupported(codexAllowList)) {
+    sendStream(req.cardId, { type: 'error', error: CODEX_DENY_ALL_ERROR })
+    sendStream(req.cardId, { type: 'done' })
+    return
+  }
+
   // Build the arg list. When we have a thread ID to resume we use the
   // `codex exec resume <threadId> [flags] <prompt>` subcommand so that
   // multi-turn context is preserved. The flags (`--json`, `--model`,
@@ -357,12 +368,6 @@ export function chatCodex(req: ChatRequest): void {
   const agentPersona = req.agentMode?.systemPrompt?.trim() || undefined
   const promptText = buildCodexPrompt(lastUserMsg.content, req.asyncExecution, peerPrompt, req.memoryPrompt, req.skillsPrompt, agentPersona)
 
-  // AgentMode.tools allow-list → Codex sandbox. Codex's CLI has no per-tool
-  // allow-list, so the sandbox (read-only vs workspace-write) is the only real
-  // toolset lever. When the allow-list grants no write-capable tool, force
-  // read-only so the agent definition's restriction is actually enforced.
-  const forceReadOnly = codexShouldForceReadOnly(resolveAgentToolAllowList(req.agentMode))
-
   const args: string[] = ['exec']
   if (resumeThreadId) {
     // Use `exec resume <threadId>` to continue the existing conversation
@@ -370,20 +375,11 @@ export function chatCodex(req: ChatRequest): void {
   }
   args.push('--json', '--model', req.model)
 
-  if (forceReadOnly) {
-    // Allow-list excludes all write/exec tools → read-only regardless of mode.
-    args.push('--sandbox', 'read-only')
-  } else if (codexMode === 'full-access') {
-    args.push('--dangerously-bypass-approvals-and-sandbox')
-  } else if (codexMode === 'auto') {
-    args.push('--full-auto')
-  } else {
-    if (codexMode === 'default') {
-      args.push('--sandbox', 'workspace-write')
-    } else {
-      args.push('--sandbox', 'read-only')
-    }
-  }
+  // A-PR1 #2c: per-mode sandbox + approval policy (verified codex-cli flags:
+  // -s/--sandbox + -c approval_policy=…; `codex exec` has no -a flag). A
+  // write-free allow-list additionally forces the read-only sandbox. Deny-all
+  // ([]) already returned above, so this never throws here.
+  args.push(...codexSandboxApprovalFlags(codexMode, codexAllowList))
   // App-launched Codex runs must NOT inherit the user's global ~/.codex/config.toml
   // (its MCP servers, plugins, and hooks). In codex-cli 0.136.0 the older
   // `-c mcp_servers={}` override no longer suppresses them, and a loaded MCP server

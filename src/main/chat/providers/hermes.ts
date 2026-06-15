@@ -4,7 +4,8 @@ import {
   buildHermesChatArgs,
   sanitizeAgentCliDiagnostic,
 } from '../../agents/agent-cli-contracts'
-import { buildCodeSurfOutputConvention, joinPromptSections } from '../prompt-conventions'
+import { buildHermesTurnPrompt } from './hermes-prompt'
+import { buildCodeSurfOutputConvention } from '../prompt-conventions'
 import { resolveAgentToolAllowList, hermesToolsetsFromAllowList } from '../agent-mode-tools'
 import {
   activeProcesses,
@@ -81,17 +82,19 @@ export function chatHermes(req: ChatRequest): void {
   // openai-codex/gpt-5.5) are split into Hermes' separate --provider /
   // --model flags by the shared contract helper.
   //
-  // First-turn injection: Hermes has no system-prompt flag, so the CodeSurf
-  // output convention rides along with the first user message. Session
-  // history carries it forward on subsequent turns.
-  // Persona (AgentMode.systemPrompt) has no Hermes flag, so — like the output
-  // convention — it rides along on the first user message and the session
-  // history carries it forward on later turns.
+  // Hermes has no system-prompt flag, so the CodeSurf output convention and the
+  // AgentMode persona ride along inside the user message. The convention is
+  // first-turn only (history carries the formatting expectation), but the
+  // persona is RE-INJECTED on resumed turns too so the agent definition stays
+  // enforced for the whole session (A-PR1 #1a). See buildHermesTurnPrompt.
   const agentPersona = req.agentMode?.systemPrompt?.trim() || undefined
   const hermesIsFirstTurn = !existingSessionId
-  const hermesPrompt = hermesIsFirstTurn
-    ? `${joinPromptSections(agentPersona, buildCodeSurfOutputConvention())}\n\n---\n\n${lastUserMsg.content}`
-    : lastUserMsg.content
+  const hermesPrompt = buildHermesTurnPrompt({
+    userContent: lastUserMsg.content,
+    agentPersona,
+    isFirstTurn: hermesIsFirstTurn,
+    outputConvention: buildCodeSurfOutputConvention(),
+  })
   const args = buildHermesChatArgs({
     prompt: hermesPrompt,
     model: req.model,

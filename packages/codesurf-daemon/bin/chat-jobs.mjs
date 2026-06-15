@@ -12,6 +12,7 @@ import { applyProjectContextPolicy } from './project-context.mjs'
 import {
   resolveAgentToolAllowList,
   codexShouldForceReadOnly,
+  codexSandboxApprovalFlags,
   hermesToolsetsFromAllowList,
 } from './agent-mode-tools.mjs'
 
@@ -600,7 +601,10 @@ export function buildCodexExecArgs(request, workspaceDir, instructionPrompt = ''
   const codexMode = ['default', 'auto', 'read-only', 'full-access'].includes(request.mode)
     ? request.mode
     : 'default'
-  const forceReadOnly = codexShouldForceReadOnly(resolveAgentToolAllowList(request.agentMode))
+  // Per-mode sandbox + approval policy (and write-free allow-list → read-only).
+  // THROWS CODEX_DENY_ALL_ERROR for an explicit deny-all ([]) — runCodexJob
+  // catches it and surfaces the error instead of spawning Codex (fail closed).
+  const sandboxApprovalFlags = codexSandboxApprovalFlags(codexMode, resolveAgentToolAllowList(request.agentMode))
   const codexArgs = [
     'exec',
     '--json',
@@ -608,19 +612,8 @@ export function buildCodexExecArgs(request, workspaceDir, instructionPrompt = ''
     request.model,
     '--skip-git-repo-check',
     ...(workspaceDir ? ['-C', workspaceDir] : []),
+    ...sandboxApprovalFlags,
   ]
-  if (forceReadOnly) {
-    // Allow-list excludes all write/exec tools → read-only regardless of mode.
-    codexArgs.push('--sandbox', 'read-only')
-  } else if (codexMode === 'full-access') {
-    codexArgs.push('--dangerously-bypass-approvals-and-sandbox')
-  } else if (codexMode === 'auto') {
-    codexArgs.push('--full-auto')
-  } else if (codexMode === 'read-only') {
-    codexArgs.push('--sandbox', 'read-only')
-  } else {
-    codexArgs.push('--sandbox', 'workspace-write')
-  }
   codexArgs.push(buildCodexPrompt(
     lastUserMsg?.content ?? '',
     request.asyncExecution,
@@ -1344,7 +1337,16 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       return
     }
 
-    const codexArgs = buildCodexExecArgs(request, workspaceDir, instructionPrompt)
+    let codexArgs
+    try {
+      codexArgs = buildCodexExecArgs(request, workspaceDir, instructionPrompt)
+    } catch (err) {
+      // Fail closed: e.g. an unenforceable deny-all tool list on Codex. Surface
+      // the specific reason instead of spawning Codex with weaker enforcement.
+      await appendEvent(job.id, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+      await appendEvent(job.id, { type: 'done' })
+      return
+    }
 
     const proc = spawn('codex', codexArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1769,7 +1771,16 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
         })
       }
 
-      if (request.useHarness === true && HARNESS_PROVIDERS.has(request.provider)) {
+      // Codex is deliberately EXCLUDED from the harness path even when the
+      // harness is enabled (A-PR1 #2c / honest-notes): the @ai-sdk/harness-codex
+      // adapter cannot honor CodeSurf's 4 permission modes — it throws on any
+      // non-'allow-all' permissionMode and its bridge hardcodes
+      // sandboxMode:'danger-full-access' + approvalPolicy:'never'. Routing Codex
+      // through it would either crash or silently grant full access regardless
+      // of the user's chosen mode. The native `codex exec` CLI (runCodexJob)
+      // honors all 4 modes via -s/--sandbox + -c approval_policy=, so Codex
+      // always uses it. Tradeoff: Codex forgoes the harness's worktree isolation.
+      if (request.useHarness === true && HARNESS_PROVIDERS.has(request.provider) && request.provider !== 'codex') {
         const { runHarnessJob } = await getHarnessRunner()
         await runHarnessJob(job, request, workspaceDir, instructionPrompt, {
           appendEvent,
@@ -1840,6 +1851,9 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       status: startStatus,
       provider: request.provider,
       model: request.model,
+      // A-PR1 #2b: persist the chosen permission mode so reopening a session
+      // restores it (read back in codesurfd.mjs reconstructSessionState).
+      mode: typeof request.mode === 'string' ? request.mode : null,
       runMode: request.runMode === 'background' ? 'background' : 'foreground',
       workspaceId: typeof request.workspaceId === 'string' ? request.workspaceId : null,
       cardId: typeof request.cardId === 'string' ? request.cardId : null,

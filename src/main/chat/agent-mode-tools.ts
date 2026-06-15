@@ -53,6 +53,57 @@ export function codexShouldForceReadOnly(allowList: string[] | null): boolean {
   return allowList != null && !allowListGrantsWrite(allowList)
 }
 
+// HONEST LIMITATION (A-PR1 #1b): Codex's CLI cannot express a TRUE deny-all.
+// Its most restrictive sandbox (`read-only`) STILL PERMITS READS, and Codex has
+// no per-tool flag — so an explicit deny-all ([]) is NOT enforceable. Rather
+// than silently downgrade deny-all to a read-capable sandbox (which would
+// overclaim "deny-all" while still letting the agent read the whole workspace),
+// the Codex paths FAIL CLOSED: they refuse to launch and surface this error.
+// Returns true when the allow-list is an explicit empty deny-all.
+export function codexDenyAllUnsupported(allowList: string[] | null): boolean {
+  return allowList != null && allowList.length === 0
+}
+
+export const CODEX_DENY_ALL_ERROR =
+  'Codex cannot enforce a deny-all tool list (its most restrictive sandbox still permits file reads, and it has no per-tool gate). Refusing to launch this agent on Codex — pick a provider that can deny all tools, or grant at least Read.'
+
+// Per-mode Codex sandbox + approval policy, as `codex exec` argv fragments.
+// VERIFIED against codex-cli 0.139.0: `codex exec` exposes the sandbox via
+// `-s/--sandbox <read-only|workspace-write|danger-full-access>` and the
+// approval policy via `-c approval_policy=<value>`. The interactive
+// `-a/--ask-for-approval` flag is NOT accepted by the `exec` subcommand, so the
+// `-c` config override is the only way to set the policy non-interactively.
+//
+// UI mode → exec behavior:
+//   default     → workspace-write + on-request  (risky actions ask; in
+//                 non-interactive exec an unapprovable command is blocked)
+//   auto        → workspace-write + on-failure  (run; escalate only on failure)
+//   read-only   → read-only       + on-request
+//   full-access → danger-full-access + never    (fully autonomous, no sandbox)
+//
+// A write-free (but non-empty) allow-list forces the sandbox to read-only
+// regardless of mode — reads stay allowed (honest, NOT claimed as deny-all).
+// THROWS CODEX_DENY_ALL_ERROR for an explicit deny-all ([]) so callers fail
+// closed; they must catch and surface it rather than spawning Codex.
+export type CodexUiMode = 'default' | 'auto' | 'read-only' | 'full-access'
+
+const CODEX_MODE_POLICY: Record<CodexUiMode, { sandbox: string; approval: string }> = {
+  'default': { sandbox: 'workspace-write', approval: 'on-request' },
+  'auto': { sandbox: 'workspace-write', approval: 'on-failure' },
+  'read-only': { sandbox: 'read-only', approval: 'on-request' },
+  'full-access': { sandbox: 'danger-full-access', approval: 'never' },
+}
+
+export function codexSandboxApprovalFlags(mode: string, allowList: string[] | null): string[] {
+  if (codexDenyAllUnsupported(allowList)) {
+    throw new Error(CODEX_DENY_ALL_ERROR)
+  }
+  const policy = CODEX_MODE_POLICY[mode as CodexUiMode] ?? CODEX_MODE_POLICY.default
+  // Write-free allow-list wins over the mode's sandbox (reads only).
+  const sandbox = codexShouldForceReadOnly(allowList) ? 'read-only' : policy.sandbox
+  return ['-s', sandbox, '-c', `approval_policy=${policy.approval}`]
+}
+
 // Hermes exposes coarse toolset *categories* (terminal/file/web/browser), not a
 // per-tool allow-list. Map the agent's tool names to the categories they fall
 // under — the finest restriction Hermes can actually enforce.

@@ -25,6 +25,7 @@ import {
   type DiscoveryPeer,
 } from '../components/chat/chatTileUtils'
 import { normalizeMessagesForMemory } from '../components/chat/messageNormalization'
+import { resolveActiveChatMode } from './chatModeResolution'
 import type { ProviderEntry } from './useChatTileProviders'
 
 export interface UseChatTileMessagingOptions {
@@ -227,10 +228,16 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     const activeModeOptions = activeProviderEntry?.kind === 'builtin'
       ? PROVIDER_MODES[activeProviderEntry.id as BuiltinProvider]
       : [EXTENSION_PROVIDER_MODE]
-    const rawActiveMode = state?.mode ?? mode
-    const activeMode = activeModeOptions.some(option => option.id === rawActiveMode)
-      ? rawActiveMode
-      : resolveProviderModeId(activeProvider, settings?.chatProviderModes?.[activeProvider])
+    // A-PR1 #2a: prefer the LIVE mode over the persisted-state ref (which lags a
+    // render behind a mode toggle), so a change-then-send launches with the
+    // chosen mode. resolveActiveChatMode validates against the active provider's
+    // options and falls back to the provider default.
+    const activeMode = resolveActiveChatMode(
+      mode,
+      state?.mode,
+      activeModeOptions.map(option => option.id),
+      resolveProviderModeId(activeProvider, settings?.chatProviderModes?.[activeProvider]),
+    )
     const nextCloudHostId = executionTarget === 'cloud'
       ? (cloudHostId ?? activeCloudHost?.id ?? null)
       : null

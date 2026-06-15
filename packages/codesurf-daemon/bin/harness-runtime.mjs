@@ -389,6 +389,25 @@ export function createHarnessRunner({ homeDir, createAgent } = {}) {
       return
     }
 
+    // PROVIDER-AWARE PERMISSION GUARD (A-PR1 #2c): the @ai-sdk/harness-codex
+    // adapter cannot honor CodeSurf's 4 Codex permission modes — its doStart
+    // throws on any permissionMode other than 'allow-all', and its bridge
+    // hardcodes sandboxMode:'danger-full-access' + approvalPolicy:'never'. So the
+    // harness can ONLY run Codex with full access, which would silently ignore a
+    // user's read-only/default selection. chat-jobs.runJob therefore routes Codex
+    // to the native `codex exec` CLI (which honors all 4 modes) even when the
+    // harness is enabled. This guard is defense-in-depth: if a Codex job ever
+    // reaches here, fail with a clear, honest message instead of the cryptic
+    // upstream HarnessCapabilityUnsupportedError (or a silent full-access run).
+    if (request.provider === 'codex') {
+      await appendEvent(job.id, {
+        type: 'error',
+        error: 'Codex cannot run through the harness backend: its adapter only supports full-access (it cannot honor read-only/default/auto permission modes). Codex must use the native codex exec path.',
+      })
+      await appendEvent(job.id, { type: 'done' })
+      return
+    }
+
     const abortController = new AbortController()
     job.cancel = () => abortController.abort()
 

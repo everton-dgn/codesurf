@@ -2691,7 +2691,10 @@ function buildDaemonSessionState(jobId, workspaceId, limit = 100) {
     provider: metadata.provider ?? 'claude',
     model: metadata.model ?? '',
     mcpEnabled: true,
-    mode: 'default',
+    // A-PR1 #2b: restore the persisted permission mode (stored in job metadata
+    // by chat-jobs.startJob). Falls back to 'default' for legacy jobs that
+    // predate mode persistence or never stored one.
+    mode: typeof metadata.mode === 'string' && metadata.mode ? metadata.mode : 'default',
     thinking: 'adaptive',
     agentMode: false,
     autoAgentMode: false,

@@ -26,6 +26,12 @@ import * as daemonAgentTools from '../../packages/codesurf-daemon/bin/agent-mode
 // Runtime providers' shared mapping module (the SAME code chatClaude/chatCodex/
 // chatHermes import). Pure + type-only, so node's type-stripping loads it here.
 import * as runtimeAgentTools from '../../src/main/chat/agent-mode-tools.ts'
+// Pure runtime helpers extracted so the constructed-payload behavior (not just
+// the helper math) is testable: the Hermes turn-prompt builder and the renderer
+// permission-mode resolver.
+import { buildHermesTurnPrompt } from '../../src/main/chat/providers/hermes-prompt.ts'
+import { resolveActiveChatMode } from '../../src/renderer/src/hooks/chatModeResolution.ts'
+import { CODEX_DENY_ALL_ERROR } from '../../packages/codesurf-daemon/bin/agent-mode-tools.mjs'
 
 const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const TEST_TMP_ROOT = join(ROOT_DIR, '.tmp', 'daemon-tests')
@@ -325,27 +331,60 @@ test('harness: tools:[] (deny-all) denies a pausing tool without prompting', asy
 
 // ─── daemon Codex: AgentMode.tools → sandbox (#2) ─────────────────────────────
 
+// Helper: read the `-s/--sandbox` value and the `-c approval_policy=` value out
+// of a constructed `codex exec` argv. Asserts the REAL payload, not the helper.
+function codexSandboxAndApproval(args) {
+  const sIdx = args.indexOf('-s')
+  const sandbox = sIdx >= 0 ? args[sIdx + 1] : null
+  const cfg = args.find(a => typeof a === 'string' && a.startsWith('approval_policy='))
+  const approval = cfg ? cfg.split('=')[1] : null
+  return { sandbox, approval }
+}
+
+test('daemon Codex: each UI mode maps to the correct sandbox + approval policy (#2c)', () => {
+  const base = { provider: 'codex', model: 'gpt-test', messages: [{ role: 'user', content: 'do it' }] }
+  const expected = {
+    'default': { sandbox: 'workspace-write', approval: 'on-request' },
+    'auto': { sandbox: 'workspace-write', approval: 'on-failure' },
+    'read-only': { sandbox: 'read-only', approval: 'on-request' },
+    'full-access': { sandbox: 'danger-full-access', approval: 'never' },
+  }
+  for (const [mode, want] of Object.entries(expected)) {
+    const args = buildCodexExecArgs({ ...base, mode }, '/ws')
+    assert.deepEqual(codexSandboxAndApproval(args), want, `mode ${mode} must map to ${JSON.stringify(want)}`)
+  }
+})
+
 test('daemon Codex: a write-free allow-list forces a read-only sandbox', () => {
   const base = { provider: 'codex', model: 'gpt-test', mode: 'default', messages: [{ role: 'user', content: 'do it' }] }
 
   // No agentMode → default mode keeps workspace-write.
-  const plain = buildCodexExecArgs({ ...base }, '/ws')
-  assert.ok(plain.includes('workspace-write'), 'default mode is workspace-write without a restriction')
-  assert.ok(!plain.includes('read-only'))
+  assert.equal(codexSandboxAndApproval(buildCodexExecArgs({ ...base }, '/ws')).sandbox, 'workspace-write')
 
-  // Allow-list with NO write/exec tool → forced read-only.
+  // Allow-list with NO write/exec tool → forced read-only (reads still allowed —
+  // honest, NOT deny-all). Approval policy still reflects the mode.
   const readOnly = buildCodexExecArgs({ ...base, agentMode: { id: 'ask', name: 'Ask', systemPrompt: '', tools: ['Read', 'Glob', 'Grep'] } }, '/ws')
-  const roIdx = readOnly.indexOf('--sandbox')
-  assert.equal(readOnly[roIdx + 1], 'read-only', 'write-free allow-list must force read-only sandbox')
+  assert.deepEqual(codexSandboxAndApproval(readOnly), { sandbox: 'read-only', approval: 'on-request' }, 'write-free allow-list must force read-only sandbox')
   assert.ok(!readOnly.includes('workspace-write'))
 
   // Allow-list that includes Bash (write-capable) → stays workspace-write.
   const withBash = buildCodexExecArgs({ ...base, agentMode: { id: 'dev', name: 'Dev', systemPrompt: '', tools: ['Read', 'Bash'] } }, '/ws')
-  assert.ok(withBash.includes('workspace-write'), 'a write-capable tool keeps the writable sandbox')
+  assert.equal(codexSandboxAndApproval(withBash).sandbox, 'workspace-write', 'a write-capable tool keeps the writable sandbox')
+})
 
-  // [] = deny-all → also read-only.
-  const denyAll = buildCodexExecArgs({ ...base, agentMode: { id: 'none', name: 'None', systemPrompt: '', tools: [] } }, '/ws')
-  assert.ok(denyAll.includes('read-only'))
+test('daemon Codex: an explicit deny-all ([]) FAILS CLOSED instead of silently allowing reads (#1b)', () => {
+  const base = { provider: 'codex', model: 'gpt-test', mode: 'default', messages: [{ role: 'user', content: 'do it' }] }
+  // Regression proof: the old behavior downgraded deny-all to a read-capable
+  // `--sandbox read-only`, overclaiming deny-all. It must now THROW so the caller
+  // refuses to launch.
+  assert.throws(
+    () => buildCodexExecArgs({ ...base, agentMode: { id: 'none', name: 'None', systemPrompt: '', tools: [] } }, '/ws'),
+    err => {
+      assert.equal(err.message, CODEX_DENY_ALL_ERROR)
+      return true
+    },
+    'Codex deny-all must fail closed (throw), not produce a read-capable sandbox',
+  )
 })
 
 test('daemon Codex: AgentMode.systemPrompt is injected into the prompt arg', () => {
@@ -413,6 +452,30 @@ test('runtime mapping: codex sandbox + hermes toolsets reflect allow-list (#1)',
   assert.equal(hermesToolsetsFromAllowList(resolveAgentToolAllowList({ tools: null })), null)
 })
 
+test('contract #1: constructed payloads (not just helpers) reflect AgentMode (#1c)', () => {
+  // Codex: the actual `codex exec` argv carries the persona in the prompt AND the
+  // sandbox the allow-list dictates — assert the built command, not the helper.
+  const codexArgs = buildCodexExecArgs({
+    provider: 'codex', model: 'gpt-test', mode: 'default',
+    messages: [{ role: 'user', content: 'go' }],
+    agentMode: { id: 'ask', name: 'Ask', systemPrompt: 'PERSONA-1C-CODEX read-only.', tools: ['Read', 'Glob'] },
+  }, '/ws')
+  assert.equal(codexSandboxAndApproval(codexArgs).sandbox, 'read-only', 'write-free allow-list → read-only in the real argv')
+  assert.ok(codexArgs[codexArgs.length - 1].includes('PERSONA-1C-CODEX'), 'persona must be in the real codex prompt arg')
+
+  // Hermes: the constructed turn prompt carries the persona on the FIRST turn and
+  // on a RESUMED turn (the #1a fix), and the toolset reflects the allow-list.
+  const firstTurn = buildHermesTurnPrompt({ userContent: 'go', agentPersona: 'PERSONA-1C-HERMES.', isFirstTurn: true })
+  assert.ok(firstTurn.includes('PERSONA-1C-HERMES'), 'persona present on first Hermes turn')
+  const resumed = buildHermesTurnPrompt({ userContent: 'go', agentPersona: 'PERSONA-1C-HERMES.', isFirstTurn: false })
+  assert.ok(resumed.includes('PERSONA-1C-HERMES'), 'persona present on RESUMED Hermes turn (#1a)')
+  assert.equal(
+    hermesToolsetsForRequest({ provider: 'hermes', mode: 'full', agentMode: { tools: ['Read', 'Glob'] } }),
+    'file',
+    'hermes toolset reflects the allow-list in the constructed request',
+  )
+})
+
 test('runtime ↔ daemon mapping agree (drift guard)', () => {
   const cases = [null, [], ['Read'], ['Read', 'Bash'], ['Read', 'WebSearch'], ['Write', 'Edit']]
   for (const tools of cases) {
@@ -429,6 +492,19 @@ test('runtime ↔ daemon mapping agree (drift guard)', () => {
       daemonAgentTools.hermesToolsetsFromAllowList(dn),
       `hermes toolset mapping must agree for ${JSON.stringify(tools)}`,
     )
+    // Codex deny-all + per-mode sandbox/approval must agree across the twin
+    // modules (the Electron codex.ts and the daemon chat-jobs.mjs both depend on
+    // them) — otherwise the two Codex launch paths could silently diverge.
+    assert.equal(
+      runtimeAgentTools.codexDenyAllUnsupported(rt),
+      daemonAgentTools.codexDenyAllUnsupported(dn),
+      `codex deny-all detection must agree for ${JSON.stringify(tools)}`,
+    )
+    for (const mode of ['default', 'auto', 'read-only', 'full-access']) {
+      const rtFlags = (() => { try { return runtimeAgentTools.codexSandboxApprovalFlags(mode, rt) } catch (e) { return `THROW:${e.message}` } })()
+      const dnFlags = (() => { try { return daemonAgentTools.codexSandboxApprovalFlags(mode, dn) } catch (e) { return `THROW:${e.message}` } })()
+      assert.deepEqual(rtFlags, dnFlags, `codex sandbox/approval flags must agree for mode ${mode}, tools ${JSON.stringify(tools)}`)
+    }
   }
 })
 
@@ -441,12 +517,96 @@ test('runtime providers import & wire the AgentMode mapping (#1 wiring guard)', 
   assert.match(claude, /req\.agentMode\?\.systemPrompt/, 'claude reads AgentMode.systemPrompt')
 
   const codex = read('src/main/chat/providers/codex.ts')
-  assert.match(codex, /codexShouldForceReadOnly/, 'codex uses the sandbox-downgrade helper')
+  assert.match(codex, /codexSandboxApprovalFlags/, 'codex uses the per-mode sandbox+approval helper')
+  assert.match(codex, /codexDenyAllUnsupported/, 'codex fails closed on an unenforceable deny-all')
   assert.match(codex, /req\.agentMode\?\.systemPrompt/, 'codex reads AgentMode.systemPrompt')
 
   const hermes = read('src/main/chat/providers/hermes.ts')
   assert.match(hermes, /hermesToolsetsFromAllowList/, 'hermes derives toolsets from the allow-list')
   assert.match(hermes, /req\.agentMode\?\.systemPrompt/, 'hermes reads AgentMode.systemPrompt')
+})
+
+// ─── Hermes persona on resume (#1a) ───────────────────────────────────────────
+
+test('Hermes: persona is RE-INJECTED on resumed turns, not dropped (#1a)', () => {
+  const persona = 'HERMES-PERSONA-9911 act as a security auditor.'
+
+  // First turn: persona present (alongside the output convention).
+  const first = buildHermesTurnPrompt({ userContent: 'scan the repo', agentPersona: persona, isFirstTurn: true })
+  assert.ok(first.includes(persona), 'persona must lead the first Hermes turn')
+  assert.ok(first.includes('scan the repo'))
+
+  // RESUMED turn: regression proof. The OLD code returned bare userContent on
+  // resume (persona dropped → agent reverted to default mid-session). It must now
+  // re-inject the persona so the agent definition stays enforced.
+  const resumed = buildHermesTurnPrompt({ userContent: 'now fix it', agentPersona: persona, isFirstTurn: false })
+  assert.ok(resumed.includes(persona), 'persona MUST be present on a resumed Hermes turn (the #1a fix)')
+  assert.ok(resumed.includes('now fix it'))
+
+  // No persona configured → resumed turn is exactly the user content (no noise).
+  assert.equal(buildHermesTurnPrompt({ userContent: 'plain', agentPersona: undefined, isFirstTurn: false }), 'plain')
+})
+
+// ─── permission mode persistence round-trip (#2b) ─────────────────────────────
+
+test('daemon: the chosen permission mode round-trips through job metadata (#2b)', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-mode-roundtrip-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdirP(workspaceDir, { recursive: true })
+  t.after(async () => { await rmP(homeDir, { recursive: true, force: true }) })
+
+  const manager = createChatJobManager({
+    homeDir,
+    checkpointStore: { createCheckpoint() { return { ok: true, checkpoint: { id: 'c' } } } },
+    claudeQuery: () => (async function* () {
+      yield { type: 'result', result: 'done', session_id: 's', total_cost_usd: 0, num_turns: 1 }
+    })(),
+  })
+
+  // WRITE side: startJob persists request.mode (was NEVER stored before #2b).
+  const job = await manager.startJob({
+    cardId: 'mode-rt', workspaceId: 'mode-rt-ws',
+    provider: 'claude', model: 'claude-test', mode: 'read-only',
+    workspaceDir, messages: [{ role: 'user', content: 'hi' }],
+  })
+  assert.equal(job.mode, 'read-only', 'startJob must persist request.mode into job metadata')
+
+  await waitForCompletedJob(manager, job.id)
+  const state = await manager.getJobState(job.id)
+  assert.equal(state.mode, 'read-only', 'persisted job metadata retains the chosen mode')
+
+  // READ side: codesurfd.reconstructSessionState restores the mode with this
+  // fallback (mirrors codesurfd.mjs). A stored mode restores; a legacy job → default.
+  const restore = metadata => (typeof metadata.mode === 'string' && metadata.mode ? metadata.mode : 'default')
+  assert.equal(restore(state), 'read-only', 'reopening a session restores the stored mode (not hardcoded default)')
+  assert.equal(restore({ provider: 'claude' }), 'default', 'a legacy job without a stored mode falls back to default')
+
+  // Guard the read-back SITE: codesurfd must read metadata.mode, not hardcode it.
+  const codesurfd = readFileSync(join(ROOT_DIR, 'packages/codesurf-daemon/bin/codesurfd.mjs'), 'utf8')
+  assert.match(codesurfd, /mode:\s*typeof metadata\.mode === 'string'/, 'codesurfd must reconstruct mode from metadata.mode')
+})
+
+// ─── renderer permission-mode resolution (#2a) ────────────────────────────────
+
+test('renderer: a change-then-send uses the LIVE mode, not the stale state ref (#2a)', () => {
+  const codexModeIds = ['default', 'auto', 'read-only', 'full-access']
+
+  // The regression scenario: the user switched to 'full-access' (live `mode`),
+  // but the persisted-state ref still holds the previous 'default'. The send must
+  // launch with the CHOSEN (live) mode.
+  assert.equal(
+    resolveActiveChatMode('full-access', 'default', codexModeIds, 'default'),
+    'full-access',
+    'live mode must win over the stale persisted-state mode',
+  )
+
+  // Live mode absent → fall back to persisted state mode.
+  assert.equal(resolveActiveChatMode(undefined, 'read-only', codexModeIds, 'default'), 'read-only')
+
+  // A mode invalid for the active provider (e.g. carried over from a provider
+  // switch) is rejected in favor of the next valid candidate / the fallback.
+  assert.equal(resolveActiveChatMode('plan', 'auto', codexModeIds, 'default'), 'auto')
+  assert.equal(resolveActiveChatMode('plan', 'acceptEdits', codexModeIds, 'default'), 'default')
 })
 
 // ─── renderer: stale-closure deps guard (#4) ──────────────────────────────────
