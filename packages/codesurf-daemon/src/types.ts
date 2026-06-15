@@ -188,6 +188,73 @@ export interface DaemonToolPermissionListResult {
   grants: DaemonToolPermissionGrant[]
 }
 
+export type DaemonChatJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | string
+
+export type DaemonToolPermissionDecision = 'deny' | 'never' | 'once' | 'session' | 'today' | 'forever'
+
+export interface DaemonChatMessage {
+  role: string
+  content: unknown
+  [key: string]: unknown
+}
+
+export interface DaemonChatJobRequest {
+  provider: string
+  model?: string | null
+  mode?: string | null
+  runMode?: 'foreground' | 'background' | string | null
+  workspaceId?: string | null
+  workspaceDir?: string | null
+  cardId?: string | null
+  sessionId?: string | null
+  messages?: DaemonChatMessage[]
+  [key: string]: unknown
+}
+
+export interface DaemonChatJobState {
+  id: string
+  taskLabel: string | null
+  status: DaemonChatJobStatus
+  provider: string | null
+  model: string | null
+  mode?: string | null
+  runMode?: string | null
+  workspaceId?: string | null
+  cardId?: string | null
+  workspaceDir: string | null
+  requestedAt: string | null
+  updatedAt: string | null
+  completedAt?: string | null
+  lastSequence: number
+  sessionId?: string | null
+  initialPrompt?: string | null
+  error: string | null
+}
+
+export interface DaemonChatJobEvent {
+  jobId: string
+  sequence: number
+  timestamp: number
+  type: string
+  sessionId?: string | null
+  text?: string
+  error?: string
+  toolId?: string | null
+  toolName?: string | null
+  title?: string | null
+  description?: string | null
+  blockedPath?: string | null
+  workspaceDir?: string | null
+  provider?: string | null
+  [key: string]: unknown
+}
+
+export interface DaemonChatPermissionAnswer {
+  jobId: string
+  toolId: string
+  decision: DaemonToolPermissionDecision
+}
+
 /**
  * AppSettings is host-specific (the daemon stores opaque JSON). Use `unknown`
  * here and re-cast in the host adapter. See collaborator-clone's
