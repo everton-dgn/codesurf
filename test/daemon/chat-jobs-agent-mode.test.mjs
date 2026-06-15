@@ -858,6 +858,21 @@ test('renderer: resolveDispatchAgentMode preserves r2 behavior — loaded path +
   assert.equal(none.agentMode, null, 'no selected agent dispatches a null agentMode (no fail-closed regression)')
 })
 
+test('renderer: ChatTile wires a LIFECYCLED agentModesLoaded into useChatTileMessaging (#load-race wiring)', () => {
+  // The pure resolver + call-site guards above prove the hook does the right thing
+  // GIVEN a correct agentModesLoaded. They do NOT prove ChatTile feeds a correctly
+  // lifecycled flag. Hardcoding `agentModesLoaded={true}` (or dropping the state)
+  // makes every load-window send take the "loaded" path and trust the seeded looser
+  // default — reopening the race while the other four tests stay green. This guard
+  // closes that vector: the flag must start false, flip true ONLY after the load
+  // resolves, and be passed through as the state variable (never a literal true).
+  const src = readFileSync(join(ROOT_DIR, 'src/renderer/src/components/ChatTile.tsx'), 'utf8')
+  assert.match(src, /const \[agentModesLoaded, setAgentModesLoaded\] = useState\(false\)/, 'agentModesLoaded must initialize false')
+  assert.match(src, /setAgentModes\(list\);\s*setAgentModesLoaded\(true\)/, 'loaded flag must flip true only after loadAgentModes resolves')
+  assert.match(src, /\n\s*agentModesLoaded,\n/, 'agentModesLoaded must be passed through to the messaging hook as the state var')
+  assert.doesNotMatch(src, /agentModesLoaded=\{true\}|agentModesLoaded:\s*true/, 'must NOT hardcode the loaded flag true (would reopen the load race)')
+})
+
 // ─── Hermes persona on resume (#1a) ───────────────────────────────────────────
 
 test('Hermes: persona is RE-INJECTED on resumed turns, not dropped (#1a)', () => {
