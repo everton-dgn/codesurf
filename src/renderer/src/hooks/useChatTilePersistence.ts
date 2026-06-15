@@ -10,7 +10,12 @@ import {
   type ActiveChatSurface,
   type PendingAttachment,
 } from '../components/chat/chatTileUtils'
-import type { ChatTilePersistedState, QueuedChatTurn } from '../components/chat/chatTileTypes'
+import {
+  normalizeActiveView,
+  type ChatTileActiveView,
+  type ChatTilePersistedState,
+  type QueuedChatTurn,
+} from '../components/chat/chatTileTypes'
 import {
   getChatTileRuntimeState,
   setChatTileRuntimeState,
@@ -52,6 +57,7 @@ export interface UseChatTilePersistenceOptions {
   jobSequence: number
   cloudHostId: string | null
   isStreaming: boolean
+  activeView: ChatTileActiveView
 
   setMessagesSafe: (updater: SetStateAction<ChatMessage[]>) => void
   setInput: Dispatch<SetStateAction<string>>
@@ -59,6 +65,7 @@ export interface UseChatTilePersistenceOptions {
   setQueuedTurns: Dispatch<SetStateAction<QueuedChatTurn[]>>
   setOpenChatSurfaces: Dispatch<SetStateAction<ActiveChatSurface[]>>
   setActiveChatSurfaceId: Dispatch<SetStateAction<string | null>>
+  setActiveView: Dispatch<SetStateAction<ChatTileActiveView>>
   setProvider: Dispatch<SetStateAction<string>>
   setModel: Dispatch<SetStateAction<string>>
   setExecutionTarget: Dispatch<SetStateAction<'local' | 'cloud'>>
@@ -116,12 +123,14 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
     jobSequence,
     cloudHostId,
     isStreaming,
+    activeView,
     setMessagesSafe,
     setInput,
     setAttachments,
     setQueuedTurns,
     setOpenChatSurfaces,
     setActiveChatSurfaceId,
+    setActiveView,
     setProvider,
     setModel,
     setExecutionTarget,
@@ -185,12 +194,13 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
       jobSequence,
       cloudHostId,
       isStreaming,
+      activeView,
     }
     if (stateLoadedRef.current) {
       if (isChatTileRuntimeStateDisposed(tileId)) return
       setChatTileRuntimeState(tileId, latestStateRef.current)
     }
-  }, [tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, agentId, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming])
+  }, [tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, agentId, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, activeView])
 
   useEffect(() => {
     reviveChatTileRuntimeState(tileId)
@@ -268,6 +278,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
       }
       if (typeof saved.cloudHostId === 'string' || saved.cloudHostId === null) setCloudHostId(saved.cloudHostId ?? null)
       if (typeof saved.isStreaming === 'boolean') setIsStreaming(saved.isStreaming)
+      if (saved.activeView !== undefined) setActiveView(normalizeActiveView(saved.activeView))
     }
 
     const cached = reloadToken > 0
@@ -335,7 +346,7 @@ export function useChatTilePersistence(options: UseChatTilePersistenceOptions): 
         persistTimerRef.current = null
       }
     }
-  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, agentId, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, persistLatestState])
+  }, [workspaceId, tileId, messages, input, attachments, queuedTurns, openChatSurfaces, activeChatSurfaceId, executionTarget, provider, model, mcpEnabled, mode, thinking, agentId, effectiveAgentMode, autoAgentMode, preserveSessionSummary, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages, sessionId, jobId, jobSequence, cloudHostId, isStreaming, activeView, persistLatestState])
 
   useEffect(() => {
     const handleBeforeUnload = (): void => {

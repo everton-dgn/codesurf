@@ -88,6 +88,10 @@ export function useTileMounting({
     if (tile?.type === 'chat') {
       disposeChatTileRuntimeState(tileId)
       void window.electron.chat?.disposeCard?.(tileId)
+      // The chat tile can embed a terminal under a deterministic derived id
+      // (`${tileId}-terminal`). Tear down its PTY too, since that backend is
+      // keyed by tileId and would otherwise leak when the chat tile closes.
+      window.electron.terminal.destroy(`${tileId}-terminal`)
     }
     if (tile?.type === 'media') {
       disposeMediaTile(tileId)

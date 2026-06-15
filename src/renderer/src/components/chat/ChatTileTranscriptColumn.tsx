@@ -64,6 +64,13 @@ export interface ChatTileTranscriptColumnProps {
   onReorderQueuedTurn: (draggedId: string, targetId: string, mode: 'before' | 'after' | 'into') => void
   onSteerQueuedTurn: (turn: QueuedChatTurn) => void
   onDeleteQueuedTurn: (turnId: string) => void
+  /** Which body view to show — the transcript ('chat') or the embedded
+   *  terminal ('terminal'). */
+  activeView: 'chat' | 'terminal'
+  /** The embedded terminal node, rendered once it has first been opened and
+   *  kept mounted thereafter (hidden via layout-preserving CSS when on Chat).
+   *  Null until the terminal has been opened at least once. */
+  embeddedTerminal: React.ReactNode
   children: React.ReactNode
 }
 
@@ -115,9 +122,12 @@ export function ChatTileTranscriptColumn({
   onReorderQueuedTurn,
   onSteerQueuedTurn,
   onDeleteQueuedTurn,
+  activeView,
+  embeddedTerminal,
   children,
 }: ChatTileTranscriptColumnProps): JSX.Element {
   const theme = useTheme()
+  const terminalActive = activeView === 'terminal'
 
   return (
     <div style={{
@@ -129,6 +139,14 @@ export function ChatTileTranscriptColumn({
       position: 'relative',
       justifyContent: isStartScreen ? 'center' : undefined,
     }}>
+      <div style={{
+        flex: terminalActive ? 1 : (isStartScreen ? '0 0 auto' : 1),
+        position: 'relative',
+        minHeight: 0,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
       <div
         ref={messagesRef}
         className={`chat-messages ${isStartScreen ? '' : 'cs-fade-scroll-y cs-fade-scroll-y-lg'}`}
@@ -137,6 +155,7 @@ export function ChatTileTranscriptColumn({
         onKeyDown={handleMessagesKeyDown}
         tabIndex={-1}
         style={{
+          display: terminalActive ? 'none' : undefined,
           flex: isStartScreen ? '0 0 auto' : 1,
           overflowY: isStartScreen ? 'visible' : 'auto',
           padding: isStartScreen ? '12px 14px 4px' : '12px 14px',
@@ -219,8 +238,24 @@ export function ChatTileTranscriptColumn({
         </div>
       </div>
 
+      {/* Embedded terminal — absolutely positioned over the transcript region so
+          it keeps full size (layout-preserving) and stays mounted across tab
+          switches; only visibility toggles. Unmounting would kill its PTY. */}
+      {embeddedTerminal && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          visibility: terminalActive ? 'visible' : 'hidden',
+          pointerEvents: terminalActive ? 'auto' : 'none',
+          zIndex: terminalActive ? 1 : 0,
+        }}>
+          {embeddedTerminal}
+        </div>
+      )}
+      </div>
+
       <div style={{ flexShrink: 0, position: 'relative', overflow: 'visible' }}>
-        {showScrollToLatest && (
+        {!terminalActive && showScrollToLatest && (
           <button
             onClick={() => scrollToLatest()}
             title="Jump to latest"
