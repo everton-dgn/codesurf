@@ -1,12 +1,9 @@
 import { spawn, execFileSync } from 'child_process'
 import { getAgentPath, getShellEnvPath } from '../../agent-paths'
 import {
-  buildHermesChatArgs,
   sanitizeAgentCliDiagnostic,
 } from '../../agents/agent-cli-contracts'
-import { buildHermesTurnPrompt } from './hermes-prompt'
-import { buildCodeSurfOutputConvention } from '../prompt-conventions'
-import { resolveAgentToolAllowList, hermesToolsetsFromAllowList } from '../agent-mode-tools'
+import { buildHermesSpawnArgs } from './agent-mode-payloads'
 import {
   activeProcesses,
   getPreparedMessages,
@@ -61,47 +58,26 @@ export function chatHermes(req: ChatRequest): void {
     resuming: !!existingSessionId,
   })
 
-  // Map mode to hermes toolsets
-  const modeMap: Record<string, string> = {
-    'full': 'terminal,file,web,browser',
-    'terminal': 'terminal,file',
-    'web': 'web,browser',
-    'query': '',
+  // Build the `hermes chat` argv from the shared, pure builder. It maps
+  // AgentMode.tools onto Hermes' coarse toolset categories, re-injects the
+  // persona on resumed turns (A-PR1 #1a), and FAILS CLOSED (throws) if a
+  // selected agent's definition has not resolved (A-PR1 BLOCKING-1) — caught
+  // below so we surface the reason instead of launching unrestricted.
+  let args: string[]
+  try {
+    args = buildHermesSpawnArgs({
+      agentId: req.agentId,
+      agentMode: req.agentMode,
+      mode: req.mode,
+      model: req.model,
+      userContent: lastUserMsg.content,
+      existingSessionId,
+    })
+  } catch (err) {
+    sendStream(req.cardId, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+    sendStream(req.cardId, { type: 'done' })
+    return
   }
-  // AgentMode.tools allow-list → Hermes toolset categories when present (Hermes
-  // gates by coarse category, not per-tool; null/absent falls back to the mode
-  // mapping; [] yields '' = query-only deny-all).
-  const agentToolsets = hermesToolsetsFromAllowList(resolveAgentToolAllowList(req.agentMode))
-  const toolsets = agentToolsets ?? (modeMap[req.mode ?? ''] ?? 'terminal,file,web')
-
-  // Hermes requires the `chat` subcommand for non-interactive prompts.
-  // We request NDJSON event streaming via `--stream-json` so tool calls,
-  // text deltas, and thinking blocks surface in real time (the old `--quiet`
-  // mode nulled Hermes' streaming callbacks and the UI went silent until
-  // the final response). Provider-prefixed CodeSurf model ids (for example
-  // openai-codex/gpt-5.5) are split into Hermes' separate --provider /
-  // --model flags by the shared contract helper.
-  //
-  // Hermes has no system-prompt flag, so the CodeSurf output convention and the
-  // AgentMode persona ride along inside the user message. The convention is
-  // first-turn only (history carries the formatting expectation), but the
-  // persona is RE-INJECTED on resumed turns too so the agent definition stays
-  // enforced for the whole session (A-PR1 #1a). See buildHermesTurnPrompt.
-  const agentPersona = req.agentMode?.systemPrompt?.trim() || undefined
-  const hermesIsFirstTurn = !existingSessionId
-  const hermesPrompt = buildHermesTurnPrompt({
-    userContent: lastUserMsg.content,
-    agentPersona,
-    isFirstTurn: hermesIsFirstTurn,
-    outputConvention: buildCodeSurfOutputConvention(),
-  })
-  const args = buildHermesChatArgs({
-    prompt: hermesPrompt,
-    model: req.model,
-    resumeSessionId: existingSessionId,
-    toolsets,
-    streamJson: true,
-  })
 
   const proc = spawn(hermesBin, args, {
     stdio: ['ignore', 'pipe', 'pipe'],

@@ -56,6 +56,7 @@ import {
   resolvePendingAskUserQuestion,
 } from '../chat/providers/claude'
 import { chatCodex } from '../chat/providers/codex'
+import { agentModeUnresolved, AGENT_MODE_UNRESOLVED_ERROR } from '../chat/agent-mode-tools'
 import { chatCsagent } from '../chat/providers/csagent'
 import { chatLocalProxy } from '../chat/providers/local-proxy'
 import type {
@@ -988,6 +989,18 @@ export function registerChatIPC(): void {
       executionPreference: req.executionPreference ?? null,
       backend: 'runtime',
     })
+
+    // A-PR1 BLOCKING-1 (security chokepoint): a selected agent whose definition
+    // has not resolved must not launch unrestricted on ANY runtime provider.
+    // chatClaude/chatCodex/chatHermes each also fail closed via their builders
+    // (defense-in-depth), but opencode/openclaw/csagent/local-proxy ignore
+    // agentMode entirely — so this switch-level guard is the non-bypassable net
+    // that covers every provider in one place.
+    if (agentModeUnresolved(requestWithFileReferences)) {
+      sendStream(requestWithFileReferences.cardId, { type: 'error', error: AGENT_MODE_UNRESOLVED_ERROR })
+      sendStream(requestWithFileReferences.cardId, { type: 'done' })
+      return { ok: false }
+    }
 
     switch (requestWithFileReferences.provider) {
       case 'claude': chatClaude(requestWithFileReferences); break

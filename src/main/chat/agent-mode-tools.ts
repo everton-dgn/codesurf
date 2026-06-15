@@ -20,6 +20,23 @@ export function resolveAgentToolAllowList(agentMode?: AgentMode | null): string[
   return Array.isArray(tools) ? tools : null
 }
 
+// A-PR1 BLOCKING-1 (security): a selected agent id WITHOUT its resolved
+// definition must NEVER launch unrestricted. The renderer restores `agentId`
+// synchronously from tile state but loads the agent definitions asynchronously,
+// so there is a window where a request carries `agentId` (incl. a deny-all
+// Codex agent) but `agentMode` is still null. Providers enforce persona + tools
+// from `agentMode`, so launching in that window would silently bypass ALL
+// agent-definition restrictions. We FAIL CLOSED: if an agentId is present but
+// the agentMode has not resolved, refuse to launch. Loose `== null` catches
+// both the explicit null the renderer sends and an omitted field.
+export function agentModeUnresolved(req: { agentId?: string | null; agentMode?: AgentMode | null }): boolean {
+  const id = typeof req?.agentId === 'string' ? req.agentId.trim() : ''
+  return id !== '' && req?.agentMode == null
+}
+
+export const AGENT_MODE_UNRESOLVED_ERROR =
+  'A selected agent could not be applied: its definition has not loaded yet (the agent persona and tool restrictions are unavailable). Refusing to launch unrestricted — wait a moment and resend, or clear the selected agent.'
+
 // Normalize a tool name for comparison: lowercase + drop non-alphanumerics.
 // AgentMode.tools uses Claude-style PascalCase (Read, WebSearch); other runtimes
 // name the same capabilities differently. This makes both sides comparable.

@@ -215,6 +215,24 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
   const dispatchMessageContent = useCallback(async (messageContent: string): Promise<boolean> => {
     const trimmedContent = messageContent.trim()
     if (!trimmedContent) return false
+
+    // A-PR1 BLOCKING-1 (renderer guard): a selected agent's definition loads
+    // asynchronously while `agentId` is restored synchronously from tile state,
+    // so during the load window `resolvedAgentMode` is null. Dispatching then
+    // would send a dangling agentId with no agentMode — the providers fail closed
+    // on that (defense-in-depth), but refusing here avoids a doomed turn and tells
+    // the user why. Do NOT launch with an unresolved agent.
+    if (agentId && !resolvedAgentMode) {
+      setMessagesSafe(prev => [...prev, {
+        id: `msg-agent-unresolved-${Date.now()}`,
+        role: 'assistant',
+        content: 'The selected agent is still loading — its persona and tool restrictions are not ready yet. Wait a moment and resend, or clear the selected agent.',
+        timestamp: Date.now(),
+        isStreaming: false,
+      }])
+      return false
+    }
+
     const { bodyText: userBodyText } = splitMessageAttachmentPaths(trimmedContent)
 
     const state = latestStateRef.current

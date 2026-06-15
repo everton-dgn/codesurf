@@ -31,7 +31,21 @@ import * as runtimeAgentTools from '../../src/main/chat/agent-mode-tools.ts'
 // permission-mode resolver.
 import { buildHermesTurnPrompt } from '../../src/main/chat/providers/hermes-prompt.ts'
 import { resolveActiveChatMode } from '../../src/renderer/src/hooks/chatModeResolution.ts'
-import { CODEX_DENY_ALL_ERROR } from '../../packages/codesurf-daemon/bin/agent-mode-tools.mjs'
+import {
+  CODEX_DENY_ALL_ERROR,
+  HARNESS_READS_UNENFORCEABLE_ERROR,
+  agentModeUnresolved as daemonAgentModeUnresolved,
+  AGENT_MODE_UNRESOLVED_ERROR as DAEMON_AGENT_MODE_UNRESOLVED_ERROR,
+} from '../../packages/codesurf-daemon/bin/agent-mode-tools.mjs'
+// Runtime provider payload builders — the SAME pure functions chatClaude/
+// chatCodex/chatHermes call. Importing them lets the suite assert the REAL
+// constructed payload + fail-closed throws (not a source regex). Dependency-free,
+// so node's type-stripping loads them.
+import {
+  buildHermesSpawnArgs,
+  buildCodexSpawnArgs,
+  buildClaudeAgentModeOptions,
+} from '../../src/main/chat/providers/agent-mode-payloads.ts'
 
 const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const TEST_TMP_ROOT = join(ROOT_DIR, '.tmp', 'daemon-tests')
@@ -297,36 +311,90 @@ test('harness: an allow-list downgrades acceptEdits (allow-edits) to allow-reads
   assert.equal(captured.opts.permissionMode, 'allow-reads')
 })
 
-test('harness: tools:[] (deny-all) denies a pausing tool without prompting', async () => {
+test('harness: tools:[] (deny-all) is REFUSED — the agent never launches (#BLOCKING-2)', async () => {
+  // Regression proof: the OLD behavior launched under `allow-reads` (which
+  // AUTO-APPROVES the adapter's built-in reads) and only the approval loop could
+  // deny a *pausing* tool like bash — so tools:[] still read the whole workspace
+  // while claiming deny-all. The Claude harness cannot deny reads, so deny-all
+  // must now FAIL CLOSED: no agent created, no stream, an error + done emitted.
   const home = mkdtempSync(join(tmpdir(), 'codesurf-agentmode-'))
   const events = []
-  const asked = []
-  const awaitToolPermission = async (_id, req) => { asked.push(req.toolName); return 'once' }
-  const createAgent = () => ({
-    async createSession(o) { return { sessionId: o?.sessionId ?? 'fake', destroy: async () => {} } },
-    async stream() {
-      return {
-        fullStream: scriptedStream([
-          { type: 'tool-approval-request', approvalId: 'ap-bash', toolCall: { type: 'tool-call', toolCallId: 'tc-b', toolName: 'bash', input: { command: 'ls' } } },
-        ]),
-        response: Promise.resolve({ messages: [] }),
-      }
-    },
-    async continueStream() {
-      return { fullStream: scriptedStream([{ type: 'finish', finishReason: 'stop' }]), response: Promise.resolve({ messages: [] }) }
-    },
-  })
+  let agentCreated = false
+  let streamStarted = false
+  const createAgent = () => {
+    agentCreated = true
+    return {
+      async createSession(o) { return { sessionId: o?.sessionId ?? 'fake', destroy: async () => {} } },
+      async stream() {
+        streamStarted = true
+        return { fullStream: scriptedStream([{ type: 'finish', finishReason: 'stop' }]), response: Promise.resolve({ messages: [] }) }
+      },
+    }
+  }
   const runner = createHarnessRunner({ homeDir: home, createAgent })
   await runner.runHarnessJob(
     { id: 'denyall-job' },
     { provider: 'claude', mode: 'bypassPermissions', messages: [{ role: 'user', content: 'go' }], agentMode: { id: 'none', name: 'None', systemPrompt: '', tools: [] } },
     '',
     '',
-    { appendEvent: async (_j, e) => events.push(e), awaitToolPermission },
+    { appendEvent: async (_j, e) => events.push(e) },
   )
-  // tools:[] = deny-all → bash was auto-denied, the user was never asked.
-  assert.ok(!asked.includes('bash'), 'deny-all must not prompt the user for any tool')
-  assert.ok(events.some(e => e.type === 'tool_permission_resolved' && e.toolName === 'bash' && e.decision === 'deny'))
+  assert.equal(agentCreated, false, 'deny-all must refuse to launch — no agent created (would otherwise read-capable)')
+  assert.equal(streamStarted, false, 'deny-all must not start a stream')
+  assert.equal(events.find(e => e.type === 'error')?.error, HARNESS_READS_UNENFORCEABLE_ERROR, 'must surface the read-unenforceable reason')
+  assert.ok(events.some(e => e.type === 'done'), 'must still terminate the job with done')
+})
+
+test('harness: a Read-excluding allow-list is also REFUSED (reads auto-approve, unenforceable) (#BLOCKING-2)', async () => {
+  // The leak is broader than []: ANY list that excludes Read is unenforceable on
+  // the harness (reads auto-approve regardless of the list). e.g. ['Bash'] would
+  // run read-capable while the definition forbids reads → fail closed.
+  const home = mkdtempSync(join(tmpdir(), 'codesurf-agentmode-'))
+  const events = []
+  let agentCreated = false
+  const createAgent = () => {
+    agentCreated = true
+    return {
+      async createSession(o) { return { sessionId: o?.sessionId ?? 'fake', destroy: async () => {} } },
+      async stream() { return { fullStream: scriptedStream([{ type: 'finish', finishReason: 'stop' }]), response: Promise.resolve({ messages: [] }) } },
+    }
+  }
+  const runner = createHarnessRunner({ homeDir: home, createAgent })
+  await runner.runHarnessJob(
+    { id: 'noread-job' },
+    { provider: 'claude', mode: 'bypassPermissions', messages: [{ role: 'user', content: 'go' }], agentMode: { id: 'w', name: 'W', systemPrompt: '', tools: ['Bash'] } },
+    '',
+    '',
+    { appendEvent: async (_j, e) => events.push(e) },
+  )
+  assert.equal(agentCreated, false, 'a Read-excluding allow-list must refuse to launch on the harness')
+  assert.equal(events.find(e => e.type === 'error')?.error, HARNESS_READS_UNENFORCEABLE_ERROR)
+})
+
+test('harness: a Read-INCLUSIVE allow-list still launches (reads are honestly enforceable)', async () => {
+  // Guard the other side: ['Read','Bash'] permits reads, so the harness CAN honor
+  // the definition (auto-approve reads, deny the rest via the loop). It must NOT
+  // fail closed — the agent launches as before.
+  const home = mkdtempSync(join(tmpdir(), 'codesurf-agentmode-'))
+  const events = []
+  let agentCreated = false
+  const createAgent = () => {
+    agentCreated = true
+    return {
+      async createSession(o) { return { sessionId: o?.sessionId ?? 'fake', destroy: async () => {} } },
+      async stream() { return { fullStream: scriptedStream([{ type: 'finish', finishReason: 'stop' }]), response: Promise.resolve({ messages: [] }) } },
+    }
+  }
+  const runner = createHarnessRunner({ homeDir: home, createAgent })
+  await runner.runHarnessJob(
+    { id: 'readok-job' },
+    { provider: 'claude', mode: 'bypassPermissions', messages: [{ role: 'user', content: 'go' }], agentMode: { id: 'dev', name: 'Dev', systemPrompt: '', tools: ['Read', 'Bash'] } },
+    '',
+    '',
+    { appendEvent: async (_j, e) => events.push(e) },
+  )
+  assert.equal(agentCreated, true, 'a Read-inclusive allow-list must still launch (enforceable)')
+  assert.ok(!events.some(e => e.type === 'error'), 'no fail-closed error for an enforceable list')
 })
 
 // ─── daemon Codex: AgentMode.tools → sandbox (#2) ─────────────────────────────
@@ -508,22 +576,182 @@ test('runtime ↔ daemon mapping agree (drift guard)', () => {
   }
 })
 
-test('runtime providers import & wire the AgentMode mapping (#1 wiring guard)', () => {
+// A-PR1 BLOCKING-3: the OLD wiring guard was a SOURCE REGEX — it passed even if a
+// provider dropped its actual call path while leaving the helper imported. These
+// replacements assert the REAL constructed payload from the SAME builder the
+// provider calls, so a regression in the wiring fails the test.
+
+test('runtime Hermes: buildHermesSpawnArgs (the chatHermes call path) reflects AgentMode in the real argv (#1c)', () => {
+  // file-only allow-list → --toolsets file (NOT the mode's terminal,file,web,browser),
+  // and the persona rides inside the --query prompt.
+  const args = buildHermesSpawnArgs({
+    agentMode: { id: 'ask', name: 'Ask', systemPrompt: 'PERSONA-RT-HERMES.', tools: ['Read', 'Glob'] },
+    mode: 'full', model: 'm', userContent: 'go',
+  })
+  const tsIdx = args.indexOf('--toolsets')
+  assert.ok(tsIdx >= 0, '--toolsets must be present for a non-empty allow-list')
+  assert.equal(args[tsIdx + 1], 'file', 'file-only allow-list → --toolsets file in the real argv')
+  const queryIdx = args.indexOf('--query')
+  assert.ok(args[queryIdx + 1].includes('PERSONA-RT-HERMES'), 'persona must be in the real --query prompt')
+  assert.ok(args.includes('--stream-json'), 'chatHermes requests NDJSON streaming')
+
+  // deny-all [] → query-only: empty toolset is dropped (no --toolsets flag).
+  const denyAll = buildHermesSpawnArgs({ agentMode: { tools: [] }, mode: 'full', model: 'm', userContent: 'go' })
+  assert.ok(!denyAll.includes('--toolsets'), 'deny-all → no toolsets flag (query-only)')
+})
+
+test('runtime Codex: buildCodexSpawnArgs (the chatCodex call path) reflects AgentMode in the real argv (#1c)', () => {
+  const args = buildCodexSpawnArgs({
+    agentMode: { id: 'ask', name: 'Ask', systemPrompt: 'PERSONA-RT-CODEX.', tools: ['Read', 'Glob'] },
+    mode: 'default', model: 'm', userContent: 'go', workspaceDir: '/ws',
+  })
+  assert.equal(codexSandboxAndApproval(args).sandbox, 'read-only', 'write-free allow-list → read-only sandbox in the real runtime argv')
+  assert.ok(args[args.length - 1].includes('PERSONA-RT-CODEX'), 'persona must be in the real codex prompt arg')
+
+  // deny-all [] FAILS CLOSED (throws) — same honest contract as the daemon path.
+  assert.throws(
+    () => buildCodexSpawnArgs({ agentMode: { tools: [] }, mode: 'default', model: 'm', userContent: 'go' }),
+    err => { assert.equal(err.message, CODEX_DENY_ALL_ERROR); return true },
+    'runtime Codex deny-all must fail closed (throw), not build a read-capable argv',
+  )
+})
+
+test('runtime Claude: buildClaudeAgentModeOptions (the chatClaude call path) reflects AgentMode (#1c)', () => {
+  const restricted = buildClaudeAgentModeOptions({ agentMode: { id: 'ask', name: 'Ask', systemPrompt: 'PERSONA-RT-CLAUDE.', tools: ['Read', 'Glob'] } })
+  assert.deepEqual(restricted.tools, ['Read', 'Glob'], 'allow-list → SDK tools restriction')
+  assert.equal(restricted.persona, 'PERSONA-RT-CLAUDE.', 'persona → systemPrompt')
+  // unset → tools undefined (option omitted → SDK default preset)
+  assert.equal(buildClaudeAgentModeOptions({ agentMode: { tools: null } }).tools, undefined)
+  // [] → deny-all passed through verbatim (SDK disables all built-ins)
+  assert.deepEqual(buildClaudeAgentModeOptions({ agentMode: { tools: [] } }).tools, [])
+})
+
+test('runtime providers delegate to the shared payload builders (thin wiring guard)', () => {
+  // Substance is behaviorally tested above; this only ensures the providers route
+  // through the tested builders (so a revert to inline construction is caught).
   const read = rel => readFileSync(join(ROOT_DIR, rel), 'utf8')
+  assert.match(read('src/main/chat/providers/claude.ts'), /buildClaudeAgentModeOptions\(req\)/, 'chatClaude must call buildClaudeAgentModeOptions')
+  assert.match(read('src/main/chat/providers/codex.ts'), /buildCodexSpawnArgs\(/, 'chatCodex must call buildCodexSpawnArgs')
+  assert.match(read('src/main/chat/providers/hermes.ts'), /buildHermesSpawnArgs\(/, 'chatHermes must call buildHermesSpawnArgs')
+})
 
-  const claude = read('src/main/chat/providers/claude.ts')
-  assert.match(claude, /from '\.\.\/agent-mode-tools'/, 'claude imports the mapping module')
-  assert.match(claude, /options\.tools = agentTools/, 'claude wires AgentMode.tools into options.tools')
-  assert.match(claude, /req\.agentMode\?\.systemPrompt/, 'claude reads AgentMode.systemPrompt')
+// ─── BLOCKING-1: agentId set + agentMode unresolved must FAIL CLOSED ───────────
 
-  const codex = read('src/main/chat/providers/codex.ts')
-  assert.match(codex, /codexSandboxApprovalFlags/, 'codex uses the per-mode sandbox+approval helper')
-  assert.match(codex, /codexDenyAllUnsupported/, 'codex fails closed on an unenforceable deny-all')
-  assert.match(codex, /req\.agentMode\?\.systemPrompt/, 'codex reads AgentMode.systemPrompt')
+test('runtime builders FAIL CLOSED when agentId is set but agentMode is unresolved (#BLOCKING-1)', () => {
+  // The vulnerability: the renderer restores agentId synchronously but loads the
+  // definition async, so a request can carry agentId (incl. a deny-all agent) with
+  // agentMode still null. Every builder must throw rather than build an
+  // unrestricted payload.
+  const dangling = { agentId: 'restored-deny-all-agent', agentMode: null }
+  const isUnresolvedErr = err => { assert.equal(err.message, runtimeAgentTools.AGENT_MODE_UNRESOLVED_ERROR); return true }
+  assert.throws(() => buildHermesSpawnArgs({ ...dangling, mode: 'full', model: 'm', userContent: 'go' }), isUnresolvedErr)
+  assert.throws(() => buildCodexSpawnArgs({ ...dangling, mode: 'default', model: 'm', userContent: 'go' }), isUnresolvedErr)
+  assert.throws(() => buildClaudeAgentModeOptions(dangling), isUnresolvedErr)
 
-  const hermes = read('src/main/chat/providers/hermes.ts')
-  assert.match(hermes, /hermesToolsetsFromAllowList/, 'hermes derives toolsets from the allow-list')
-  assert.match(hermes, /req\.agentMode\?\.systemPrompt/, 'hermes reads AgentMode.systemPrompt')
+  // No false positives: a RESOLVED agent launches; no agentId launches.
+  assert.doesNotThrow(() => buildClaudeAgentModeOptions({ agentId: 'x', agentMode: { tools: ['Read'] } }))
+  assert.doesNotThrow(() => buildClaudeAgentModeOptions({ agentMode: null }))
+})
+
+test('daemon: an unresolved agentMode FAILS CLOSED — claudeQuery never runs (#BLOCKING-1)', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-agent-unresolved-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdirP(workspaceDir, { recursive: true })
+  t.after(async () => { await rmP(homeDir, { recursive: true, force: true }) })
+
+  let claudeInvoked = false
+  const manager = createChatJobManager({
+    homeDir,
+    checkpointStore: { createCheckpoint() { return { ok: true, checkpoint: { id: 'c' } } } },
+    claudeQuery: () => (async function* () {
+      claudeInvoked = true
+      yield { type: 'result', result: 'done', session_id: 's', total_cost_usd: 0, num_turns: 1 }
+    })(),
+  })
+
+  // A restored selected agent (e.g. a deny-all Codex agent) sent during the load
+  // window: agentId present, agentMode NOT yet resolved.
+  const job = await manager.startJob({
+    cardId: 'unresolved', workspaceId: 'unresolved-ws',
+    provider: 'claude', model: 'claude-test', mode: 'bypassPermissions',
+    workspaceDir, messages: [{ role: 'user', content: 'do the thing' }],
+    agentId: 'restored-codex-deny-all',
+    agentMode: null,
+  })
+
+  const completed = await waitForCompletedJob(manager, job.id)
+  assert.equal(completed.status, 'failed', 'an unresolved agent must fail the job, not launch')
+  assert.equal(completed.error, DAEMON_AGENT_MODE_UNRESOLVED_ERROR)
+  assert.equal(claudeInvoked, false, 'claudeQuery must NEVER run for an unresolved agent (no unrestricted launch)')
+})
+
+test('daemon: a RESOLVED agent still launches (no false positive on the BLOCKING-1 guard)', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-agent-resolved-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdirP(workspaceDir, { recursive: true })
+  t.after(async () => { await rmP(homeDir, { recursive: true, force: true }) })
+
+  let claudeInvoked = false
+  const manager = createChatJobManager({
+    homeDir,
+    checkpointStore: { createCheckpoint() { return { ok: true, checkpoint: { id: 'c' } } } },
+    claudeQuery: () => (async function* () {
+      claudeInvoked = true
+      yield { type: 'result', result: 'done', session_id: 's', total_cost_usd: 0, num_turns: 1 }
+    })(),
+  })
+
+  const job = await manager.startJob({
+    cardId: 'resolved', workspaceId: 'resolved-ws',
+    provider: 'claude', model: 'claude-test', mode: 'bypassPermissions',
+    workspaceDir, messages: [{ role: 'user', content: 'hi' }],
+    agentId: 'ask',
+    agentMode: { id: 'ask', name: 'Ask', systemPrompt: '', tools: ['Read', 'Glob', 'Grep'] },
+  })
+
+  const completed = await waitForCompletedJob(manager, job.id)
+  assert.equal(completed.status, 'completed')
+  assert.equal(claudeInvoked, true, 'a resolved agent must launch normally')
+})
+
+test('runtime ↔ daemon agentModeUnresolved + error agree (drift guard)', () => {
+  assert.equal(
+    runtimeAgentTools.AGENT_MODE_UNRESOLVED_ERROR,
+    DAEMON_AGENT_MODE_UNRESOLVED_ERROR,
+    'the unresolved-agent error string must match across the twin modules',
+  )
+  const cases = [
+    { agentId: 'x', agentMode: null },
+    { agentId: 'x', agentMode: undefined },
+    { agentId: 'x' },
+    { agentId: '', agentMode: null },
+    { agentId: '   ', agentMode: null },
+    { agentId: 'x', agentMode: { tools: [] } },
+    { agentMode: null },
+    {},
+  ]
+  for (const req of cases) {
+    assert.equal(
+      runtimeAgentTools.agentModeUnresolved(req),
+      daemonAgentModeUnresolved(req),
+      `agentModeUnresolved must agree for ${JSON.stringify(req)}`,
+    )
+  }
+})
+
+test('renderer: dispatchMessageContent refuses to dispatch an unresolved selected agent (#BLOCKING-1 renderer guard)', () => {
+  // No React/DOM runner in this repo (see #4 note), so a source-slice guard stands
+  // in: the guard must short-circuit BEFORE the chat.send dispatch when an agent is
+  // selected but its definition has not resolved.
+  const src = readFileSync(join(ROOT_DIR, 'src/renderer/src/hooks/useChatTileMessaging.ts'), 'utf8')
+  const start = src.indexOf('const dispatchMessageContent = useCallback(')
+  assert.ok(start >= 0, 'dispatchMessageContent useCallback must exist')
+  const next = src.indexOf('\n  const ', start + 1)
+  const block = src.slice(start, next > start ? next : undefined)
+  const guardIdx = block.search(/if\s*\(\s*agentId\s*&&\s*!resolvedAgentMode\s*\)/)
+  assert.ok(guardIdx >= 0, 'must guard agentId-set-but-unresolved')
+  const sendIdx = block.indexOf('window.electron?.chat?.send')
+  assert.ok(sendIdx >= 0 && guardIdx < sendIdx, 'the guard must precede the chat.send dispatch')
 })
 
 // ─── Hermes persona on resume (#1a) ───────────────────────────────────────────

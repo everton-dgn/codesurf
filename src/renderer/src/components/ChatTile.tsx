@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type { AppSettings, AgentMode } from '../../../shared/types'
-import { loadAgentModes, getAgentIcon } from '../config/agentModes'
+import { loadAgentModes, getAgentIcon, DEFAULT_AGENT_MODES } from '../config/agentModes'
 
 import { useChatGitState } from '../hooks/useChatGitState'
 import { useAutoSpeak, bargeIn } from '../hooks/useAutoSpeak'
@@ -206,7 +206,11 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // Agent definitions (built-ins + workspace agents.json) selectable from the
   // composer toolbar. Refreshed on mount and whenever the agent menu opens, so a
   // freshly-authored agent in CustomisationTile shows up without a tile reload.
-  const [agentModes, setAgentModes] = useState<AgentMode[]>([])
+  // Seed with the built-in modes so a restored built-in agentId resolves
+  // synchronously (no fail-closed window for Agent/Ask/Plan). Only user-authored
+  // agents — which live in agents.json and load asynchronously below — can briefly
+  // be unresolved, and the dispatch guard + provider safety net cover that window.
+  const [agentModes, setAgentModes] = useState<AgentMode[]>(DEFAULT_AGENT_MODES)
   useEffect(() => {
     let cancelled = false
     void loadAgentModes(_workspaceDir).then(list => { if (!cancelled) setAgentModes(list) })

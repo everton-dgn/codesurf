@@ -14,6 +14,8 @@ import {
   codexShouldForceReadOnly,
   codexSandboxApprovalFlags,
   hermesToolsetsFromAllowList,
+  agentModeUnresolved,
+  AGENT_MODE_UNRESOLVED_ERROR,
 } from './agent-mode-tools.mjs'
 
 const execFileAsync = promisify(execFile)
@@ -1717,6 +1719,17 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
 
   async function runJob(job, request, workspaceDir) {
     try {
+      // A-PR1 BLOCKING-1 (security chokepoint): a selected agent whose definition
+      // has not resolved must not launch unrestricted. This guard covers EVERY
+      // daemon provider (claude SDK / codex / hermes / opencode / harness) in one
+      // place — providers downstream enforce persona + tools from request.agentMode,
+      // so a dangling agentId without agentMode would silently bypass them.
+      if (agentModeUnresolved(request)) {
+        await appendEvent(job.id, { type: 'error', error: AGENT_MODE_UNRESOLVED_ERROR })
+        await appendEvent(job.id, { type: 'done' })
+        return
+      }
+
       const memoryContext = await loadMemoryContext({
         homeDir,
         workspaceDir,

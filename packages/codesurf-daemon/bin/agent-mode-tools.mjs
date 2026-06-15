@@ -15,6 +15,22 @@ export function resolveAgentToolAllowList(agentMode) {
   return Array.isArray(tools) ? tools : null
 }
 
+// A-PR1 BLOCKING-1 (security): a selected agent id WITHOUT its resolved
+// definition must NEVER launch unrestricted. Mirror of
+// src/main/chat/agent-mode-tools.ts (drift-guarded by the daemon test suite).
+// The renderer restores `agentId` synchronously but loads agent definitions
+// asynchronously, so a request can carry `agentId` (incl. a deny-all agent)
+// while `agentMode` is still null. Enforcement reads persona + tools from
+// `agentMode`, so launching in that window silently bypasses ALL agent-definition
+// restrictions. FAIL CLOSED: agentId present + agentMode unresolved → refuse.
+export function agentModeUnresolved(req) {
+  const id = typeof req?.agentId === 'string' ? req.agentId.trim() : ''
+  return id !== '' && req?.agentMode == null
+}
+
+export const AGENT_MODE_UNRESOLVED_ERROR =
+  'A selected agent could not be applied: its definition has not loaded yet (the agent persona and tool restrictions are unavailable). Refusing to launch unrestricted — wait a moment and resend, or clear the selected agent.'
+
 // Normalize a tool name for comparison: lowercase + drop non-alphanumerics.
 // AgentMode.tools uses Claude-style PascalCase (Read, WebSearch); harness
 // builtins are lowercase (read, webSearch). This makes both sides comparable.
@@ -34,6 +50,24 @@ export function isToolAllowedByAgent(toolName, allowList) {
   if (!wanted) return false
   return allowList.some(entry => normalizeToolName(entry) === wanted)
 }
+
+// A-PR1 BLOCKING-2 (uniform fail-closed): the @ai-sdk/harness adapters
+// (claude-code / pi) auto-approve the adapter's built-in READ tools under their
+// most restrictive selectable mode (`allow-reads`). There is NO host hook that
+// fires before that auto-approve, so the harness CANNOT deny reads. An agent
+// definition whose allow-list does NOT permit reads (the literal deny-all `[]`,
+// or any list that excludes Read) is therefore UNENFORCEABLE on the harness:
+// launching would auto-approve reads while the definition claims they're denied.
+// Rather than overclaim enforcement, the harness paths FAIL CLOSED — refuse to
+// launch and surface this error — the same honest contract as the Codex
+// deny-all fail-closed. Reuses isToolAllowedByAgent so the "is Read allowed?"
+// question stays consistent with per-tool enforcement.
+export function harnessReadsUnenforceable(allowList) {
+  return allowList != null && !isToolAllowedByAgent('read', allowList)
+}
+
+export const HARNESS_READS_UNENFORCEABLE_ERROR =
+  'This agent restricts file reads (its tool allow-list excludes Read), but the harness backend auto-approves built-in reads and cannot enforce that. Refusing to launch rather than running read-capable while claiming reads are denied — grant Read in the agent definition, or run this agent on a provider that can deny reads.'
 
 // Tools that can mutate the filesystem or run arbitrary shell commands. Bash is
 // write-capable (rm/write). Used to decide whether Codex must run read-only —

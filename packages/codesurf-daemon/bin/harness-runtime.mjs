@@ -29,7 +29,12 @@ import {
   applyPaths,
   removeWorktree,
 } from './harness-worktree.mjs'
-import { isToolAllowedByAgent, resolveAgentToolAllowList } from './agent-mode-tools.mjs'
+import {
+  isToolAllowedByAgent,
+  resolveAgentToolAllowList,
+  harnessReadsUnenforceable,
+  HARNESS_READS_UNENFORCEABLE_ERROR,
+} from './agent-mode-tools.mjs'
 
 // Re-exported so existing importers (test/daemon/chat-jobs-agent-mode.test.mjs)
 // keep resolving `isToolAllowedByAgent` from here. Source of truth and the
@@ -452,6 +457,18 @@ export function createHarnessRunner({ homeDir, createAgent } = {}) {
     // *allowed* Write/Edit now surfaces an approval prompt instead of being
     // auto-approved under acceptEdits.
     const agentToolAllowList = resolveAgentToolAllowList(request.agentMode)
+
+    // A-PR1 BLOCKING-2 (uniform fail-closed): the harness auto-approves built-in
+    // reads under allow-reads (the strictest selectable mode) and exposes no
+    // pre-approve host hook for them, so an allow-list that forbids reads (the
+    // literal deny-all [], or any list excluding Read) CANNOT be honored here.
+    // Refuse to launch rather than run read-capable while claiming reads are
+    // denied — the same honest contract as the Codex deny-all fail-closed.
+    if (harnessReadsUnenforceable(agentToolAllowList)) {
+      await appendEvent(job.id, { type: 'error', error: HARNESS_READS_UNENFORCEABLE_ERROR })
+      await appendEvent(job.id, { type: 'done' })
+      return
+    }
 
     // Permission mode → harness gating. Interactive per-tool approval is wired
     // (see the approval loop below), so gated modes raise real prompts the user

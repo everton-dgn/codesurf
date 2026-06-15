@@ -12,7 +12,7 @@ import { getMCPPort, getMCPToken, getContexMcpToolNames } from '../../mcp-server
 import { formatClaudeSdkError } from '../output-sanitizers'
 import { buildAsyncExecutionPrompt, buildPeerSystemPrompt } from '../prompt-builders'
 import { buildCodeSurfOutputConvention, joinPromptSections } from '../prompt-conventions'
-import { resolveAgentToolAllowList, claudeToolsForAllowList } from '../agent-mode-tools'
+import { buildClaudeAgentModeOptions } from './agent-mode-payloads'
 import { daemonClient } from '../../daemon/client'
 import { getDisconnectedPeerBridgeMcpToolNames } from '../../../shared/nodeTools'
 import {
@@ -563,10 +563,20 @@ export function chatClaude(req: ChatRequest): void {
     log('systemPrompt built for', req.peers?.length ?? 0, 'peers, contex tools:', contexToolNames.length)
   }
   // Resolved AgentMode (selected agent definition): persona → system prompt,
-  // tools allow-list → SDK tool restriction. Mirrors the daemon Claude path.
-  const agentPersona = req.agentMode?.systemPrompt?.trim() || undefined
-  const agentToolAllowList = resolveAgentToolAllowList(req.agentMode)
-  const agentTools = claudeToolsForAllowList(agentToolAllowList)
+  // tools allow-list → SDK tool restriction. The shared builder FAILS CLOSED
+  // (throws) if a selected agent's definition has not resolved (A-PR1
+  // BLOCKING-1) — surface it instead of launching unrestricted. Mirrors the
+  // daemon Claude path.
+  let agentTools: string[] | undefined
+  let agentPersona: string | undefined
+  try {
+    ({ tools: agentTools, persona: agentPersona } = buildClaudeAgentModeOptions(req))
+  } catch (err) {
+    sendStream(req.cardId, { type: 'error', error: err instanceof Error ? err.message : String(err) })
+    sendStream(req.cardId, { type: 'done' })
+    cardAbortControllers.delete(req.cardId)
+    return
+  }
   systemPrompt = buildClaudeAgentPrompt(systemPrompt, req.memoryPrompt, req.skillsPrompt, req.asyncExecution, agentPersona)
 
   // Resolve claude binary from startup detection
