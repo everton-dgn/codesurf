@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react'
 import type { AppSettings, Persona } from '../../../shared/types'
 import { loadPersonas, getAgentIcon, DEFAULT_PERSONAS } from '../config/agentModes'
+import { resolvePersonaModelSeed } from '../hooks/personaModelBinding'
 import { MONO_DEFAULT } from '../FontContext'
 
 const LazyTerminalTile = React.lazy(() => import('./TerminalTile').then(m => ({ default: m.TerminalTile })))
@@ -1013,6 +1014,14 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           agentModes={agentModes}
           onSelectAgent={nextAgentId => {
             setAgentId(nextAgentId)
+            // Precedence layer 2: a selected persona's SOFT defaultBinding seeds the
+            // composer's provider/model. Seed once here (NOT in an effect — an effect
+            // keyed on agentId would re-clobber the user's pick on restore/re-render).
+            // The user can freely change it afterward; the live composer state flows
+            // to req.model/provider, so the user pick (layer 3) always wins.
+            const modelSeed = resolvePersonaModelSeed(agentModes.find(a => a.id === nextAgentId) ?? null)
+            if (modelSeed?.provider) setProvider(modelSeed.provider)
+            if (modelSeed?.model) setModel(modelSeed.model)
             setShowAgentMenu(false)
           }}
           planTodos={planTodos}
