@@ -54,3 +54,37 @@ const daemonClient = createDaemonClient({
 
 await daemonClient.listWorkspaces()
 ```
+
+## Codex Execution Providers
+
+Daemon-backed Codex jobs use the native `codex exec` CLI path by default. That
+path remains the shipping baseline because it supports CodeSurf's config
+isolation flag (`--ignore-user-config`).
+
+The official `@openai/codex-sdk` provider is available as an opt-in daemon
+backend. It maps CodeSurf's Codex permission modes onto the SDK's
+`sandboxMode`/`approvalPolicy` options and resumes multi-turn jobs with
+`resumeThread(request.sessionId)`.
+
+Enable it with either:
+
+```json
+{
+  "settings": {
+    "codex": {
+      "executionProvider": "sdk"
+    }
+  }
+}
+```
+
+or:
+
+```bash
+CODESURF_CODEX_PROVIDER=sdk codesurfd
+```
+
+`CODESURF_CODEX_SDK=1` is also accepted. `CODESURF_CODEX_PROVIDER=cli` forces
+the default CLI provider. The SDK currently does not expose a
+`--ignore-user-config` equivalent; keep the CLI provider for runs that require
+isolated Codex config.

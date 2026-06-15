@@ -90,6 +90,7 @@
     "@codesurf/daemon": "file:packages/codesurf-daemon",
     "@mcp-ui/client": "^7.1.1",
     "@monaco-editor/react": "^4.7.0",
+    "@openai/codex-sdk": "^0.139.0",
     "@opencode-ai/sdk": "^1.2.27",
     "@radix-ui/react-avatar": "^1.1.11",
     "@radix-ui/react-collapsible": "^1.1.12",

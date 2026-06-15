@@ -518,6 +518,12 @@ export interface GenerationProviderSettings {
   videoResolution?: '720p' | '1080p' | '4k' | string
 }
 
+export interface CodexExecutionSettings {
+  // `cli` is the config-isolated default. `sdk` opts daemon Codex jobs into
+  // @openai/codex-sdk, which currently has no --ignore-user-config equivalent.
+  executionProvider: 'cli' | 'sdk'
+}
+
 export interface AppSettings {
   // The three font tokens
   fonts: FontSettings
@@ -570,6 +576,8 @@ export interface AppSettings {
   linkOpenMode: 'browser-block' | 'external-browser'
   // Host-selection policy for chat and background execution.
   execution: ExecutionPreference
+  // Codex execution backend for daemon-backed jobs.
+  codex: CodexExecutionSettings
   // Last selected chat execution / permission mode by provider.
   chatProviderModes: Partial<Record<string, string>>
   // Daemon-owned background memory consolidation.
@@ -704,6 +712,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   execution: {
     mode: 'auto',
     hostId: null,
+  },
+  codex: {
+    executionProvider: 'cli',
   },
   chatProviderModes: {},
   autoDream: {
@@ -903,6 +914,10 @@ export function withDefaultSettings(input: Partial<AppSettings> | null | undefin
     execution: {
       ...DEFAULT_SETTINGS.execution,
       ...(settings.execution ?? {}),
+    },
+    codex: {
+      ...DEFAULT_SETTINGS.codex,
+      ...(settings.codex ?? {}),
     },
     chatProviderModes,
     autoDream: {
