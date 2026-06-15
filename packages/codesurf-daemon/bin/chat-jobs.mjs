@@ -608,8 +608,17 @@ export function buildCodexExecArgs(request, workspaceDir, instructionPrompt = ''
   // THROWS CODEX_DENY_ALL_ERROR for an explicit deny-all ([]) — runCodexJob
   // catches it and surfaces the error instead of spawning Codex (fail closed).
   const sandboxApprovalFlags = codexSandboxApprovalFlags(codexMode, resolveAgentToolAllowList(request.agentMode))
+  // Multi-turn continuity: when the request carries the Codex thread id from a
+  // prior turn (emitted as a `thread.started` session event and echoed back by
+  // the client as request.sessionId), resume that thread so the model keeps the
+  // full conversation — `codex exec resume <threadId> ...`. This mirrors the
+  // runtime builder (src/main/chat/providers/agent-mode-payloads.ts
+  // buildCodexSpawnArgs), which places `resume <id>` immediately after `exec`.
+  // First turn (no sessionId) starts a fresh thread (unchanged behavior).
+  const resumeArgs = request.sessionId ? ['resume', request.sessionId] : []
   const codexArgs = [
     'exec',
+    ...resumeArgs,
     '--json',
     '--model',
     request.model,
@@ -625,6 +634,38 @@ export function buildCodexExecArgs(request, workspaceDir, instructionPrompt = ''
     agentPersonaPrompt(request),
   ))
   return codexArgs
+}
+
+// Providers the @ai-sdk/harness backend can host. Module-level mirror of the
+// closure-local set, so shouldUseHarness() stays a pure, exported predicate.
+const HARNESS_CAPABLE_PROVIDERS = new Set(['claude', 'codex', 'pi'])
+
+// Decide whether a request routes through the harness backend vs a native
+// provider path. Pure + exported so the daemon test can assert the routing
+// decision without spawning a job. Three exclusions, in order:
+//   1. Codex NEVER uses the harness — its adapter can't honor CodeSurf's 4
+//      permission modes (it hardcodes danger-full-access). Native `codex exec`
+//      honors them; runJob routes Codex to runCodexJob. (Pre-existing.)
+//   2. CONTINUITY STOPGAP: foreground (interactive, multi-turn) Claude chat
+//      must NOT use the harness. The harness createSession()s without a
+//      resumeFrom payload and destroy()s after each turn (discarding
+//      resumability), and emits its OWN session id — not the Claude SDK
+//      conversation id — so a later turn can't resume the prior context from
+//      either side. Result: turn 2 loses all history. The native runClaudeJob
+//      path resumes correctly via { resume: request.sessionId } and persists a
+//      resumable SDK session, so foreground Claude falls back to it. Gated on
+//      runMode so BACKGROUND dispatched Claude runs keep the harness's worktree
+//      isolation (single-shot autonomous tasks, not interactive multi-turn).
+//      runMode is stable per-conversation (absent ⇒ foreground, matching the
+//      existing canUseTool gate). Tradeoff: foreground Claude forgoes harness
+//      worktree isolation — runClaudeJob still enforces agentMode.tools (SDK
+//      `tools`), permissions (canUseTool), and checkpoints.
+export function shouldUseHarness(request) {
+  if (request?.useHarness !== true) return false
+  if (!HARNESS_CAPABLE_PROVIDERS.has(request.provider)) return false
+  if (request.provider === 'codex') return false
+  if (request.provider === 'claude' && request.runMode !== 'background') return false
+  return true
 }
 
 // Resolve the Hermes `--toolsets` value for a request. AgentMode.tools (when
@@ -815,7 +856,7 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
   // Harness backend (@ai-sdk/harness) is opt-in per request and loaded lazily so
   // its ai@7-canary dependency graph never enters the daemon process unless a
   // harness job is actually requested. Existing provider paths are unaffected.
-  const HARNESS_PROVIDERS = new Set(['claude', 'codex', 'pi'])
+  // Routing decision lives in the module-level shouldUseHarness() predicate.
   let harnessRunnerPromise = null
   function getHarnessRunner() {
     if (!harnessRunnerPromise) {
@@ -1818,7 +1859,11 @@ export function createChatJobManager({ homeDir, checkpointStore = null, claudeQu
       // of the user's chosen mode. The native `codex exec` CLI (runCodexJob)
       // honors all 4 modes via -s/--sandbox + -c approval_policy=, so Codex
       // always uses it. Tradeoff: Codex forgoes the harness's worktree isolation.
-      if (request.useHarness === true && HARNESS_PROVIDERS.has(request.provider) && request.provider !== 'codex') {
+      //
+      // shouldUseHarness() also excludes FOREGROUND Claude chat (continuity
+      // stopgap) so those turns fall through to runClaudeJob, which resumes the
+      // conversation — see the predicate's comment for the full rationale.
+      if (shouldUseHarness(request)) {
         const { runHarnessJob } = await getHarnessRunner()
         await runHarnessJob(job, request, workspaceDir, instructionPrompt, {
           appendEvent,
