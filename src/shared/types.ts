@@ -116,6 +116,19 @@ export interface SkillDefinition {
   description: string
   content: string
   command?: string
+  /**
+   * OPTIONAL hard model/provider requirement (P1b-2, precedence layer 1). When a
+   * persona LINKS a skill that declares `requiredModel`, selecting that persona
+   * PINS the composer's model (+ provider, if given) and DISABLES the picker —
+   * an outer resolver (resolveSkillModelLock) runs ABOVE the soft default.
+   *
+   * Like a persona's soft binding, this is NOT a security boundary: it only
+   * drives renderer model-resolution + composer disablement; it never flows
+   * through resolveAuthoritativeAgentMode (the trusted-disk tools/permission path).
+   */
+  requiredModel?: string
+  /** OPTIONAL provider to pin alongside `requiredModel`. */
+  requiredProvider?: string
 }
 
 /**
@@ -166,6 +179,17 @@ export interface Persona {
    * See overlayPersonas() in src/shared/agentModes.ts.
    */
   extends?: string
+  /**
+   * OPTIONAL linked skill references (P1b-2, precedence layer 1). Each entry
+   * matches a workspace skill by `id` OR `name`. If the FIRST linked skill that
+   * declares a `requiredModel` is found, selecting this persona HARD-locks the
+   * composer's model/provider and disables the picker (see resolveSkillModelLock).
+   *
+   * Built-ins carry NO skills (keeps DEFAULT_PERSONAS byte-identical across the
+   * shared<->daemon drift guard). Like `defaultBinding`, this is display/composer
+   * data only — never a permission boundary.
+   */
+  skills?: string[]
   /** Which tool this persona was discovered from: 'claude' | 'cursor' | 'opencode' | 'gemini' | etc. */
   source?: string
 }

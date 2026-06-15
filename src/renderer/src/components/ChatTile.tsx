@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react'
 import type { AppSettings, Persona } from '../../../shared/types'
 import { loadPersonas, getAgentIcon, DEFAULT_PERSONAS } from '../config/agentModes'
-import { resolvePersonaModelSeed } from '../hooks/personaModelBinding'
+import { resolvePersonaModelSeed, resolveSkillModelLock } from '../hooks/personaModelBinding'
 import { MONO_DEFAULT } from '../FontContext'
 
 const LazyTerminalTile = React.lazy(() => import('./TerminalTile').then(m => ({ default: m.TerminalTile })))
@@ -235,6 +235,24 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     () => agentModes.find(a => a.id === agentId) ?? null,
     [agentModes, agentId],
   )
+  // Precedence LAYER 1 (P1b-2): a linked skill's `requiredModel` HARD-locks the
+  // composer. Computed from the active persona + discovered workspace skills; when
+  // non-null the model/provider pills are disabled and the live state is pinned.
+  const modelLock = useMemo(
+    () => resolveSkillModelLock(resolvedAgentMode, workspaceSkills),
+    [resolvedAgentMode, workspaceSkills],
+  )
+  // Keep the live composer state pinned while a lock is active. This closes the
+  // gap onSelectAgent can't: an async skill load or a restored `agentId` (where
+  // the click handler never fires) would otherwise leave a stale model behind a
+  // disabled pill. Early-return when unlocked so layer 3 (user pick) is untouched.
+  // This effect only forces the HARD lock — the soft seed (layer 2) still happens
+  // exclusively in the onSelectAgent click handler, never in an effect.
+  useEffect(() => {
+    if (!modelLock) return
+    if (modelLock.provider) setProvider(modelLock.provider)
+    if (modelLock.model) setModel(modelLock.model)
+  }, [modelLock?.provider, modelLock?.model])
 
   const {
     chatSurfaceMenu,
@@ -943,6 +961,8 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           showModelMenu={showModelMenu}
           currentProviderEntry={currentProviderEntry}
           currentModelLabel={currentModel.label}
+          modelLocked={Boolean(modelLock)}
+          lockReason={modelLock?.reason}
           model={model}
           modelFilter={modelFilter}
           onModelFilterChange={setModelFilter}
@@ -1014,14 +1034,24 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
           agentModes={agentModes}
           onSelectAgent={nextAgentId => {
             setAgentId(nextAgentId)
-            // Precedence layer 2: a selected persona's SOFT defaultBinding seeds the
-            // composer's provider/model. Seed once here (NOT in an effect — an effect
-            // keyed on agentId would re-clobber the user's pick on restore/re-render).
-            // The user can freely change it afterward; the live composer state flows
-            // to req.model/provider, so the user pick (layer 3) always wins.
-            const modelSeed = resolvePersonaModelSeed(agentModes.find(a => a.id === nextAgentId) ?? null)
-            if (modelSeed?.provider) setProvider(modelSeed.provider)
-            if (modelSeed?.model) setModel(modelSeed.model)
+            const nextPersona = agentModes.find(a => a.id === nextAgentId) ?? null
+            // Precedence LAYER 1 (P1b-2): if a linked skill imposes a HARD model lock,
+            // it PINS provider/model and SHORT-CIRCUITS the soft seed below. The picker
+            // is disabled in the composer; the live-state effect keeps the pin honoured.
+            const skillLock = resolveSkillModelLock(nextPersona, workspaceSkills)
+            if (skillLock) {
+              if (skillLock.provider) setProvider(skillLock.provider)
+              if (skillLock.model) setModel(skillLock.model)
+            } else {
+              // Precedence layer 2: a selected persona's SOFT defaultBinding seeds the
+              // composer's provider/model. Seed once here (NOT in an effect — an effect
+              // keyed on agentId would re-clobber the user's pick on restore/re-render).
+              // The user can freely change it afterward; the live composer state flows
+              // to req.model/provider, so the user pick (layer 3) always wins.
+              const modelSeed = resolvePersonaModelSeed(nextPersona)
+              if (modelSeed?.provider) setProvider(modelSeed.provider)
+              if (modelSeed?.model) setModel(modelSeed.model)
+            }
             setShowAgentMenu(false)
           }}
           planTodos={planTodos}
