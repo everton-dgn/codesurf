@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 
-// ─── Authoritative AgentMode resolution — daemon mirror ───────────────────────
+// ─── Authoritative Persona resolution — daemon mirror ─────────────────────────
 // Daemon-side mirror of src/shared/agentModes.ts + src/main/chat/agent-mode-resolver.ts.
 // Kept separate because the daemon is a self-contained Node ESM process bundled
 // apart from the renderer/main build. The test/daemon suite imports BOTH this
@@ -13,32 +13,87 @@ import { join } from 'node:path'
 // clone) → no file → it trusts the agentMode main already resolved and shipped.
 //
 // See agent-mode-resolver.ts for the full fail-closed rationale. The built-in
-// modes here MUST stay byte-for-byte consistent with DEFAULT_AGENT_MODES in
+// personas here MUST stay byte-for-byte consistent with DEFAULT_PERSONAS in
 // src/shared/agentModes.ts — the daemon's copy is security-load-bearing.
+//
+// BACK-COMPAT: the on-disk store is, and MUST remain, agents.json (NOT renamed to
+// personas.json) — this is an in-code rename only; existing workspaces depend on
+// the filename. The request/wire field is likewise still `agentMode`.
 
-export const DEFAULT_AGENT_MODES = [
+// PLACEHOLDER prompt text below (flagged) — mirror of DEFAULT_PERSONAS; keep in
+// sync with src/shared/agentModes.ts (the drift guard asserts deepEqual).
+export const DEFAULT_PERSONAS = [
   { id: 'agent', name: 'Agent', description: 'Full autonomous access to all tools', systemPrompt: '', tools: null, icon: 'robot', color: '#3568ff', isBuiltin: true },
   { id: 'ask', name: 'Ask', description: 'Read-only Q&A mode — no file modifications', systemPrompt: 'You are in read-only mode. Do not modify files or run destructive commands.', tools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'], icon: 'help', color: '#56c288', isBuiltin: true },
   { id: 'plan', name: 'Plan', description: 'Plan without execution — outline steps before acting', systemPrompt: 'Create a detailed plan. Do not execute changes until the user approves.', tools: ['Read', 'Glob', 'Grep', 'WebSearch'], icon: 'map', color: '#f5a623', isBuiltin: true },
+  { id: 'polly', name: 'Polly', description: 'Orchestrator — coordinates work and delegates to other personas', systemPrompt: 'PLACEHOLDER (refine me): You are Polly, an orchestrator. Break the request into clear subtasks, decide which persona or tool should handle each, sequence the work, and keep the user informed. Prefer delegating and verifying over doing everything yourself.', tools: null, icon: 'star', color: '#b368c9', isBuiltin: true },
+  { id: 'gemma', name: 'Gemma', description: 'General-purpose assistant for everyday tasks', systemPrompt: 'PLACEHOLDER (refine me): You are Gemma, a helpful general-purpose assistant. Answer clearly, ask for clarification when the request is ambiguous, and use the available tools to complete the task end to end.', tools: null, icon: 'bolt', color: '#00acd7', isBuiltin: true },
 ]
 
-// Pure overlay: built-ins first, overlay persisted entries by id, drop
-// ephemeral `discovered-*` scan results. Non-array → built-ins unchanged.
-export function overlayAgentModes(loaded) {
-  const merged = [...DEFAULT_AGENT_MODES]
-  if (!Array.isArray(loaded)) return merged
+/** @deprecated Renamed to DEFAULT_PERSONAS; retained as an alias. */
+export const DEFAULT_AGENT_MODES = DEFAULT_PERSONAS
+
+// Resolve a persona's `extends` inheritance — MIRROR of resolvePersonaExtends in
+// src/shared/agentModes.ts (keep logically byte-identical). FAIL-CLOSED TOOL RULE:
+//   - child DEFINES tools (incl. [] or null) → child wins.
+//   - child OMITS tools AND base chain resolves cleanly → inherit base.
+//   - child OMITS tools AND inheritance UNRESOLVABLE (missing/self/cyclic) → DENY-ALL ([]).
+// Leaving tools undefined for a broken extends would fail OPEN (undefined = unrestricted
+// in agent-mode-tools.mjs). A persona with NO extends is untouched by this rule.
+function resolvePersonaExtends(persona, byId) {
+  const chain = []
+  const seen = new Set()
+  let cur = persona
+  let broken = false
+  for (;;) {
+    chain.push(cur)
+    seen.add(cur.id)
+    const baseId = typeof cur.extends === 'string' ? cur.extends.trim() : ''
+    if (!baseId) break
+    const base = byId.get(baseId)
+    if (!base || base.id === cur.id || seen.has(base.id)) { broken = true; break }
+    cur = base
+  }
+  let merged = {}
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const node = chain[i]
+    merged = { ...merged, ...node }
+    if (Object.prototype.hasOwnProperty.call(node, 'tools')) merged.tools = node.tools
+  }
+  merged.id = persona.id
+  if (broken && !Object.prototype.hasOwnProperty.call(persona, 'tools')) merged.tools = []
+  return merged
+}
+
+function resolveAllExtends(list) {
+  const byId = new Map(list.map(p => [p.id, p]))
+  return list.map(p => resolvePersonaExtends(p, byId))
+}
+
+// Pure overlay + inheritance: built-ins first, overlay persisted entries by id,
+// drop ephemeral `discovered-*` scan results, then resolve `extends`. Non-array →
+// built-ins unchanged.
+export function overlayPersonas(loaded) {
+  const merged = [...DEFAULT_PERSONAS]
+  if (!Array.isArray(loaded)) return resolveAllExtends(merged)
   for (const item of loaded) {
     if (!item || typeof item.id !== 'string' || item.id.startsWith('discovered-')) continue
     const idx = merged.findIndex(m => m.id === item.id)
     if (idx >= 0) merged[idx] = { ...merged[idx], ...item }
     else merged.push(item)
   }
-  return merged
+  return resolveAllExtends(merged)
 }
 
-export function findAgentModeById(modes, agentId) {
-  return modes.find(m => m.id === agentId) ?? null
+/** @deprecated Renamed to overlayPersonas; retained as an alias. */
+export const overlayAgentModes = overlayPersonas
+
+export function findPersonaById(personas, personaId) {
+  return personas.find(p => p.id === personaId) ?? null
 }
+
+/** @deprecated Renamed to findPersonaById; retained as an alias. */
+export const findAgentModeById = findPersonaById
 
 export const AGENT_MODE_RESOLUTION_DENIED_ERROR =
   'The selected agent could not be verified against the workspace agent definitions ' +
@@ -46,13 +101,15 @@ export const AGENT_MODE_RESOLUTION_DENIED_ERROR =
   'Refusing to launch rather than fall back to looser default permissions — ' +
   'fix the agent definition or clear the selected agent.'
 
+// BACK-COMPAT: on-disk path retained as `.contex/customisation/agents.json`.
 function agentsJsonPath(workspaceRoot) {
   return join(workspaceRoot, '.contex', 'customisation', 'agents.json')
 }
 
 // Mirror of resolveAuthoritativeAgentMode in agent-mode-resolver.ts. Same
 // fail-closed contract: ENOENT → built-ins authoritative; present-but-unreadable/
-// corrupt/non-array → fail closed; id-not-found → fail closed.
+// corrupt/non-array → fail closed; id-not-found → fail closed. The result field is
+// still `agentMode` (wire/contract name retained across the Persona rename).
 export async function resolveAuthoritativeAgentMode(opts) {
   const agentId = typeof opts?.agentId === 'string' ? opts.agentId.trim() : ''
   if (!agentId) return { ok: true, agentMode: null }
@@ -70,7 +127,7 @@ export async function resolveAuthoritativeAgentMode(opts) {
     raw = await fs.readFile(agentsJsonPath(root), 'utf8')
   } catch (err) {
     if (err && err.code === 'ENOENT') {
-      const resolved = findAgentModeById(DEFAULT_AGENT_MODES, agentId)
+      const resolved = findPersonaById(DEFAULT_PERSONAS, agentId)
       return resolved
         ? { ok: true, agentMode: resolved }
         : { ok: false, error: AGENT_MODE_RESOLUTION_DENIED_ERROR }
@@ -86,7 +143,7 @@ export async function resolveAuthoritativeAgentMode(opts) {
   }
   if (!Array.isArray(parsed)) return { ok: false, error: AGENT_MODE_RESOLUTION_DENIED_ERROR }
 
-  const resolved = findAgentModeById(overlayAgentModes(parsed), agentId)
+  const resolved = findPersonaById(overlayPersonas(parsed), agentId)
   if (!resolved) return { ok: false, error: AGENT_MODE_RESOLUTION_DENIED_ERROR }
   return { ok: true, agentMode: resolved }
 }

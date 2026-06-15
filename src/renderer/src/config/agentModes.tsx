@@ -1,22 +1,22 @@
 import type { JSX } from 'react'
-import type { AgentMode } from '../../../shared/types'
-import { DEFAULT_AGENT_MODES, overlayAgentModes } from '../../../shared/agentModes'
+import type { Persona } from '../../../shared/types'
+import { DEFAULT_PERSONAS, overlayPersonas } from '../../../shared/agentModes'
 
-// ─── Shared agent-definition source ──────────────────────────────────────────
-// The built-in agent modes + the parse/overlay logic now live in the
+// ─── Shared Persona source ────────────────────────────────────────────────────
+// The built-in personas + the parse/overlay/inherit logic now live in the
 // dependency-free src/shared/agentModes.ts so the Electron main process (the
 // authoritative SEND-time resolver) and the renderer share ONE source of truth.
 // This file keeps the renderer-only concerns: the icon/palette JSX and the
-// window.electron.fs-backed loader used for DISPLAY. The persisted override store
-// is `${workspace}/.contex/customisation/agents.json`.
+// window.electron.fs-backed loader used for DISPLAY. BACK-COMPAT: the persisted
+// override store is still `${workspace}/.contex/customisation/agents.json`.
 //
-// NOTE: loadAgentModes below is DISPLAY-only now. The SEND path no longer trusts
+// NOTE: loadPersonas below is DISPLAY-only now. The SEND path no longer trusts
 // it — main re-resolves the selected agentId authoritatively (see
 // src/main/chat/agent-mode-resolver.ts). Its lenient "missing/parse-error →
 // built-ins" behaviour is therefore safe to keep (it never widens an enforced
 // permission), and changing it would churn the existing load-race tests.
 
-export { DEFAULT_AGENT_MODES }
+export { DEFAULT_PERSONAS }
 
 export const AGENT_COLORS = ['#3568ff', '#56c288', '#f5a623', '#e57399', '#b368c9', '#00acd7', '#ff7b72', '#8f96a0']
 
@@ -37,21 +37,25 @@ function agentsDataDir(workspacePath: string): string {
 }
 
 /**
- * Load the selectable agent definitions for a workspace: the built-in modes
- * merged with any user-authored agents persisted in agents.json. Mirrors the
- * merge CustomisationTile applies on mount (built-ins first, overlay persisted
- * entries by id, drop ephemeral `discovered-*` scan results which are never
- * persisted). Auto-discovered agents are intentionally NOT scanned here — the
- * selector lists exactly what agents.json names.
+ * Load the selectable personas for a workspace: the built-in personas merged with
+ * any user-authored personas persisted in agents.json (filename retained for
+ * back-compat). Mirrors the merge CustomisationTile applies on mount (built-ins
+ * first, overlay persisted entries by id, drop ephemeral `discovered-*` scan
+ * results which are never persisted, resolve `extends` inheritance).
+ * Auto-discovered personas are intentionally NOT scanned here — the selector
+ * lists exactly what agents.json names.
  */
-export async function loadAgentModes(workspacePath: string): Promise<AgentMode[]> {
+export async function loadPersonas(workspacePath: string): Promise<Persona[]> {
   const file = `${agentsDataDir(workspacePath)}/agents.json`
   try {
     const stat = await window.electron.fs.stat(file).catch(() => null)
-    if (!stat) return [...DEFAULT_AGENT_MODES]
+    if (!stat) return [...DEFAULT_PERSONAS]
     const raw = await window.electron.fs.readFile(file)
-    return overlayAgentModes(JSON.parse(raw))
+    return overlayPersonas(JSON.parse(raw))
   } catch {
-    return [...DEFAULT_AGENT_MODES]
+    return [...DEFAULT_PERSONAS]
   }
 }
+
+/** @deprecated Renamed to {@link loadPersonas}; retained as an alias. */
+export const loadAgentModes = loadPersonas

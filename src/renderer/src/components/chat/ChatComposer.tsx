@@ -3,7 +3,7 @@ import { FileText, Folder, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { useTheme } from '../../ThemeContext'
 import { stackEdgeShadow } from '../../theme'
 import { basename } from '../../utils/dnd'
-import type { AgentMode, ExecutionHostRecord } from '../../../../shared/types'
+import type { Persona, ExecutionHostRecord } from '../../../../shared/types'
 import type { TtsPlayerState } from '../../utils/ttsPlayer'
 import { FooterPill } from './ChatComposerControls'
 import { Dropdown, DropdownItem, MenuPortal } from './ChatComposerMenus'
@@ -887,7 +887,7 @@ export function ChatComposerAgentMenu({
   anchorRef: React.RefObject<HTMLDivElement | null>
   showMenu: boolean
   agentId: string | null
-  agentModes: AgentMode[]
+  agentModes: Persona[]
   onToggleMenu: () => void
   onSelectAgent: (agentId: string | null) => void
 }): JSX.Element {
@@ -896,7 +896,7 @@ export function ChatComposerAgentMenu({
     <div ref={anchorRef} style={{ position: 'relative' }}>
       <FooterPill
         prefix={getAgentIcon(selected?.icon)}
-        label={selected ? selected.name : 'Agent'}
+        label={selected ? selected.name : 'Persona'}
         color={selected?.color ?? '#8f96a0'}
         active={showMenu}
         onClick={onToggleMenu}
@@ -906,7 +906,7 @@ export function ChatComposerAgentMenu({
           <Dropdown>
             <DropdownItem
               label="None"
-              sublabel="No agent definition"
+              sublabel="No persona"
               active={!agentId}
               onClick={() => onSelectAgent(null)}
             />

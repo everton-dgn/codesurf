@@ -1,4 +1,4 @@
-import type { AgentMode, ExecutionPreference, ExtensionChatTransportConfig } from '../../shared/types'
+import type { Persona, ExecutionPreference, ExtensionChatTransportConfig } from '../../shared/types'
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
@@ -57,12 +57,14 @@ export interface ChatRequest {
   expandedMessages?: ChatMessage[]
   mode?: string
   thinking?: string
-  /** Selected agent-definition id (AgentMode.id) for this turn, if any. */
+  /** Selected persona id (Persona.id) for this turn, if any. */
   agentId?: string | null
-  /** Fully-resolved agent definition for this turn. Sent by the renderer so the
-   *  daemon (incl. cloud, which has no access to the workspace agents.json) can
-   *  apply the persona's systemPrompt + tools allow-list. */
-  agentMode?: AgentMode | null
+  /** Fully-resolved Persona for this turn. Sent by the renderer so the daemon
+   *  (incl. cloud, which has no access to the workspace agents.json) can apply the
+   *  persona's systemPrompt + tools allow-list. Field name `agentMode` is retained
+   *  for cross-process wire compatibility (renaming it would break the
+   *  renderer↔main↔daemon contract); its type is now Persona. */
+  agentMode?: Persona | null
   workspaceDir?: string
   mcpEnabled?: boolean
   negotiatedTools?: string[]

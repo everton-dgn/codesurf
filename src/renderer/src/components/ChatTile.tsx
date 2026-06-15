@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react'
-import type { AppSettings, AgentMode } from '../../../shared/types'
-import { loadAgentModes, getAgentIcon, DEFAULT_AGENT_MODES } from '../config/agentModes'
+import type { AppSettings, Persona } from '../../../shared/types'
+import { loadPersonas, getAgentIcon, DEFAULT_PERSONAS } from '../config/agentModes'
 import { MONO_DEFAULT } from '../FontContext'
 
 const LazyTerminalTile = React.lazy(() => import('./TerminalTile').then(m => ({ default: m.TerminalTile })))
@@ -214,7 +214,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // synchronously (no fail-closed window for Agent/Ask/Plan). Only user-authored
   // agents — which live in agents.json and load asynchronously below — can briefly
   // be unresolved, and the dispatch guard + provider safety net cover that window.
-  const [agentModes, setAgentModes] = useState<AgentMode[]>(DEFAULT_AGENT_MODES)
+  const [agentModes, setAgentModes] = useState<Persona[]>(DEFAULT_PERSONAS)
   // Definitive "agents.json has been read for this workspace" flag. The composer
   // seeds built-ins synchronously for UX, but a SEND must reflect any agents.json
   // override — until this is true, dispatchMessageContent re-resolves the agent
@@ -225,7 +225,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   useEffect(() => { setAgentModesLoaded(false) }, [_workspaceDir])
   useEffect(() => {
     let cancelled = false
-    void loadAgentModes(_workspaceDir).then(list => {
+    void loadPersonas(_workspaceDir).then(list => {
       if (!cancelled) { setAgentModes(list); setAgentModesLoaded(true) }
     })
     return () => { cancelled = true }
