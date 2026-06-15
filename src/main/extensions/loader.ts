@@ -13,9 +13,9 @@
  *   - workspace-local extensions           → default-OFF (untrustedScope);
  *                                            require explicit user enable
  *
- * Feature flag: CODESURF_POWER_BROKER=1 routes non-bundled power extensions
- * through the utilityProcess broker (Phase 1b/1c). The raw require() path is
- * never deleted; bundled extensions always run legacy until Phase 1d is proven.
+ * Default: non-bundled power extensions run through the utilityProcess broker (Phase 1b/1c).
+ * Set CODESURF_POWER_BROKER=0 to force the legacy raw require() path for all extensions.
+ * The raw require() path is never deleted; bundled extensions always run legacy until Phase 1d is proven.
  *
  * Per-manifest override: manifest.execution = 'worker' forces brokered mode
  * for a single extension regardless of the global flag.
