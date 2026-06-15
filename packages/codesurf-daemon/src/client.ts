@@ -1,6 +1,10 @@
 import type { DaemonStatusInfo } from './manager'
 import type {
   AggregatedSessionEntry,
+  DaemonChatJobEvent,
+  DaemonChatJobRequest,
+  DaemonChatJobState,
+  DaemonChatPermissionAnswer,
   DaemonAppSettings,
   DaemonSkillEntry,
   DaemonSkillIndex,
@@ -14,6 +18,7 @@ import type {
   ProjectRecord,
   Workspace,
 } from './types'
+import { parseSseJsonBuffer } from './sse.ts'
 
 export interface DaemonClientHooks {
   /**
@@ -38,6 +43,14 @@ export interface RequestOptions {
   body?: unknown
   /** Per-request override of the request timeout (ms). */
   timeoutMs?: number
+}
+
+export interface StreamJobEventsOptions {
+  jobId: string
+  since?: number
+  signal?: AbortSignal
+  onEvent: (event: DaemonChatJobEvent) => void | Promise<void>
+  onParseError?: (error: Error) => void | Promise<void>
 }
 
 export type DaemonClient = ReturnType<typeof createDaemonClient>
@@ -90,9 +103,92 @@ export function createDaemonClient(hooks: DaemonClientHooks) {
     throw (lastError ?? new Error('Daemon request failed'))
   }
 
+  async function streamJobEvents(options: StreamJobEventsOptions): Promise<void> {
+    let lastError: Error | null = null
+    const jobId = String(options.jobId ?? '').trim()
+    if (!jobId) throw new Error('jobId is required')
+    const since = Number.isFinite(options.since) ? Number(options.since) : 0
+    const query = new URLSearchParams({
+      jobId,
+      since: String(Math.max(0, since)),
+    })
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const daemon = await hooks.ensureRunning()
+
+      try {
+        const response = await fetch(`http://127.0.0.1:${daemon.port}/chat/job/events?${query.toString()}`, {
+          headers: {
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${daemon.token}`,
+          },
+          signal: options.signal,
+        })
+
+        if (!response.ok || !response.body) {
+          const text = await response.text().catch(() => '')
+          const error = new Error(text || `Daemon event stream failed: ${response.status}`)
+          lastError = error
+          if (attempt === 0 && (response.status === 401 || response.status === 408 || response.status === 502 || response.status === 503 || response.status === 504)) {
+            hooks.invalidate()
+            continue
+          }
+          throw error
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const parsed = parseSseJsonBuffer<DaemonChatJobEvent>(buffer)
+          buffer = parsed.remaining
+          for (const error of parsed.errors) {
+            await options.onParseError?.(error)
+          }
+          for (const event of parsed.events) {
+            await options.onEvent(event)
+          }
+        }
+
+        return
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        if (options.signal?.aborted) throw lastError
+        if (attempt === 0) {
+          const status = await hooks.getStatus().catch(() => ({ running: false as const, info: null }))
+          if (!status.running) {
+            hooks.invalidate()
+          }
+          continue
+        }
+        throw lastError
+      }
+    }
+
+    throw (lastError ?? new Error('Daemon event stream failed'))
+  }
+
   return {
     /** Escape hatch for routes the typed surface doesn't cover. */
     request,
+
+    startChatJob(requestBody: DaemonChatJobRequest): Promise<DaemonChatJobState> {
+      return request('/chat/job/start', { body: { request: requestBody } })
+    },
+    streamJobEvents,
+    getJobState(jobId: string): Promise<DaemonChatJobState> {
+      return request(`/chat/job/state?jobId=${encodeURIComponent(jobId)}`)
+    },
+    cancelJob(jobId: string): Promise<{ ok: boolean; error?: string }> {
+      return request('/chat/job/cancel', { body: { jobId } })
+    },
+    answerPermission(answer: DaemonChatPermissionAnswer): Promise<{ ok: boolean; error?: string }> {
+      return request('/chat/job/permission/answer', { body: answer })
+    },
 
     getJobDashboard(): Promise<{
       jobs: Array<{

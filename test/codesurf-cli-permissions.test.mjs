@@ -104,3 +104,15 @@ test('codesurf permissions CLI can write global grants for all workspaces', asyn
   assert.deepEqual(store.grants, result.grants)
   assert.equal(store.grants[0].workspaceDir, null)
 })
+
+test('codesurf chat help dispatches without launching the desktop app', async t => {
+  const homeDir = await mkdtemp(join(ROOT_DIR, '.tmp', 'codesurf-cli-chat-help-'))
+  t.after(async () => {
+    await rm(homeDir, { recursive: true, force: true })
+  })
+
+  const output = await runCodesurf(['chat', '--help'], { homeDir, cwd: ROOT_DIR })
+  assert.match(output, /CodeSurf chat/)
+  assert.match(output, /codesurf chat \[message\]/)
+  assert.doesNotMatch(output, /Starting CodeSurf/)
+})
