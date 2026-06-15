@@ -5,6 +5,8 @@ import type {
   DaemonChatJobRequest,
   DaemonChatJobState,
   DaemonChatPermissionAnswer,
+  DaemonPersona,
+  DaemonPersonaListResult,
   DaemonAppSettings,
   DaemonSkillEntry,
   DaemonSkillIndex,
@@ -188,6 +190,20 @@ export function createDaemonClient(hooks: DaemonClientHooks) {
     },
     answerPermission(answer: DaemonChatPermissionAnswer): Promise<{ ok: boolean; error?: string }> {
       return request('/chat/job/permission/answer', { body: answer })
+    },
+
+    /**
+     * READ-ONLY: list Personas (built-ins + the workspace's agents.json overlay)
+     * for `codesurf chat --list-personas` and for seeding the soft model binding.
+     * The set matches what resolveAuthoritativeAgentMode applies at start time.
+     */
+    listPersonas(args: { workspaceId?: string | null; workspaceDir?: string | null } = {}): Promise<DaemonPersonaListResult> {
+      const query = new URLSearchParams()
+      const workspaceId = String(args.workspaceId ?? '').trim()
+      const workspaceDir = String(args.workspaceDir ?? '').trim()
+      if (workspaceId) query.set('workspaceId', workspaceId)
+      if (workspaceDir) query.set('workspaceDir', workspaceDir)
+      return request(`/personas/list${query.size > 0 ? `?${query.toString()}` : ''}`)
     },
 
     getJobDashboard(): Promise<{

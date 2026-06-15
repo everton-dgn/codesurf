@@ -1639,3 +1639,42 @@ exit 0
   assert.match(htmlResponse.body, /CodeSurf Daemon Jobs/)
   assert.match(htmlResponse.body, /refreshAll\(\)/)
 })
+
+test('GET /personas/list returns built-ins + agents.json overlay, never the discovered-* set', async t => {
+  const daemon = await startDaemon()
+  t.after(async () => { await daemon.stop() })
+
+  // Auth required.
+  const unauth = await fetch(`http://127.0.0.1:${daemon.pidInfo.port}/personas/list`)
+  assert.equal(unauth.status, 401)
+
+  // No workspace → built-ins only.
+  const builtins = await daemon.request('/personas/list')
+  assert.equal(builtins.status, 200)
+  const builtinIds = builtins.payload.personas.map(p => p.id)
+  for (const id of ['agent', 'ask', 'plan', 'polly', 'gemma']) {
+    assert.ok(builtinIds.includes(id), `built-ins must include ${id}`)
+  }
+  assert.ok(!builtinIds.some(id => String(id).startsWith('discovered-')), 'no discovered-* in built-ins')
+
+  // With a workspace whose agents.json adds a custom persona, overrides a built-in,
+  // and contains an ephemeral discovered-* entry.
+  const workspaceDir = join(daemon.homeDir, 'repos', 'personas-ws')
+  await mkdir(join(workspaceDir, '.contex', 'customisation'), { recursive: true })
+  await writeFile(
+    join(workspaceDir, '.contex', 'customisation', 'agents.json'),
+    JSON.stringify([
+      { id: 'custom-y', name: 'Custom Y', description: 'c', tools: ['Read'], isBuiltin: false },
+      { id: 'ask', name: 'Ask Overridden', tools: ['Read'], isBuiltin: true },
+      { id: 'discovered-abc', name: 'Ephemeral', tools: [], isBuiltin: false },
+    ]),
+    'utf8',
+  )
+
+  const overlaid = await daemon.request(`/personas/list?workspaceDir=${encodeURIComponent(workspaceDir)}`)
+  assert.equal(overlaid.status, 200)
+  const overlaidById = new Map(overlaid.payload.personas.map(p => [p.id, p]))
+  assert.ok(overlaidById.has('custom-y'), 'overlay includes the custom persona')
+  assert.equal(overlaidById.get('ask')?.name, 'Ask Overridden', 'overlay applies a built-in override')
+  assert.ok(!overlaid.payload.personas.some(p => String(p.id).startsWith('discovered-')), 'the discovered-* set must never be listed')
+})

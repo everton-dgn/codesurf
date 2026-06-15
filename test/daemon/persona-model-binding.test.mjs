@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url'
 
 // Pure renderer resolver (type-only imports → loads under node's type-stripping).
 import { resolvePersonaModelSeed } from '../../src/renderer/src/hooks/personaModelBinding.ts'
+// Daemon-side mirror (consumed by the CLI; must NOT import renderer code).
+import { resolvePersonaModelSeed as daemonResolvePersonaModelSeed } from '../../packages/codesurf-daemon/src/persona-model-binding.ts'
 // Overlay/inheritance: confirm `defaultBinding` survives overlay + extends merge.
 import { overlayPersonas } from '../../src/shared/agentModes.ts'
 // Authoritative tools/permission resolver — must stay model-free (altitude guard).
@@ -152,6 +154,34 @@ test('overlay extends: a child inherits the base soft default unless it defines 
     { model: 'own-model' },
     'a child-defined binding overlays the base',
   )
+})
+
+// ─── drift guard: daemon mirror agrees with the renderer original ─────────────
+// resolvePersonaModelSeed exists in TWO places: the renderer hook and the daemon
+// package (packages/codesurf-daemon/src/persona-model-binding.ts), because the
+// CLI must not import renderer code and the self-contained daemon package can't
+// reach the desktop src/ tree. They MUST stay behaviourally identical.
+
+test('drift guard: the daemon mirror of resolvePersonaModelSeed matches the renderer original', () => {
+  const cases = [
+    null,
+    undefined,
+    { id: 'a' },
+    { id: 'a', defaultBinding: {} },
+    { id: 'a', defaultBinding: { provider: 'claude', model: 'claude-opus-4-8' } },
+    { id: 'a', defaultBinding: { provider: 'codex' } },
+    { id: 'a', defaultBinding: { model: 'gpt-5' } },
+    { id: 'a', defaultBinding: { provider: '   ', model: '' } },
+    { id: 'a', defaultBinding: { provider: '  claude  ', model: '' } },
+    { id: 'a', defaultBinding: { provider: ' hermes ', model: ' m-1 ' } },
+  ]
+  for (const persona of cases) {
+    assert.deepEqual(
+      daemonResolvePersonaModelSeed(persona),
+      resolvePersonaModelSeed(persona),
+      `daemon mirror must match renderer for ${JSON.stringify(persona)}`,
+    )
+  }
 })
 
 // ─── ALTITUDE: model never enters the authoritative tools/permission resolver ──

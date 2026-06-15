@@ -77,6 +77,7 @@ import {
   AGENT_MODE_RESOLUTION_DENIED_ERROR as DAEMON_DENIED,
   DEFAULT_PERSONAS as DAEMON_DEFAULT_AGENT_MODES,
   overlayPersonas as daemonOverlayAgentModes,
+  listPersonas as daemonListPersonas,
 } from '../../packages/codesurf-daemon/bin/agent-mode-resolver.mjs'
 
 const ROOT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
@@ -901,7 +902,7 @@ test('runtime builders FAIL CLOSED when agentId is set but agentMode is unresolv
   assert.doesNotThrow(() => buildClaudeAgentModeOptions({ agentMode: null }))
 })
 
-test('daemon: an unresolved agentMode FAILS CLOSED — claudeQuery never runs (#BLOCKING-1)', async t => {
+test('daemon: an UNKNOWN agentId with no agentMode FAILS CLOSED — claudeQuery never runs (#BLOCKING-1, #cli-persona)', async t => {
   const homeDir = await makeTestTempDir('chat-jobs-agent-unresolved-')
   const workspaceDir = join(homeDir, 'workspace')
   await mkdirP(workspaceDir, { recursive: true })
@@ -917,8 +918,11 @@ test('daemon: an unresolved agentMode FAILS CLOSED — claudeQuery never runs (#
     })(),
   })
 
-  // A restored selected agent (e.g. a deny-all Codex agent) sent during the load
-  // window: agentId present, agentMode NOT yet resolved.
+  // A request carrying ONLY an agentId (no agentMode) — the shape the CLI sends,
+  // and the GUI load-race shape. The daemon now PRE-START resolves it from trusted
+  // local sources (#cli-persona): with no agents.json (ENOENT) only BUILT-INS are
+  // authoritative, so an UNKNOWN id fails closed with the authoritative DENIED
+  // error rather than launching unrestricted.
   const job = await manager.startJob({
     cardId: 'unresolved', workspaceId: 'unresolved-ws',
     provider: 'claude', model: 'claude-test', mode: 'bypassPermissions',
@@ -928,9 +932,9 @@ test('daemon: an unresolved agentMode FAILS CLOSED — claudeQuery never runs (#
   })
 
   const completed = await waitForCompletedJob(manager, job.id)
-  assert.equal(completed.status, 'failed', 'an unresolved agent must fail the job, not launch')
-  assert.equal(completed.error, DAEMON_AGENT_MODE_UNRESOLVED_ERROR)
-  assert.equal(claudeInvoked, false, 'claudeQuery must NEVER run for an unresolved agent (no unrestricted launch)')
+  assert.equal(completed.status, 'failed', 'an unknown agentId must fail the job, not launch')
+  assert.equal(completed.error, DAEMON_DENIED, 'fails closed via authoritative resolution (unknown id), not an unrestricted launch')
+  assert.equal(claudeInvoked, false, 'claudeQuery must NEVER run for an unresolvable agent (no unrestricted launch)')
 })
 
 test('daemon: a RESOLVED agent still launches (no false positive on the BLOCKING-1 guard)', async t => {
@@ -1421,6 +1425,169 @@ test('daemon runJob adds gated defense-in-depth re-resolution (#root-fix daemon)
   // shipped value rather than failing closed on a custom id.
   assert.match(src, /existsSync\(join\(workspaceDir, '\.contex', 'customisation', 'agents\.json'\)\)/, 'must gate re-resolution on a present local agents.json')
   assert.match(src, /request = \{ \.\.\.request, agentMode: authoritative\.agentMode \}/, 'must override request.agentMode with the re-resolved value')
+})
+
+// ─── #cli-persona: PRE-START authoritative resolution for agentId-only requests ─
+// The `codesurf chat --persona` CLI sends ONLY an agentId (never a trusted
+// agentMode). Before the fail-closed unresolved check, runJob resolves the persona
+// authoritatively from trusted local sources: ENOENT → built-ins; present file →
+// agents.json overlay; corrupt/unknown → fail closed. Tools/permissions therefore
+// come ONLY from trusted disk, never from any caller-supplied payload.
+
+test('daemon runJob PRE-START resolves an agentId-only request before the unresolved fail-close (#cli-persona wiring)', () => {
+  const src = readFileSync(join(ROOT_DIR, 'packages/codesurf-daemon/bin/chat-jobs.mjs'), 'utf8')
+  const preStartIdx = src.indexOf('if (request.agentId && request.agentMode == null) {')
+  assert.ok(preStartIdx >= 0, 'runJob must pre-start resolve when agentId is present and agentMode is absent')
+  const unresolvedIdx = src.indexOf('if (agentModeUnresolved(request)) {')
+  assert.ok(unresolvedIdx > preStartIdx, 'pre-start resolution must run BEFORE the fail-closed unresolved check')
+  // It must reuse the shared authoritative resolver (no duplicated resolution logic)
+  // and fail closed when resolution is not ok.
+  const block = src.slice(preStartIdx, unresolvedIdx)
+  assert.match(block, /resolveAuthoritativeAgentMode\(\{/, 'must reuse resolveAuthoritativeAgentMode')
+  assert.match(block, /if \(!preStart\.ok\)/, 'must fail closed when resolution is not ok')
+  assert.match(block, /request = \{ \.\.\.request, agentMode: preStart\.agentMode \}/, 'must attach the trusted resolved agentMode')
+})
+
+function makeCapturingCodexSdk(captured) {
+  return {
+    resumeThread(id, options) {
+      captured.resumeId = id
+      captured.options = options
+      return {
+        async runStreamed(input) {
+          captured.input = input
+          return {
+            events: scriptedStream([
+              { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: 'ok' } },
+              { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+            ]),
+          }
+        },
+      }
+    },
+    startThread() { throw new Error('resumeThread should be used when request.sessionId is set') },
+  }
+}
+
+test('daemon #cli-persona: agentId-only + ENOENT resolves the BUILT-IN persona tools (read-only, NOT unrestricted)', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-persona-builtin-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdirP(workspaceDir, { recursive: true })
+  t.after(async () => { await rmP(homeDir, { recursive: true, force: true }) })
+
+  const captured = {}
+  const manager = createChatJobManager({
+    homeDir,
+    codexSdkFactory: () => makeCapturingCodexSdk(captured),
+    checkpointStore: { createCheckpoint() { return { ok: true, checkpoint: { id: 'c' } } } },
+  })
+
+  // No agents.json on disk (ENOENT). The built-in `ask` has a write-free allow-list
+  // (Read/Glob/Grep/WebSearch/WebFetch). Sent with mode 'default' (which would map to
+  // workspace-write if unrestricted) — resolving to the built-in forces read-only.
+  const job = await manager.startJob({
+    cardId: 'persona-builtin', workspaceId: 'persona-ws',
+    provider: 'codex', model: 'gpt-test', mode: 'default', useCodexSdk: true,
+    sessionId: 'thread-builtin', workspaceDir,
+    messages: [{ role: 'user', content: 'go' }],
+    agentId: 'ask', agentMode: null,
+  })
+
+  const completed = await waitForCompletedJob(manager, job.id)
+  assert.equal(completed.status, 'completed', 'a known built-in agentId must launch')
+  assert.equal(captured.options.sandboxMode, 'read-only', 'the built-in write-free allow-list forces read-only (NOT unrestricted)')
+  assert.ok(captured.input.includes('read-only mode'), 'the resolved built-in persona systemPrompt must reach the prompt')
+})
+
+test('daemon #cli-persona: agentId-only + agents.json present resolves the CUSTOM persona from disk', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-persona-custom-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdirP(workspaceDir, { recursive: true })
+  t.after(async () => { await rmP(homeDir, { recursive: true, force: true }) })
+  await writeAgentsJson(workspaceDir, [
+    { id: 'reader', name: 'Reader', description: '', systemPrompt: 'CUSTOM-READER-PROMPT-7781', tools: ['Read'], icon: 'help', color: '#111', isBuiltin: false },
+  ])
+
+  const captured = {}
+  const manager = createChatJobManager({
+    homeDir,
+    codexSdkFactory: () => makeCapturingCodexSdk(captured),
+    checkpointStore: { createCheckpoint() { return { ok: true, checkpoint: { id: 'c' } } } },
+  })
+
+  const job = await manager.startJob({
+    cardId: 'persona-custom', workspaceId: 'persona-ws',
+    provider: 'codex', model: 'gpt-test', mode: 'default', useCodexSdk: true,
+    sessionId: 'thread-custom', workspaceDir,
+    messages: [{ role: 'user', content: 'go' }],
+    agentId: 'reader', agentMode: null,
+  })
+
+  const completed = await waitForCompletedJob(manager, job.id)
+  assert.equal(completed.status, 'completed', 'a custom agents.json persona must resolve and launch')
+  assert.ok(captured.input.includes('CUSTOM-READER-PROMPT-7781'), 'the custom persona systemPrompt (from agents.json) must reach the prompt')
+  assert.equal(captured.options.sandboxMode, 'read-only', 'the custom write-free allow-list forces read-only')
+})
+
+test('daemon #cli-persona: agentId-only + CORRUPT agents.json FAILS CLOSED (provider never runs)', async t => {
+  const homeDir = await makeTestTempDir('chat-jobs-persona-corrupt-')
+  const workspaceDir = join(homeDir, 'workspace')
+  await mkdirP(workspaceDir, { recursive: true })
+  t.after(async () => { await rmP(homeDir, { recursive: true, force: true }) })
+  await writeAgentsJson(workspaceDir, '[broken json')
+
+  const captured = {}
+  let codexInvoked = false
+  const manager = createChatJobManager({
+    homeDir,
+    codexSdkFactory: () => { codexInvoked = true; return makeCapturingCodexSdk(captured) },
+    checkpointStore: { createCheckpoint() { return { ok: true, checkpoint: { id: 'c' } } } },
+  })
+
+  const job = await manager.startJob({
+    cardId: 'persona-corrupt', workspaceId: 'persona-ws',
+    provider: 'codex', model: 'gpt-test', mode: 'default', useCodexSdk: true,
+    sessionId: 'thread-corrupt', workspaceDir,
+    messages: [{ role: 'user', content: 'go' }],
+    agentId: 'reader', agentMode: null,
+  })
+
+  const completed = await waitForCompletedJob(manager, job.id)
+  assert.equal(completed.status, 'failed', 'a corrupt agents.json must fail the job closed')
+  assert.equal(completed.error, DAEMON_DENIED, 'must fail closed with the authoritative denied error')
+  assert.equal(codexInvoked, false, 'the provider must NEVER run when resolution fails closed')
+})
+
+test('listPersonas (read-only): built-ins + agents.json overlay, never the discovered-* set (#cli-persona)', async t => {
+  const root = await makeTestTempDir('persona-list-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+
+  // ENOENT → built-ins exactly.
+  const builtins = await daemonListPersonas({ resolveWorkspaceRoot: () => root })
+  assert.deepEqual(builtins, daemonOverlayAgentModes(null), 'no agents.json → built-ins (overlay of null)')
+  assert.ok(builtins.some(p => p.id === 'ask'), 'built-ins include ask')
+
+  // Present file: overlays a custom persona, overrides a built-in, and DROPS a
+  // discovered-* scan entry.
+  await writeAgentsJson(root, [
+    { id: 'custom-x', name: 'Custom X', tools: ['Read'], isBuiltin: false },
+    { id: 'ask', name: 'Ask Overridden', tools: ['Read'], isBuiltin: true },
+    { id: 'discovered-zzz', name: 'Ephemeral', tools: [], isBuiltin: false },
+  ])
+  const listed = await daemonListPersonas({ resolveWorkspaceRoot: () => root })
+  assert.deepEqual(listed, daemonOverlayAgentModes([
+    { id: 'custom-x', name: 'Custom X', tools: ['Read'], isBuiltin: false },
+    { id: 'ask', name: 'Ask Overridden', tools: ['Read'], isBuiltin: true },
+    { id: 'discovered-zzz', name: 'Ephemeral', tools: [], isBuiltin: false },
+  ]), 'listing must equal the shared overlay (cannot drift from resolution)')
+  assert.ok(listed.some(p => p.id === 'custom-x'), 'overlay includes the custom persona')
+  assert.equal(listed.find(p => p.id === 'ask')?.name, 'Ask Overridden', 'overlay applies a built-in override')
+  assert.ok(!listed.some(p => String(p.id).startsWith('discovered-')), 'the discovered-* scan set must NEVER be listed')
+
+  // Corrupt → built-ins (advisory listing; resolution still fails closed at start).
+  await writeAgentsJson(root, '[broken json')
+  const corruptListed = await daemonListPersonas({ resolveWorkspaceRoot: () => root })
+  assert.deepEqual(corruptListed, daemonOverlayAgentModes(null), 'a corrupt file lists built-ins (advisory)')
 })
 
 // ─── Persona `extends` inheritance + fail-closed tool rule (NEW) ──────────────

@@ -18,6 +18,7 @@ import type {
   DaemonChatJobEvent,
   DaemonChatJobRequest,
   DaemonChatJobState,
+  DaemonPersona,
   DaemonToolPermissionDecision,
 } from './types.ts'
 import {
@@ -28,6 +29,10 @@ import {
   type ChatCliSession,
   type ChatCliSessionIdentity,
 } from './chat-session-store.ts'
+import {
+  resolvePersonaModelSeed,
+  type PersonaModelSeed,
+} from './persona-model-binding.ts'
 
 interface ChatCliRunOptions {
   appDir?: string
@@ -37,9 +42,12 @@ interface ChatCliRunOptions {
 
 interface ParsedChatArgs {
   help: boolean
+  listPersonas: boolean
   provider: string | null
   model: string | null
   mode: string | null
+  /** Selected Persona id (from --persona / --agent), null when unset. */
+  persona: string | null
   workspaceDir: string
   resume: boolean
   newSession: boolean
@@ -50,6 +58,8 @@ interface ResolvedChatArgs extends ParsedChatArgs {
   provider: string
   model: string
   mode: string
+  /** Resolved Persona id ('' = no persona). Sent as request.agentId. */
+  agentId: string
 }
 
 interface ChatRunContext {
@@ -104,13 +114,15 @@ function nextArg(argv: string[], index: number, flag: string): { value: string; 
   return { value, nextIndex: index + 1 }
 }
 
-function parseChatArgs(argv: string[]): ParsedChatArgs {
+export function parseChatArgs(argv: string[]): ParsedChatArgs {
   const positional: string[] = []
   const parsed: ParsedChatArgs = {
     help: false,
+    listPersonas: false,
     provider: null,
     model: null,
     mode: null,
+    persona: null,
     workspaceDir: process.cwd(),
     resume: true,
     newSession: false,
@@ -132,6 +144,14 @@ function parseChatArgs(argv: string[]): ParsedChatArgs {
 
     if (arg === '--help' || arg === '-h' || arg === 'help') {
       parsed.help = true
+    } else if (arg === '--list-personas' || arg === '--list-agents') {
+      parsed.listPersonas = true
+    } else if (arg === '--persona' || arg === '--agent') {
+      parsed.persona = readValue(arg)
+    } else if (arg.startsWith('--persona=')) {
+      parsed.persona = arg.slice('--persona='.length)
+    } else if (arg.startsWith('--agent=')) {
+      parsed.persona = arg.slice('--agent='.length)
     } else if (arg === '--provider' || arg === '-p') {
       parsed.provider = readValue(arg)
     } else if (arg.startsWith('--provider=')) {
@@ -170,17 +190,43 @@ function parseChatArgs(argv: string[]): ParsedChatArgs {
   return parsed
 }
 
-function resolveChatArgs(parsed: ParsedChatArgs, homeDir: string): ResolvedChatArgs {
+/**
+ * Resolve provider/model/mode with the model-precedence ladder:
+ *   1. explicit --provider/--model  (wins)
+ *   2. the selected persona's soft defaultBinding (personaSeed; best-effort)
+ *   3. the saved session for THIS identity (provider/model/workspace AND persona)
+ *   4. built-in defaults
+ *
+ * `agentId` (the selected persona) is resolved here and threaded into the session
+ * identity so resume never crosses a persona change: the saved session is only
+ * inherited when its agentId matches the currently-selected persona.
+ */
+export function resolveChatArgs(
+  parsed: ParsedChatArgs,
+  homeDir: string,
+  personaSeed: PersonaModelSeed | null = null,
+): ResolvedChatArgs {
+  const agentId = String(parsed.persona ?? '').trim()
   let provider = String(parsed.provider ?? '').trim()
   let model = String(parsed.model ?? '').trim()
   const mode = String(parsed.mode ?? '').trim()
-  const store = parsed.newSession ? null : readChatCliSessionStore(homeDir)
 
-  if (!provider && !model && store?.activeKey) {
-    const active = store.sessions[store.activeKey]
-    if (active?.workspaceDir === parsed.workspaceDir) {
-      provider = active.provider
-      model = active.model
+  // Layer 2: a selected persona's soft default seeds any field NOT set explicitly.
+  if (personaSeed) {
+    if (!provider && personaSeed.provider) provider = personaSeed.provider
+    if (!model && personaSeed.model) model = personaSeed.model
+  }
+
+  // Layer 3: the saved session — only when nothing above set provider/model, and
+  // only when the session matches BOTH the workspace AND the selected persona.
+  if (!provider && !model && !parsed.newSession) {
+    const store = readChatCliSessionStore(homeDir)
+    if (store.activeKey) {
+      const active = store.sessions[store.activeKey]
+      if (active?.workspaceDir === parsed.workspaceDir && (active.agentId ?? '') === agentId) {
+        provider = active.provider
+        model = active.model
+      }
     }
   }
 
@@ -189,6 +235,7 @@ function resolveChatArgs(parsed: ParsedChatArgs, homeDir: string): ResolvedChatA
 
   return {
     ...parsed,
+    agentId,
     provider,
     model,
     mode: mode || DEFAULT_MODES[provider] || 'default',
@@ -201,13 +248,18 @@ CodeSurf chat
 
 Usage:
   codesurf chat [message]
+  codesurf chat --persona polly "review this"
   codesurf chat --provider claude --model claude-sonnet-4-6
   codesurf chat --provider codex --model gpt-5.5 --mode default
+  codesurf chat --list-personas
 
 Options:
   -p, --provider <name>   claude, codex, opencode, or hermes (default: claude)
   -m, --model <name>      Provider model name
       --mode <mode>       Provider permission/tool mode
+      --persona <id>      Select a CodeSurf Persona; the daemon applies its
+                          soul/tools/skills authoritatively (alias: --agent)
+      --list-personas     List available personas (id, name, description)
   -C, --cwd <path>        Workspace directory (default: current directory)
       --workspace <path>  Alias for --cwd
       --resume            Resume the saved session for provider/model/workspace
@@ -239,7 +291,34 @@ function identityFor(args: ResolvedChatArgs): ChatCliSessionIdentity {
     provider: args.provider,
     model: args.model,
     workspaceDir: args.workspaceDir,
+    agentId: args.agentId,
   }
+}
+
+/**
+ * Build the daemon start request for a turn. SECURITY: this sends ONLY the
+ * persona id (`agentId`) and NEVER an `agentMode`. The daemon resolves the
+ * persona's tools/permissions authoritatively from trusted local sources; a
+ * CLI-supplied `agentMode` would be exactly the trusted-payload injection vector
+ * the daemon refuses, so this function must never set it.
+ */
+export function buildStartRequest(params: {
+  args: ResolvedChatArgs
+  prior: ChatCliSession | null
+  message: string
+}): DaemonChatJobRequest {
+  const { args, prior, message } = params
+  const request: DaemonChatJobRequest = {
+    provider: args.provider,
+    model: args.model,
+    mode: args.mode,
+    runMode: 'foreground',
+    workspaceDir: args.workspaceDir,
+    sessionId: prior?.sessionId ?? null,
+    messages: [{ role: 'user', content: message }],
+  }
+  if (args.agentId) request.agentId = args.agentId
+  return request
 }
 
 function preview(value: unknown, maxLength = 2000): string {
@@ -418,6 +497,7 @@ function updateSessionFromEvent(homeDir: string, args: ResolvedChatArgs, event: 
     provider: args.provider,
     model: args.model,
     workspaceDir: args.workspaceDir,
+    agentId: args.agentId,
     sessionId: typeof event.sessionId === 'string' && event.sessionId.trim()
       ? event.sessionId.trim()
       : (prior?.sessionId ?? null),
@@ -433,6 +513,7 @@ function updateSessionFromState(homeDir: string, args: ResolvedChatArgs, state: 
     provider: args.provider,
     model: args.model,
     workspaceDir: args.workspaceDir,
+    agentId: args.agentId,
     sessionId: typeof state.sessionId === 'string' && state.sessionId.trim()
       ? state.sessionId.trim()
       : (prior?.sessionId ?? null),
@@ -509,6 +590,7 @@ async function startTurn(ctx: ChatRunContext, message: string): Promise<ChatCliS
         provider: ctx.args.provider,
         model: ctx.args.model,
         workspaceDir: ctx.args.workspaceDir,
+        agentId: ctx.args.agentId,
         sessionId: null,
         jobId: null,
         lastSequence: 0,
@@ -516,21 +598,14 @@ async function startTurn(ctx: ChatRunContext, message: string): Promise<ChatCliS
   }
 
   const prior = ctx.args.resume ? readChatCliSession(ctx.homeDir, identityFor(ctx.args)) : null
-  const request: DaemonChatJobRequest = {
-    provider: ctx.args.provider,
-    model: ctx.args.model,
-    mode: ctx.args.mode,
-    runMode: 'foreground',
-    workspaceDir: ctx.args.workspaceDir,
-    sessionId: prior?.sessionId ?? null,
-    messages: [{ role: 'user', content: trimmed }],
-  }
+  const request = buildStartRequest({ args: ctx.args, prior, message: trimmed })
 
   const job = await ctx.client.startChatJob(request)
   const session = upsertChatCliSession(ctx.homeDir, {
     provider: ctx.args.provider,
     model: ctx.args.model,
     workspaceDir: ctx.args.workspaceDir,
+    agentId: ctx.args.agentId,
     sessionId: prior?.sessionId ?? job.sessionId ?? null,
     jobId: job.id,
     lastSequence: 0,
@@ -583,9 +658,57 @@ function installSigintHandler(ctx: ChatRunContext): () => void {
   }
 }
 
+/** Print the persona list (id + name + description) for `--list-personas`. */
+async function listPersonasCommand(client: DaemonClient, workspaceDir: string): Promise<number> {
+  try {
+    const result = await client.listPersonas({ workspaceDir })
+    const personas = Array.isArray(result?.personas) ? result.personas : []
+    if (personas.length === 0) {
+      stdout.write('No personas available.\n')
+      return 0
+    }
+    for (const persona of personas) {
+      const id = String(persona.id ?? '').trim()
+      if (!id) continue
+      const name = String(persona.name ?? '').trim()
+      const description = String(persona.description ?? '').trim()
+      stdout.write(`${id}${name ? `  ${name}` : ''}\n`)
+      if (description) stdout.write(`    ${description}\n`)
+    }
+    return 0
+  } catch (error) {
+    stderr.write(`[personas] ${error instanceof Error ? error.message : String(error)}\n`)
+    return 1
+  }
+}
+
+/**
+ * Best-effort soft model seed for the selected persona. Fetches the read-only
+ * persona list and reads the persona's `defaultBinding`. NEVER required for
+ * correctness or security: the request always carries the agentId regardless,
+ * and the daemon resolves tools/permissions authoritatively. A list failure or
+ * an id absent from the list simply yields no seed (provider/model fall through
+ * to session/defaults).
+ */
+async function fetchPersonaModelSeed(
+  client: DaemonClient,
+  agentId: string,
+  workspaceDir: string,
+): Promise<PersonaModelSeed | null> {
+  try {
+    const result = await client.listPersonas({ workspaceDir })
+    const personas: DaemonPersona[] = Array.isArray(result?.personas) ? result.personas : []
+    const persona = personas.find(entry => String(entry.id ?? '').trim() === agentId)
+    return persona ? resolvePersonaModelSeed(persona) : null
+  } catch {
+    return null
+  }
+}
+
 async function interactiveLoop(ctx: ChatRunContext): Promise<void> {
   if (!ctx.readline) return
-  stdout.write(`CodeSurf chat ${ctx.args.provider}/${ctx.args.model} in ${ctx.args.workspaceDir}\n`)
+  const personaLabel = ctx.args.agentId ? ` [persona: ${ctx.args.agentId}]` : ''
+  stdout.write(`CodeSurf chat ${ctx.args.provider}/${ctx.args.model}${personaLabel} in ${ctx.args.workspaceDir}\n`)
   while (true) {
     const line = await ask(ctx.readline, 'codesurf> ')
     const command = line.toLowerCase()
@@ -609,9 +732,21 @@ export async function runCodesurfChatCli(argv: string[], options: ChatCliRunOpti
   }
 
   const homeDir = options.homeDir ?? defaultCodesurfHome()
-  const args = resolveChatArgs(parsed, homeDir)
-  if (args.newSession) clearChatCliSession(homeDir, identityFor(args))
   const client = createClient({ ...options, homeDir })
+
+  if (parsed.listPersonas) {
+    return await listPersonasCommand(client, parsed.workspaceDir)
+  }
+
+  // Best-effort: seed provider/model from the selected persona's soft binding.
+  // The agentId is sent regardless; this only affects the cosmetic model default.
+  const selectedAgentId = String(parsed.persona ?? '').trim()
+  const personaSeed = selectedAgentId
+    ? await fetchPersonaModelSeed(client, selectedAgentId, parsed.workspaceDir)
+    : null
+
+  const args = resolveChatArgs(parsed, homeDir, personaSeed)
+  if (args.newSession) clearChatCliSession(homeDir, identityFor(args))
   const readline = isTTY() && !args.message
     ? createInterface({ input: stdin, output: stdout })
     : null
