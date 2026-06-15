@@ -31,6 +31,10 @@ import * as runtimeAgentTools from '../../src/main/chat/agent-mode-tools.ts'
 // permission-mode resolver.
 import { buildHermesTurnPrompt } from '../../src/main/chat/providers/hermes-prompt.ts'
 import { resolveActiveChatMode } from '../../src/renderer/src/hooks/chatModeResolution.ts'
+// Pure renderer resolver for the SEND-time AgentMode (closes the built-in
+// seeding load-race). Dependency-injected loader, no window/JSX, so node's
+// type-stripping loads it here.
+import { resolveDispatchAgentMode } from '../../src/renderer/src/hooks/agentModeDispatch.ts'
 import {
   CODEX_DENY_ALL_ERROR,
   HARNESS_READS_UNENFORCEABLE_ERROR,
@@ -747,19 +751,111 @@ test('runtime ↔ daemon agentModeUnresolved + error agree (drift guard)', () =>
   }
 })
 
-test('renderer: dispatchMessageContent refuses to dispatch an unresolved selected agent (#BLOCKING-1 renderer guard)', () => {
+test('renderer: dispatchMessageContent resolves the agent via resolveDispatchAgentMode and dispatches the RESOLVED value, failing closed (#BLOCKING-1 + load-race wiring guard)', () => {
   // No React/DOM runner in this repo (see #4 note), so a source-slice guard stands
-  // in: the guard must short-circuit BEFORE the chat.send dispatch when an agent is
-  // selected but its definition has not resolved.
+  // in. The behavioral contract of resolveDispatchAgentMode is proved separately
+  // below; this guard proves the call SITE actually (a) routes through it, (b)
+  // short-circuits BEFORE chat.send when it returns ok:false, and (c) dispatches
+  // the RESOLVED agentMode — not the seeded `resolvedAgentMode` directly. Reverting
+  // line 356 back to `agentMode: resolvedAgentMode` reopens the race while the
+  // pure-function test stays green, so this site guard is what catches that.
   const src = readFileSync(join(ROOT_DIR, 'src/renderer/src/hooks/useChatTileMessaging.ts'), 'utf8')
   const start = src.indexOf('const dispatchMessageContent = useCallback(')
   assert.ok(start >= 0, 'dispatchMessageContent useCallback must exist')
   const next = src.indexOf('\n  const ', start + 1)
   const block = src.slice(start, next > start ? next : undefined)
-  const guardIdx = block.search(/if\s*\(\s*agentId\s*&&\s*!resolvedAgentMode\s*\)/)
-  assert.ok(guardIdx >= 0, 'must guard agentId-set-but-unresolved')
+
+  const resolveIdx = block.search(/await\s+resolveDispatchAgentMode\(/)
+  assert.ok(resolveIdx >= 0, 'must resolve the agent via resolveDispatchAgentMode')
+  const failClosedIdx = block.search(/if\s*\(\s*!agentResolution\.ok\s*\)/)
+  assert.ok(failClosedIdx >= 0, 'must fail closed when resolution is not ok')
   const sendIdx = block.indexOf('window.electron?.chat?.send')
-  assert.ok(sendIdx >= 0 && guardIdx < sendIdx, 'the guard must precede the chat.send dispatch')
+  assert.ok(sendIdx >= 0, 'chat.send dispatch must exist')
+  assert.ok(resolveIdx < sendIdx && failClosedIdx < sendIdx, 'resolution + fail-closed must precede the chat.send dispatch')
+
+  // The dispatched agentMode field must be the RESOLVED value, not the raw seed.
+  const payload = block.slice(sendIdx)
+  assert.match(payload, /agentMode:\s*dispatchAgentMode\b/, 'chat.send must dispatch the resolved dispatchAgentMode')
+  assert.doesNotMatch(payload, /agentMode:\s*resolvedAgentMode/, 'chat.send must NOT dispatch the seeded resolvedAgentMode directly (reopens the load race)')
+})
+
+// ─── load-race: a STRICTER agents.json override must win over the seeded built-in ─
+// The vulnerability: ChatTile seeds DEFAULT_AGENT_MODES synchronously, then
+// overlays agents.json async. If a workspace OVERRIDES a built-in id (agent/ask/
+// plan) to be STRICTER, a send in the pre-load window resolves the agentId to the
+// LOOSER seeded default — non-null, so every downstream fail-closed guard (which
+// only trips on null/unresolved) is bypassed, and the turn runs with the default's
+// tools (for `agent`, tools:null = UNRESTRICTED). resolveDispatchAgentMode closes
+// the window: during the load it IGNORES the seed and re-resolves from disk.
+test('renderer: a send during the load window dispatches the STRICTER agents.json override, NEVER the looser default built-in (#load-race)', async () => {
+  // Built-in `agent` default is unrestricted (tools:null). The workspace overrides
+  // it to a strict read-only allow-list in agents.json.
+  const looserDefaultAgent = { id: 'agent', name: 'Agent', description: '', systemPrompt: '', tools: null, icon: 'robot', color: '#3568ff', isBuiltin: true }
+  const stricterOverride = { id: 'agent', name: 'Agent', description: '', systemPrompt: 'read only', tools: ['Read', 'Glob', 'Grep'], icon: 'robot', color: '#3568ff', isBuiltin: true }
+  let loadCalls = 0
+  const loadFinalModes = async () => { loadCalls++; return [stricterOverride] }
+
+  // Send fires while definitions are still loading; `resolvedAgentMode` is the
+  // seeded LOOSER default (what the composer shows for snappy UX).
+  const res = await resolveDispatchAgentMode({
+    agentId: 'agent',
+    resolvedAgentMode: looserDefaultAgent,
+    agentModesLoaded: false,
+    loadFinalModes,
+  })
+
+  assert.equal(res.ok, true, 'a resolvable override must dispatch, not drop the turn')
+  assert.equal(loadCalls, 1, 'the pre-load send must AWAIT the authoritative load (not trust the seed)')
+  assert.deepEqual(res.agentMode.tools, ['Read', 'Glob', 'Grep'], 'the STRICTER override tools must be dispatched')
+  assert.notEqual(res.agentMode.tools, null, 'the looser default (tools:null = UNRESTRICTED) must NEVER be dispatched')
+  assert.equal(res.agentMode.systemPrompt, 'read only', 'the override persona must be dispatched')
+})
+
+test('renderer: resolveDispatchAgentMode fails closed when a pre-load load fails or the id is unknown (#load-race fail-closed)', async () => {
+  // Load throws → fail closed (do not fall back to the seeded looser default).
+  const throwOnLoad = async () => { throw new Error('agents.json unreadable') }
+  const failed = await resolveDispatchAgentMode({
+    agentId: 'agent',
+    resolvedAgentMode: { id: 'agent', tools: null }, // looser seed present
+    agentModesLoaded: false,
+    loadFinalModes: throwOnLoad,
+  })
+  assert.equal(failed.ok, false, 'a failed authoritative load must fail closed, not use the seed')
+
+  // Loaded list lacks the selected id → fail closed (dangling agentId).
+  const unknown = await resolveDispatchAgentMode({
+    agentId: 'ghost', resolvedAgentMode: null, agentModesLoaded: false,
+    loadFinalModes: async () => [{ id: 'agent', tools: ['Read'] }],
+  })
+  assert.equal(unknown.ok, false, 'an unknown agentId must fail closed')
+})
+
+test('renderer: resolveDispatchAgentMode preserves r2 behavior — loaded path + no-agent path (#BLOCKING-1 / no false positives)', async () => {
+  const neverLoad = async () => { throw new Error('must not load when already loaded') }
+
+  // Loaded: trust the resolved mode (the loaded list already reflects overrides);
+  // it must NOT re-read disk.
+  const loaded = await resolveDispatchAgentMode({
+    agentId: 'agent',
+    resolvedAgentMode: { id: 'agent', tools: ['Read'] },
+    agentModesLoaded: true,
+    loadFinalModes: neverLoad,
+  })
+  assert.equal(loaded.ok, true)
+  assert.deepEqual(loaded.agentMode.tools, ['Read'], 'loaded path dispatches the resolved override')
+
+  // Loaded but unresolved (dangling restored agentId) → fail closed (the r2 #BLOCKING-1 case).
+  const loadedNull = await resolveDispatchAgentMode({
+    agentId: 'agent', resolvedAgentMode: null, agentModesLoaded: true, loadFinalModes: neverLoad,
+  })
+  assert.equal(loadedNull.ok, false, 'a loaded-but-unresolved selected agent must still fail closed (#BLOCKING-1)')
+
+  // No agent selected → dispatch unrestricted-by-design (agentMode: null), never fail-closed.
+  const none = await resolveDispatchAgentMode({
+    agentId: null, resolvedAgentMode: null, agentModesLoaded: false, loadFinalModes: neverLoad,
+  })
+  assert.equal(none.ok, true)
+  assert.equal(none.agentMode, null, 'no selected agent dispatches a null agentMode (no fail-closed regression)')
 })
 
 // ─── Hermes persona on resume (#1a) ───────────────────────────────────────────

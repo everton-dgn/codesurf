@@ -211,9 +211,19 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
   // agents — which live in agents.json and load asynchronously below — can briefly
   // be unresolved, and the dispatch guard + provider safety net cover that window.
   const [agentModes, setAgentModes] = useState<AgentMode[]>(DEFAULT_AGENT_MODES)
+  // Definitive "agents.json has been read for this workspace" flag. The composer
+  // seeds built-ins synchronously for UX, but a SEND must reflect any agents.json
+  // override — until this is true, dispatchMessageContent re-resolves the agent
+  // from disk (or fails closed) instead of trusting the looser seeded built-in.
+  const [agentModesLoaded, setAgentModesLoaded] = useState(false)
+  // Reset on workspace change so a send can't dispatch against the previous
+  // workspace's agent definitions.
+  useEffect(() => { setAgentModesLoaded(false) }, [_workspaceDir])
   useEffect(() => {
     let cancelled = false
-    void loadAgentModes(_workspaceDir).then(list => { if (!cancelled) setAgentModes(list) })
+    void loadAgentModes(_workspaceDir).then(list => {
+      if (!cancelled) { setAgentModes(list); setAgentModesLoaded(true) }
+    })
     return () => { cancelled = true }
   }, [_workspaceDir, showAgentMenu])
   const resolvedAgentMode = useMemo(
@@ -621,6 +631,7 @@ export function ChatTile({ tileId, workspaceId, workspaceDir: _workspaceDir, wid
     thinking,
     agentId,
     resolvedAgentMode,
+    agentModesLoaded,
     sessionId,
     mcpEnabled,
     executionTarget,

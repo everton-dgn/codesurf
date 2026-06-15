@@ -26,6 +26,8 @@ import {
 } from '../components/chat/chatTileUtils'
 import { normalizeMessagesForMemory } from '../components/chat/messageNormalization'
 import { resolveActiveChatMode } from './chatModeResolution'
+import { resolveDispatchAgentMode } from './agentModeDispatch'
+import { loadAgentModes } from '../config/agentModes'
 import type { ProviderEntry } from './useChatTileProviders'
 
 export interface UseChatTileMessagingOptions {
@@ -46,6 +48,7 @@ export interface UseChatTileMessagingOptions {
   thinking: string
   agentId: string | null
   resolvedAgentMode: AgentMode | null
+  agentModesLoaded: boolean
   sessionId: string | null
   mcpEnabled: boolean
   executionTarget: 'local' | 'cloud'
@@ -134,6 +137,7 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     thinking,
     agentId,
     resolvedAgentMode,
+    agentModesLoaded,
     sessionId,
     mcpEnabled,
     executionTarget,
@@ -216,22 +220,33 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     const trimmedContent = messageContent.trim()
     if (!trimmedContent) return false
 
-    // A-PR1 BLOCKING-1 (renderer guard): a selected agent's definition loads
-    // asynchronously while `agentId` is restored synchronously from tile state,
-    // so during the load window `resolvedAgentMode` is null. Dispatching then
-    // would send a dangling agentId with no agentMode — the providers fail closed
-    // on that (defense-in-depth), but refusing here avoids a doomed turn and tells
-    // the user why. Do NOT launch with an unresolved agent.
-    if (agentId && !resolvedAgentMode) {
+    // A-PR1 BLOCKING-1 + load-race fix: resolve the AUTHORITATIVE AgentMode for
+    // this send. Built-ins are seeded synchronously for composer UX, but a SEND
+    // must reflect any agents.json override of a built-in id. During the pre-load
+    // window the seed is the LOOSER default built-in — and because it is non-null
+    // and valid-looking, the IPC/daemon/builder fail-closed guards (which only
+    // trip on a null/unresolved agentMode) would NOT catch it, so the turn would
+    // run with the default's tools (for `agent`, tools:null = UNRESTRICTED) for
+    // one turn. resolveDispatchAgentMode re-resolves from disk when definitions
+    // have not loaded, picking up the override, and fails closed otherwise. This
+    // is the only place the window can be closed; do NOT use the pre-load seed.
+    const agentResolution = await resolveDispatchAgentMode({
+      agentId,
+      resolvedAgentMode,
+      agentModesLoaded,
+      loadFinalModes: () => loadAgentModes(workspaceDir),
+    })
+    if (!agentResolution.ok) {
       setMessagesSafe(prev => [...prev, {
         id: `msg-agent-unresolved-${Date.now()}`,
         role: 'assistant',
-        content: 'The selected agent is still loading — its persona and tool restrictions are not ready yet. Wait a moment and resend, or clear the selected agent.',
+        content: 'The selected agent could not be resolved — its persona and tool restrictions are not ready yet (or failed to load). Wait a moment and resend, or clear the selected agent.',
         timestamp: Date.now(),
         isStreaming: false,
       }])
       return false
     }
+    const dispatchAgentMode = agentResolution.agentMode
 
     const { bodyText: userBodyText } = splitMessageAttachmentPaths(trimmedContent)
 
@@ -353,7 +368,7 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
         mode: activeMode,
         thinking: activeThinking,
         agentId: agentId ?? null,
-        agentMode: resolvedAgentMode ?? null,
+        agentMode: dispatchAgentMode,
         workspaceDir,
         mcpEnabled: activeMcpEnabled,
         executionTarget,
@@ -396,7 +411,7 @@ export function useChatTileMessaging(options: UseChatTileMessagingOptions): UseC
     provider, model, mode, thinking, sessionId, mcpEnabled, messages, providerEntryById, currentProviderEntry,
     tileId, workspaceId, workspaceDir, connectedPeers, peerContextRef, executionTarget, cloudHostId, activeCloudHost,
     settings?.execution, settings?.chatProviderModes, peerToolNames, focusComposer, setMessagesSafe, queuedTurns,
-    agentId, resolvedAgentMode,
+    agentId, resolvedAgentMode, agentModesLoaded,
     effectiveAgentMode, autoAgentMode, linkedSessionEntryId, linkedSessionHint, hasEarlierMessages,
     latestStateRef, persistLatestState, lastJobSequenceRef, resumedJobKeyRef, stickToBottomRef,
     setPreserveSessionSummary, setIsStreaming, setJobId, setJobSequence,
