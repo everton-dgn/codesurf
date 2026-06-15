@@ -20,6 +20,7 @@ import {
   createChatJobManager,
   buildCodexExecArgs,
   hermesToolsetsForRequest,
+  shouldUseHarness,
 } from '../../bin/chat-jobs.mjs'
 // Daemon-side AgentMode→tool mapping (Codex sandbox / Hermes toolsets).
 import * as daemonAgentTools from '../../packages/codesurf-daemon/bin/agent-mode-tools.mjs'
@@ -485,6 +486,64 @@ test('daemon Codex: AgentMode.systemPrompt is injected into the prompt arg', () 
   }, '/ws')
   // The prompt is the final positional arg.
   assert.ok(args[args.length - 1].includes('CODEX-PERSONA-5512'), 'persona must reach the codex prompt')
+})
+
+// ─── daemon Codex: multi-turn continuity (resume) ────────────────────────────
+
+test('daemon Codex: a request with sessionId resumes the thread (`exec resume <id>`), first turn does NOT', () => {
+  const base = { provider: 'codex', model: 'gpt-test', mode: 'default', messages: [{ role: 'user', content: 'do it' }] }
+
+  // Continuation turn: the Codex thread id from a prior turn is echoed back as
+  // request.sessionId. The argv must resume that thread so the model keeps the
+  // full conversation — `codex exec resume <id> ...`, with `resume <id>`
+  // immediately after `exec` (mirrors the runtime buildCodexSpawnArgs shape).
+  const resumed = buildCodexExecArgs({ ...base, sessionId: 'thread-1' }, '/ws')
+  const execIdx = resumed.indexOf('exec')
+  assert.equal(resumed[execIdx + 1], 'resume', '`resume` must immediately follow `exec`')
+  assert.equal(resumed[execIdx + 2], 'thread-1', 'the thread id must follow `resume`')
+  // (a plain includes('resume thread-1') would be false — they are two argv elements.)
+  assert.ok(resumed.includes('resume') && resumed.includes('thread-1'))
+
+  // First turn (no sessionId): a fresh thread, NO resume subcommand.
+  const fresh = buildCodexExecArgs({ ...base }, '/ws')
+  assert.ok(!fresh.includes('resume'), 'first turn (no sessionId) must NOT resume')
+  assert.equal(fresh[fresh.indexOf('exec') + 1], '--json', 'first turn keeps the unchanged flag order after exec')
+
+  // Empty-string sessionId is falsy → treated as a first turn (no resume).
+  assert.ok(!buildCodexExecArgs({ ...base, sessionId: '' }, '/ws').includes('resume'))
+
+  // Resume must not disturb the sandbox/approval flags (continuity is orthogonal
+  // to permission enforcement).
+  assert.deepEqual(codexSandboxAndApproval(resumed), { sandbox: 'workspace-write', approval: 'on-request' })
+})
+
+// ─── daemon routing: harness vs native (continuity stopgap) ──────────────────
+
+test('shouldUseHarness: FOREGROUND Claude falls back to native (continuity); background keeps the harness', () => {
+  // Foreground Claude (interactive multi-turn): MUST NOT use the harness — its
+  // destroy()-without-resume path loses conversation history. runJob falls
+  // through to runClaudeJob, which resumes via { resume: request.sessionId }.
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'claude' }), false, 'foreground claude (runMode absent) → native')
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'claude', runMode: 'foreground' }), false, 'explicit foreground claude → native')
+  // A continuation turn (has sessionId) is exactly the case the harness breaks.
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'claude', runMode: 'foreground', sessionId: 'abc' }), false, 'foreground claude continuation → native (never the destroy()-discards-resume path)')
+
+  // Background dispatched Claude: single-shot autonomous task — keep the
+  // harness's worktree isolation.
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'claude', runMode: 'background' }), true, 'background claude keeps the harness')
+
+  // Codex is always excluded (its adapter can't honor the 4 permission modes).
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'codex' }), false)
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'codex', runMode: 'background' }), false)
+
+  // pi has no native fallback path → keeps the harness regardless of runMode.
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'pi' }), true)
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'pi', runMode: 'foreground' }), true)
+
+  // Harness off / non-harness providers → never the harness.
+  assert.equal(shouldUseHarness({ useHarness: false, provider: 'claude', runMode: 'background' }), false)
+  assert.equal(shouldUseHarness({ provider: 'claude', runMode: 'background' }), false, 'useHarness unset → false')
+  assert.equal(shouldUseHarness({ useHarness: true, provider: 'hermes' }), false)
 })
 
 // ─── daemon Hermes: AgentMode.tools → toolsets (#2) ───────────────────────────
