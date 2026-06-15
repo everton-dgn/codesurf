@@ -118,6 +118,29 @@ export interface SkillDefinition {
   command?: string
 }
 
+/**
+ * A persona's preferred engine/model binding. This is a SOFT default only — it
+ * SEEDS the composer's provider/model when the persona is selected; the user can
+ * always override it (see resolvePersonaModelSeed + the precedence ladder below).
+ *
+ * Model is deliberately NOT a security boundary: unlike `tools`, a binding never
+ * flows through the authoritative trusted-disk resolver (resolveAuthoritativeAgentMode)
+ * — that path stays exclusively for tools/permissions and fully fail-closed.
+ *
+ * DESIGN-FOR-N (P1b): the shape is intentionally an object (not bare scalars) so
+ * later phases can grow it WITHOUT reshaping callers:
+ *   - P1b-2 will add a hard skill-lock (e.g. `lockedBySkill?: string`) here, read
+ *     by an outer resolver ABOVE the soft layer.
+ *   - a future multi-binding model can add `bindings?: PersonaBinding[]` alongside
+ *     `defaultBinding` on Persona.
+ */
+export interface PersonaBinding {
+  /** Preferred provider id (e.g. 'claude' | 'codex' | 'hermes'). */
+  provider?: string
+  /** Preferred model id within that provider. */
+  model?: string
+}
+
 export interface Persona {
   id: string
   name: string
@@ -129,6 +152,12 @@ export interface Persona {
   color: string
   isBuiltin: boolean
   defaultNextMode?: string
+  /**
+   * OPTIONAL soft engine/model default. Seeds the composer's provider/model when
+   * this persona is selected; never a hard lock, never a permission boundary.
+   * Unset (the default for all built-ins) = no preference → composer unchanged.
+   */
+  defaultBinding?: PersonaBinding
   /**
    * Optional base-persona id to inherit from. Resolution merges the base, then
    * overlays this persona's explicitly-defined fields. Fail-closed tool rule: if
