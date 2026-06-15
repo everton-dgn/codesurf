@@ -558,7 +558,7 @@ export function ChatTileComposer({
               active={showModelMenu}
               onClick={() => onToggleMenu('model')}
               disabled={modelLocked}
-              title={modelLocked ? lockReason : undefined}
+              title={modelLocked ? (lockReason ?? 'Model locked') : undefined}
             />
             {showModelMenu && (
               <MenuPortal anchorRef={modelMenuRef}>
