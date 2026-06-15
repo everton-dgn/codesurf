@@ -37,34 +37,52 @@ export const DEFAULT_AGENT_MODES = DEFAULT_PERSONAS
 
 /**
  * Resolve a persona's `extends` inheritance against a fully-overlaid set (built-ins
- * + persisted, keyed by id). The resolved persona is the BASE's fields with the
- * child's EXPLICITLY-DEFINED fields overlaid on top.
+ * + persisted, keyed by id). The resolved persona is the base chain merged
+ * deepest-first, with each node's EXPLICITLY-DEFINED fields overlaying the accum.
  *
- * FAIL-CLOSED TOOL RULE (inheritance must NEVER widen the toolset): if the child
- * DEFINES `tools` (the key is present — including `[]` deny-all or `null`
- * unrestricted), the child's value wins outright; if the child OMITS `tools`, it
- * inherits the base's. A dangling or cyclic `extends` resolves to the child
- * UNCHANGED — we never inherit from an unresolved base, since that could only
- * widen permissions.
+ * FAIL-CLOSED TOOL RULE (inheritance must NEVER widen the toolset):
+ *   - child DEFINES `tools` (key present — incl. `[]` deny-all or `null`) → child wins.
+ *   - child OMITS `tools` AND the base chain resolves cleanly → inherit the base's.
+ *   - child OMITS `tools` AND inheritance is UNRESOLVABLE (missing base, self-extend,
+ *     or a cycle) → DENY-ALL (`[]`). We must NOT leave `tools` undefined for a broken
+ *     `extends`: downstream (agent-mode-tools) treats `undefined` as UNRESTRICTED, so
+ *     a child declaring `extends: "<missing-or-cyclic>"` with no `tools` would otherwise
+ *     fail OPEN to full tool access. A persona with NO `extends` is untouched by this rule.
  */
-function resolvePersonaExtends(persona: Persona, byId: Map<string, Persona>, seen: Set<string>): Persona {
-  const baseId = typeof persona.extends === 'string' ? persona.extends.trim() : ''
-  if (!baseId || seen.has(persona.id)) return persona
-  const rawBase = byId.get(baseId)
-  if (!rawBase || rawBase.id === persona.id) return persona // dangling/self → no widening
-  seen.add(persona.id)
-  const base = resolvePersonaExtends(rawBase, byId, seen) // resolve the base chain first
-  const merged: Persona = { ...base, ...persona }
-  // FAIL-CLOSED: the child's tools apply ONLY when the child defines the key;
-  // otherwise inherit the base's (an omitted `tools` must not silently widen).
-  merged.tools = Object.prototype.hasOwnProperty.call(persona, 'tools') ? persona.tools : base.tools
+function resolvePersonaExtends(persona: Persona, byId: Map<string, Persona>): Persona {
+  // Walk the extends chain upward, collecting nodes and detecting breakage
+  // (missing base / self-extend / cycle).
+  const chain: Persona[] = []
+  const seen = new Set<string>()
+  let cur: Persona = persona
+  let broken = false
+  for (;;) {
+    chain.push(cur)
+    seen.add(cur.id)
+    const baseId = typeof cur.extends === 'string' ? cur.extends.trim() : ''
+    if (!baseId) break // reached a root with no `extends` → the chain resolves cleanly
+    const base = byId.get(baseId)
+    if (!base || base.id === cur.id || seen.has(base.id)) { broken = true; break }
+    cur = base
+  }
+  // Merge deepest base first; a node that DEFINES `tools` wins, one that omits it
+  // inherits the accumulated value.
+  let merged: Persona = {} as Persona
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const node = chain[i]
+    merged = { ...merged, ...node }
+    if (Object.prototype.hasOwnProperty.call(node, 'tools')) merged.tools = node.tools
+  }
   merged.id = persona.id
+  // FAIL-CLOSED: a broken `extends` whose originating child omits `tools` denies
+  // all tools rather than leaving it undefined (= unrestricted downstream).
+  if (broken && !Object.prototype.hasOwnProperty.call(persona, 'tools')) merged.tools = []
   return merged
 }
 
 function resolveAllExtends(list: Persona[]): Persona[] {
   const byId = new Map(list.map(p => [p.id, p]))
-  return list.map(p => resolvePersonaExtends(p, byId, new Set<string>()))
+  return list.map(p => resolvePersonaExtends(p, byId))
 }
 
 /**

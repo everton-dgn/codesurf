@@ -34,25 +34,40 @@ export const DEFAULT_PERSONAS = [
 export const DEFAULT_AGENT_MODES = DEFAULT_PERSONAS
 
 // Resolve a persona's `extends` inheritance — MIRROR of resolvePersonaExtends in
-// src/shared/agentModes.ts. FAIL-CLOSED TOOL RULE: child DEFINES tools → child
-// wins outright; child OMITS tools → inherit base. Dangling/cyclic/self extends →
-// child unchanged (never inherit from an unresolved base; that could only widen).
-function resolvePersonaExtends(persona, byId, seen) {
-  const baseId = typeof persona.extends === 'string' ? persona.extends.trim() : ''
-  if (!baseId || seen.has(persona.id)) return persona
-  const rawBase = byId.get(baseId)
-  if (!rawBase || rawBase.id === persona.id) return persona
-  seen.add(persona.id)
-  const base = resolvePersonaExtends(rawBase, byId, seen)
-  const merged = { ...base, ...persona }
-  merged.tools = Object.prototype.hasOwnProperty.call(persona, 'tools') ? persona.tools : base.tools
+// src/shared/agentModes.ts (keep logically byte-identical). FAIL-CLOSED TOOL RULE:
+//   - child DEFINES tools (incl. [] or null) → child wins.
+//   - child OMITS tools AND base chain resolves cleanly → inherit base.
+//   - child OMITS tools AND inheritance UNRESOLVABLE (missing/self/cyclic) → DENY-ALL ([]).
+// Leaving tools undefined for a broken extends would fail OPEN (undefined = unrestricted
+// in agent-mode-tools.mjs). A persona with NO extends is untouched by this rule.
+function resolvePersonaExtends(persona, byId) {
+  const chain = []
+  const seen = new Set()
+  let cur = persona
+  let broken = false
+  for (;;) {
+    chain.push(cur)
+    seen.add(cur.id)
+    const baseId = typeof cur.extends === 'string' ? cur.extends.trim() : ''
+    if (!baseId) break
+    const base = byId.get(baseId)
+    if (!base || base.id === cur.id || seen.has(base.id)) { broken = true; break }
+    cur = base
+  }
+  let merged = {}
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const node = chain[i]
+    merged = { ...merged, ...node }
+    if (Object.prototype.hasOwnProperty.call(node, 'tools')) merged.tools = node.tools
+  }
   merged.id = persona.id
+  if (broken && !Object.prototype.hasOwnProperty.call(persona, 'tools')) merged.tools = []
   return merged
 }
 
 function resolveAllExtends(list) {
   const byId = new Map(list.map(p => [p.id, p]))
-  return list.map(p => resolvePersonaExtends(p, byId, new Set()))
+  return list.map(p => resolvePersonaExtends(p, byId))
 }
 
 // Pure overlay + inheritance: built-ins first, overlay persisted entries by id,

@@ -1504,6 +1504,65 @@ test('persona extends: a dangling/cyclic base resolves the child UNCHANGED (no w
   assert.deepEqual(personaById(selfCycle, 'loop').tools, ['Read'], 'a self-cycle resolves safely without widening')
 })
 
+test('persona extends FAIL-CLOSED: a dangling base + child OMITS tools → DENY-ALL (not unrestricted)', () => {
+  // Regression for the fail-OPEN bug: a missing base with no explicit child tools
+  // must normalize to deny-all `[]`, NEVER leave tools undefined (= unrestricted
+  // downstream in agent-mode-tools).
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'orphan', name: 'Orphan', extends: 'does-not-exist', systemPrompt: 'O', icon: 'robot', color: '#444', isBuiltin: false }, // no tools key
+    ])
+    assert.deepEqual(personaById(resolved, 'orphan').tools, [], 'dangling extends + omitted tools must fail closed to []')
+    assert.notEqual(personaById(resolved, 'orphan').tools, null, 'must NOT be unrestricted')
+  }
+})
+
+test('persona extends FAIL-CLOSED: a self-cycle + child OMITS tools → DENY-ALL', () => {
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'loop', name: 'Loop', extends: 'loop', systemPrompt: 'L', icon: 'robot', color: '#555', isBuiltin: false }, // no tools key
+    ])
+    assert.deepEqual(personaById(resolved, 'loop').tools, [], 'self-cycle + omitted tools must fail closed to []')
+  }
+})
+
+test('persona extends FAIL-CLOSED: a TWO-NODE cycle + child OMITS tools must NOT inherit the permissive partner', () => {
+  // A extends B, B extends A. `child` omits tools while its cycle partner `wideman`
+  // is permissive (tools:null). The cycle is unresolvable → child must deny-all,
+  // NEVER inherit the permissive partner's tools.
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'child', name: 'Child', extends: 'wideman', systemPrompt: 'C', icon: 'robot', color: '#666', isBuiltin: false }, // no tools key
+      { id: 'wideman', name: 'Wideman', extends: 'child', tools: null, systemPrompt: 'W', icon: 'robot', color: '#777', isBuiltin: false },
+    ])
+    assert.deepEqual(personaById(resolved, 'child').tools, [], 'cyclic child omitting tools must fail closed to [], not inherit the permissive partner')
+    assert.notEqual(personaById(resolved, 'child').tools, null, 'must never widen to unrestricted via a cycle')
+  }
+})
+
+test('persona extends: a TWO-NODE cycle where the child DEFINES tools:[] stays [] (explicit deny-all honored)', () => {
+  for (const overlay of [sharedOverlayAgentModes, daemonOverlayAgentModes]) {
+    const resolved = overlay([
+      { id: 'child', name: 'Child', extends: 'wideman', tools: [], systemPrompt: 'C', icon: 'robot', color: '#666', isBuiltin: false },
+      { id: 'wideman', name: 'Wideman', extends: 'child', tools: ['Read', 'Bash'], systemPrompt: 'W', icon: 'robot', color: '#777', isBuiltin: false },
+    ])
+    assert.deepEqual(personaById(resolved, 'child').tools, [], 'explicit deny-all child in a cycle stays []')
+  }
+})
+
+test('persona extends FAIL-CLOSED: the production resolver denies all for a dangling extends with no child tools', async t => {
+  const root = await makeTestTempDir('persona-failclosed-resolve-')
+  t.after(async () => { await rmP(root, { recursive: true, force: true }) })
+  await writeAgentsJson(root, [
+    { id: 'orphan', name: 'Orphan', extends: 'ghost-base', systemPrompt: 'O', icon: 'robot', color: '#444', isBuiltin: false },
+  ])
+  const m = await resolveAuthoritativeMain({ agentId: 'orphan', resolveWorkspaceRoot: () => root })
+  const d = await resolveAuthoritativeDaemon({ agentId: 'orphan', resolveWorkspaceRoot: () => root })
+  assert.equal(m.ok, true)
+  assert.deepEqual(m.agentMode.tools, [], 'production resolver must fail closed to [] for a broken extends with no child tools')
+  assert.deepEqual(m, d, 'main + daemon must agree on the fail-closed result')
+})
+
 test('persona extends: main + daemon resolvers agree on an extends fixture (drift guard)', async t => {
   const root = await makeTestTempDir('persona-extends-drift-')
   t.after(async () => { await rmP(root, { recursive: true, force: true }) })
